@@ -1,0 +1,83 @@
+court_units
+
+id：主鍵
+
+unit_norm：精細單位（到簡易庭），Supreme Court/High Court 如果沒有更細單位，也可以在 court_units 放一筆 unit_norm = root_norm 來統一處理地圖/篩選
+
+root_norm：法院層級（到○○法院）
+
+level：層級代碼（自訂）
+
+county/district：所在地篩選
+
+address：地址（可後補）
+
+lat/lon：地圖座標
+
+created_at/updated_at：時間戳
+
+decisions
+
+id：主鍵
+
+court_root_norm：ref_key 依賴的法院層級
+
+jyear：案號年度（JYEAR）
+
+jcase_norm：字別（正規化後）
+
+jno：號次
+
+ref_key：穩定節點ID（自動生成）
+
+jid：官方唯一碼（有就存）
+
+court_unit_id：地圖用 FK → court_units。可空，placeholder 或解析不到單位就先 NULL，後續再回填
+
+decision_date：裁判日期（JDATE）
+
+title：案由標題
+
+full_text：全文（抽引用/keyword/法條來源）
+
+pdf_url：原文 PDF 連結
+
+raw：原始 JSON（除錯/回補）
+
+created_at/updated_at：時間戳
+
+citations
+
+id：主鍵
+
+source_id：引用者（FK → decisions）
+
+target_id：被引用者（FK → decisions）
+
+raw_match：命中引用字串
+
+match_start/match_end：命中位置 index
+
+snippet：引用上下文
+
+created_at：時間戳
+
+decision_reason_statutes
+
+decision_id：該判決（FK）
+
+law/article：法規/條號（去重後）
+
+raw_match：命中片段（可選）
+
+created_at：時間戳
+
+citation_snippet_statutes
+
+citation_id：該引用邊（FK）
+
+law/article：snippet 內法條（用來回答引用脈絡）
+
+raw_match：命中片段（可選）
+
+created_at：時間戳
