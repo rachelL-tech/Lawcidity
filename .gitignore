@@ -18,3 +18,7 @@ docker-compose.override.yml
 data/raw/
 data/downloads/
 *.rar
+
+# Claude
+/.agents/
+/.claude/
