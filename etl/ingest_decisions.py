@@ -12,10 +12,11 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 import psycopg
 from court_parser import parse_court_from_folder
+from citation_parser import extract_citations
 
 
 # =========================
@@ -183,6 +184,95 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
 
 
 # =========================
+# Citation 處理
+# =========================
+def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Optional[int]:
+    """
+    在 decisions 表 upsert 最高法院 placeholder（僅自然鍵欄位）
+    回傳 target decision_id
+
+    Args:
+        conn: DB 連線
+        jyear, jcase_norm, jno: 從 citation 抽取的自然鍵
+
+    Returns:
+        target decision id，失敗回傳 None
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO decisions (court_root_norm, jyear, jcase_norm, jno)
+                VALUES ('最高法院', %(jyear)s, %(jcase_norm)s, %(jno)s)
+                ON CONFLICT (court_root_norm, jyear, jcase_norm, jno) DO NOTHING
+                RETURNING id
+            """, {"jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
+            row = cur.fetchone()
+            if row:
+                target_id = row[0]
+            else:
+                # 已存在，查出 id
+                cur.execute("""
+                    SELECT id FROM decisions
+                    WHERE court_root_norm = '最高法院'
+                      AND jyear = %(jyear)s
+                      AND jcase_norm = %(jcase_norm)s
+                      AND jno = %(jno)s
+                """, {"jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
+                target_id = cur.fetchone()[0]
+            conn.commit()
+            return target_id
+    except Exception as e:
+        print(f"錯誤：upsert target placeholder 失敗 - {e}")
+        conn.rollback()
+        return None
+
+
+def ingest_citations(conn, source_id: int, full_text: str) -> int:
+    """
+    從 full_text 抽取所有最高法院引用，寫入 citations 表
+
+    Args:
+        conn: DB 連線
+        source_id: 來源判決的 decisions.id
+        full_text: 來源判決全文
+
+    Returns:
+        成功寫入的 citation 數量
+    """
+    citations = extract_citations(full_text)
+    inserted = 0
+
+    for c in citations:
+        target_id = upsert_target_placeholder(
+            conn, c["jyear"], c["jcase_norm"], c["jno"]
+        )
+        if target_id is None:
+            continue
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO citations (source_id, target_id, raw_match, match_start, match_end, snippet)
+                    VALUES (%(source_id)s, %(target_id)s, %(raw_match)s, %(match_start)s, %(match_end)s, %(snippet)s)
+                    ON CONFLICT (source_id, target_id, match_start) DO NOTHING
+                """, {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "raw_match": c["raw_match"],
+                    "match_start": c["match_start"],
+                    "match_end": c["match_end"],
+                    "snippet": c["snippet"],
+                })
+                conn.commit()
+                inserted += 1
+        except Exception as e:
+            print(f"錯誤：寫入 citation 失敗 - {e}")
+            conn.rollback()
+
+    return inserted
+
+
+# =========================
 # 主程式
 # =========================
 def main(folder_path: str):
@@ -228,6 +318,32 @@ def main(folder_path: str):
 
             if ingest_decision(conn, court_unit_id, court_info["root_norm"], json_data):
                 success_count += 1
+
+                # 同步抽取 citations
+                full_text = json_data.get("JFULL", "") or ""
+                if full_text:
+                    source_id_row = None
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT id FROM decisions
+                            WHERE court_root_norm = %(root_norm)s
+                              AND jyear = %(jyear)s
+                              AND jcase_norm = %(jcase_norm)s
+                              AND jno = %(jno)s
+                        """, {
+                            "root_norm": court_info["root_norm"],
+                            "jyear": int(json_data.get("JYEAR")),
+                            "jcase_norm": normalize_jcase(json_data.get("JCASE", "")),
+                            "jno": int(json_data.get("JNO")),
+                        })
+                        row = cur.fetchone()
+                        if row:
+                            source_id_row = row[0]
+
+                    if source_id_row:
+                        n = ingest_citations(conn, source_id_row, full_text)
+                        if n > 0:
+                            print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
             else:
                 fail_count += 1
 

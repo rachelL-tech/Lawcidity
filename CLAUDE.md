@@ -18,6 +18,12 @@
 ### 引用 snippet（可重現、不追求完美段落）
 - snippet = 以 citation match 為中心的 window（預設 ±200 字）+ 句子/換行邊界擴張。
 - **必存** `raw_match`、`match_start`、`match_end`（方便重切、也能做螢光筆定位）。
+- `match_start` / `match_end` 對應**原始 full_text** 的 index（非預處理後），snippet 也從原始文字取。
+
+### Snippet 邊界擴張策略（混合式，待調整）
+- **目前實作**：先取 ±200 字，再往前/後擴張到最近的 `\n` 或 `。`，額外擴張不超過 100 字，總上限 ±500 字。
+- **待調整**：首次 ETL 完成後，提供實際引用 snippet 範例給 Claude，依真實判決結構調整邊界邏輯。
+- **注意**：snippet 從原始 full_text（含換行）取，才能做換行邊界擴張；不能在擷取前就預處理掉換行。
 
 ### Week 1 範圍（非常重要）
 - **來源判決（source / 引用判決）**：先做「高等法院層級」。
