@@ -34,14 +34,14 @@ def ingest_decision_statutes(conn, decision_id: int, clean_text: str) -> int:
     """
     statutes = extract_statutes(clean_text)
     inserted = 0
-    for law, article_raw, raw in statutes:
+    for law, article_raw, sub_ref, raw in statutes:
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO decision_reason_statutes (decision_id, law, article_raw, raw_match)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (decision_id, law, article_raw) DO NOTHING
-                """, (decision_id, law, article_raw, raw))
+                    INSERT INTO decision_reason_statutes (decision_id, law, article_raw, sub_ref, raw_match)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (decision_id, law, article_raw, sub_ref) DO NOTHING
+                """, (decision_id, law, article_raw, sub_ref, raw))
                 conn.commit()
                 inserted += 1
         except Exception as e:
@@ -87,14 +87,14 @@ def ingest_citation_statutes(conn, citation_id: int, snippet: str) -> int:
     """
     statutes = extract_statutes(snippet)
     inserted = 0
-    for law, article_raw, raw in statutes:
+    for law, article_raw, sub_ref, raw in statutes:
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO citation_snippet_statutes (citation_id, law, article_raw, raw_match)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (citation_id, law, article_raw) DO NOTHING
-                """, (citation_id, law, article_raw, raw))
+                    INSERT INTO citation_snippet_statutes (citation_id, law, article_raw, sub_ref, raw_match)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (citation_id, law, article_raw, sub_ref) DO NOTHING
+                """, (citation_id, law, article_raw, sub_ref, raw))
                 conn.commit()
                 inserted += 1
         except Exception as e:

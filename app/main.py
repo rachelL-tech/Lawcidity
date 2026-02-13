@@ -61,8 +61,8 @@ def citations(target_id: int):
                     c.raw_match,
                     COALESCE(
                         json_agg(
-                            json_build_object('law', css.law, 'article', css.article_raw)
-                            ORDER BY css.law, css.article_raw
+                            json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
+                            ORDER BY css.law, css.article_raw, css.sub_ref
                         ) FILTER (WHERE css.id IS NOT NULL),
                         '[]'
                     ) AS statutes
