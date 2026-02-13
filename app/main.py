@@ -52,6 +52,7 @@ def citations(target_id: int):
 
             cur.execute("""
                 SELECT
+                    c.id                 AS citation_id,
                     src.court_root_norm  AS source_court,
                     src.jyear,
                     src.jcase_norm,

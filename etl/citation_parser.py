@@ -184,16 +184,26 @@ def extract_citations(
 # =========================
 # Snippet 擷取（混合策略）
 # =========================
-# 有編號的段落起點（一、二、壹、貳、㈠㈡ 等）
+# 有編號的段落起點（一、二、壹、貳、㈠㈡、①②、⑴⑵、⒈⒉ 等）
 # 這些才是「真正段落起點」；非縮排的 PDF 折行 \r\n 後面不會接這些字元
 _PARA_START_RE = re.compile(
-    r'\r\n(?=[一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩（])'
+    r'\r\n(?=[一二三四五六七八九十壹貳參肆伍陸柒捌玖'
+    r'㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩'
+    r'①②③④⑤⑥⑦⑧⑨⑩'
+    r'⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽'   # 括號數字 U+2474–U+247D
+    r'⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑'   # 數字句號 U+2488–U+2491
+    r'（])'
 )
 
-# 子條款起點：「。再按」「。復按」「。又按」「。次按」「。末按」「。再者」
-# trailing 字元（：,「 等）為可選——有時直接接法律內容，不帶分隔符
-# 前綴已足以避免誤判「按照」等非子條款用法
-_SUB_CLAUSE_RE = re.compile(r'。(?:(?:再|復|又|次|末)按|再者)[：:，,「]?')
+# 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」
+#             「再者」「所謂」「另」「按」（行首）
+# 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、）
+# group(1) = 關鍵字起始位置（用於 actual_start）
+_SUB_CLAUSE_RE = re.compile(
+    r'(?:(?:。|\r\n)[\uf000-\uffff\u3000-\u303f\t 　]{0,6})'
+    r'((?:再|復|又|次|末|且|惟)按|再者|所謂|另(?![行有外附])|按(?!照))'
+    r'[：:，,「]?'
+)
 
 
 def extract_snippet(
@@ -228,7 +238,7 @@ def extract_snippet(
         last_sub = m
 
     if last_sub is not None:
-        actual_start = look_back_start + last_sub.start() + 1  # skip 。
+        actual_start = look_back_start + last_sub.start(1)  # group(1) = 關鍵字起點
 
     else:
         # ② 編號段落：全 look_back 找最後一個段落起點
@@ -254,6 +264,20 @@ def extract_snippet(
             # ③ 任意換行
             any_newline = look_back.rfind('\r\n')
             actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
+
+    # ★ 引用邊界後處理：若 actual_start ~ match_start 之間有其他法院具名引用，
+    #   推進 actual_start 到最後一個引用收尾 ）之後（跳過空白/換行）
+    in_lb_start = actual_start - look_back_start
+    for m in ANY_COURT_CITATION.finditer(look_back, in_lb_start):
+        after_cite = look_back_start + m.end()
+        window = text[after_cite: after_cite + 80]
+        paren_pos = window.find('）')
+        end_pos = after_cite + paren_pos + 1 if paren_pos != -1 else after_cite
+        # 跳過緊接的 。\r\n 空白
+        while end_pos < match_start and text[end_pos] in '。\r\n \t　':
+            end_pos += 1
+        if end_pos < match_start:
+            actual_start = end_pos
 
     # 向後：找 ）（citation 的收尾括號，如「意旨參照）」）
     look_forward = text[match_end: match_end + max_forward_paren]

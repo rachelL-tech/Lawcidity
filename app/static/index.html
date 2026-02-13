@@ -202,13 +202,15 @@ async function toggle(tr, trS, targetId, caseRef) {
   wrap.classList.remove('loading');
   wrap.innerHTML = data.sources.map(s => {
     const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
-    const snip   = (s.snippet || '').trim();
+    const snip   = (s.snippet || '').trim().replace(/\r?\n[ \t\u3000]{2,}/g, ' ');
     return `
       <div class="snippet-card">
         <div class="snippet-meta">
           <strong>${s.source_court}</strong> ${srcRef}
           &nbsp;·&nbsp;
           <span class="raw-match">${escHtml(s.raw_match)}</span>
+          &nbsp;·&nbsp;
+          <span style="color:#aaa">citation #${s.citation_id}</span>
         </div>
         <div class="snippet-text">${escHtml(snip)}</div>
       </div>`;
