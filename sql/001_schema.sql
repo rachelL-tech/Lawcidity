@@ -118,15 +118,16 @@ CREATE TABLE decision_reason_statutes (
   id          BIGSERIAL PRIMARY KEY,
   decision_id BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
 
-  law         TEXT NOT NULL,  -- 例：民法 / 刑法 / 民事訴訟法...
-  article_raw TEXT NOT NULL,  -- 條號（TEXT 格式，支援「184」「185-3」「184條第1項」）
-  raw_match   TEXT,           -- 命中片段（可選）
+  law         TEXT NOT NULL,              -- 例：民法 / 刑法 / 民事訴訟法...
+  article_raw TEXT NOT NULL,             -- 條號（TEXT 格式，如「184」「29之1」）
+  sub_ref     TEXT NOT NULL DEFAULT '',  -- 項/款/目 qualifier（如「第1項第1款」「前段」）
+  raw_match   TEXT,                      -- 命中片段（可選）
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 去重：同判決理由段，同一法條只留一次
-CREATE UNIQUE INDEX drs_uniq ON decision_reason_statutes(decision_id, law, article_raw);
+-- 去重：同判決理由段，同一法條＋項款只留一次
+CREATE UNIQUE INDEX drs_uniq ON decision_reason_statutes(decision_id, law, article_raw, sub_ref);
 
 CREATE INDEX drs_law_article_idx ON decision_reason_statutes(law, article_raw);
 CREATE INDEX drs_decision_idx    ON decision_reason_statutes(decision_id);
@@ -140,14 +141,15 @@ CREATE TABLE citation_snippet_statutes (
   citation_id BIGINT NOT NULL REFERENCES citations(id) ON DELETE CASCADE,
 
   law         TEXT NOT NULL,
-  article_raw TEXT NOT NULL,  -- 條號（TEXT 格式，支援「184」「185-3」「184條第1項」）
-  raw_match   TEXT,           -- snippet 內命中片段（可選）
+  article_raw TEXT NOT NULL,             -- 條號（TEXT 格式，如「184」「29之1」）
+  sub_ref     TEXT NOT NULL DEFAULT '',  -- 項/款/目 qualifier（如「第1項第1款」「前段」）
+  raw_match   TEXT,                      -- snippet 內命中片段（可選）
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 去重：同引用邊 snippet 內，同一法條只記一次
-CREATE UNIQUE INDEX css_uniq ON citation_snippet_statutes(citation_id, law, article_raw);
+-- 去重：同引用邊 snippet 內，同一法條＋項款只記一次
+CREATE UNIQUE INDEX css_uniq ON citation_snippet_statutes(citation_id, law, article_raw, sub_ref);
 
 CREATE INDEX css_law_article_idx ON citation_snippet_statutes(law, article_raw);
 CREATE INDEX css_citation_idx    ON citation_snippet_statutes(citation_id);

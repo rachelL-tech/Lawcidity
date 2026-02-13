@@ -20,10 +20,11 @@
 - **必存** `raw_match`、`match_start`、`match_end`（方便重切、也能做螢光筆定位）。
 - `match_start` / `match_end` 對應**原始 full_text** 的 index（非預處理後），snippet 也從原始文字取。
 
-### Snippet 邊界擴張策略（混合式，待調整）
-- **目前實作**：先取 ±200 字，再往前/後擴張到最近的 `\n` 或 `。`，額外擴張不超過 100 字，總上限 ±500 字。
-- **待調整**：首次 ETL 完成後，提供實際引用 snippet 範例給 Claude，依真實判決結構調整邊界邏輯。
-- **注意**：snippet 從原始 full_text（含換行）取，才能做換行邊界擴張；不能在擷取前就預處理掉換行。
+### Snippet 邊界擴張策略（混合式）
+- 向前優先順序：① 子條款關鍵字（再按/復按/按等）→ ② 編號段落起點（一、㈠、①等）→ ③ 任意 `\r\n` → ④ 固定距離 fallback
+- 向後：找 match_end 之後最近的 `）`（citation 收尾括號），fallback 找 `。` 或 `\r\n`
+- 引用邊界後處理：actual_start ~ match_start 之間若有其他法院具名引用，推進 actual_start 到最後一個引用收尾之後
+- **注意**：snippet 從原始 full_text（含換行）取，才能做換行邊界擴張。
 
 ### Week 1 範圍（非常重要）
 - **來源判決（source / 引用判決）**：先做「高等法院層級」。
@@ -36,19 +37,26 @@
 - 來源判決可逐步納入最高法院（或其他層級），但先守住 Week1 可 demo。
 
 ### 引用抽取 regex 策略（已確認）
-- **預處理**：先將 `\r\n`、`\n` 及多餘空白移除，再跑 regex。
-- **核心 regex**（Week 1 只抓最高法院）：
-  ```python
-  r'最高法院\s*\d{2,3}\s*年\s*度?\s*[台臺]\s*\w+\s*字\s*第\s*\d+\s*號'
-  ```
+- **預處理**：先將 `\r\n`、`\n` 及多餘空白移除，再跑 regex（`preprocess_text()`）。
+- **核心 regex**（`etl/citation_parser.py`）：
+  - `ANY_COURT_CITATION`：比對具名法院 + 年度 + 字別 + 案號
+  - `ABBR_CITATION`：省略法院名的連續引用（繼承 `current_court`）
 - **需處理的變體格式**：
   | 格式 | 範例 | 備註 |
   |---|---|---|
   | 標準格式 | `最高法院113年度台上字第3527號` | 最常見 |
   | 無「度」字（舊案） | `最高法院40年台上字第86號` | 年度 < 80 常見 |
-  | 大法庭 | `最高法院110年度台上大字第5660號` | regex 的 `\w+` 已涵蓋 |
-  | 判例後綴 | `最高法院75年台上字第7033號判例` | 擷取時可忽略「判例」二字 |
+  | 大法庭 | `最高法院110年度台上大字第5660號` | |
+  | 判例後綴 | `最高法院75年台上字第7033號判例` | 擷取時忽略「判例」二字 |
+- **jcase_norm 長度限制**：字別 regex 用 `[台臺][^字]{1,20}?`（有上限），防止 `preprocess_text()` 移除換行後跨段誤吃超長字串。
+- **ingest guard**：`upsert_target_placeholder` 檢查 `len(jcase_norm) > 50`，超過直接跳過並 log。
 - **Week 1 不處理**：「本院」自引（需額外推斷法院）、司法院釋字、憲法法庭裁判。
+
+### 法條拆解策略
+- `article_raw TEXT` 儲存條號（如 `184`、`29之1`），`sub_ref TEXT` 儲存項/款/目修飾詞（如 `第1項第1款`、`前段`，無修飾詞為空字串）。
+- 法律名稱白名單：`etl/law_names.py`（`LAW_NAMES` + `PSEUDO_LAWS` 虛指詞）。
+- 解析器：`etl/statute_parser.py`，3-phase 狀態機（① 省略項款 → ② 省略條號 → ③ 具名法條）。
+- 抽取腳本：`etl/extract_statutes.py --decisions`（填 `decision_reason_statutes`）、`--citations`（填 `citation_snippet_statutes`）、`--all`（兩者都跑）。
 
 ### 資料來源（已確認 2025-02-12）
 - **本機資料**：`/Users/rachel/Downloads/202511/`（2025年11月，已解壓 JSON）
@@ -60,24 +68,48 @@
 ### 簡易庭對應表
 - **檔案位置**：`etl/simple_court_mapping.py`
 - **資料來源**：資料夾名稱（如「三重簡易庭民事」）
-- **解析目標**：
-  - `parent_court`：所屬地方法院（例：臺灣新北地方法院）
-  - `county`：縣市（例：新北市）
-  - `district`：區/鎮/市（例：三重區）
+- **解析目標**：`parent_court`（所屬地方法院）、`county`（縣市）、`district`（區/鎮/市）
 - **維護方式**：共 35 個簡易庭，手動維護 Python dict
-- **使用時機**：ETL ingest 階段，從資料夾名稱解析法院資訊並 upsert `court_units`
-
-### 法條拆解策略
-- **Week 1**：`article_raw TEXT` 儲存完整條文編號（如「184」「185-3」「184條第1項」）
-- **查詢方式**：使用 `=` 精確匹配或 `LIKE '184%'` 模糊匹配
-- **Week 2+ 擴展**（觸發條件：需精確到項款 / 統計需求）：
-  - 新增 `article INT, subarticle TEXT, paragraph INT, subpara INT` 欄位
-  - 回填既有資料
-  - ETL 加入拆解邏輯
 
 ### API（裁判書 JDoc）定位
 - 可用 jid 打 JDoc 拿全文（不限七日內），但有時段限制，不適合即時 request。
 - **MVP 不把 JDoc 當同步依賴**：只做離線/批次補齊（例如 nightly job 或手動補 top targets）。
+
+---
+
+## 現況 snapshot（2025-02-12）
+
+### 資料量
+| 表格 | 筆數 |
+|------|------|
+| decisions | 2,381（最高法院 1,217 + 臺灣高等法院 1,159 + 福建高等法院 5） |
+| citations | 1,426（來源：高等法院民事，目標：最高法院） |
+| decision_reason_statutes | 7,249（含 sub_ref） |
+| citation_snippet_statutes | 1,220（含 sub_ref） |
+
+### 已 ingest 資料夾（`/Users/rachel/Downloads/202511/`）
+- 臺灣高等法院民事 / 臺中分院民事 / 臺南分院民事 / 花蓮分院民事 / 高雄分院民事
+- 福建高等法院金門分院民事
+
+### 常用指令
+```bash
+# 啟動 DB
+docker start casemap-db
+
+# 啟動 API server
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Ingest（batch 模式）
+python3 etl/ingest_decisions.py --batch "/Users/rachel/Downloads/202511" "高等法院民事"
+
+# 法條抽取
+python3 etl/extract_statutes.py --all
+```
+
+### Docker / DB
+- container: `casemap-db`（postgres:15-alpine, port 5432）
+- DB: `citations` / user: `postgres` / password: `postgres`
+- DATABASE_URL: `postgresql://postgres:postgres@localhost:5432/citations`
 
 ---
 
@@ -94,175 +126,40 @@
 - DB：PostgreSQL 15+（含 `pg_trgm` extension）
 - 部署/啟動：Docker Compose（app + db）
 
-建議 repo 結構：
-- `sql/001_schema.sql`  — DB schema（照下方「確定版 schema」寫入）
-- `etl/simple_court_mapping.py` — 簡易庭對應表（35 個簡易庭 → parent_court + county + district）
-- `etl/ingest_decisions.py` — 匯入/Upsert 判決 JSON
-- `etl/extract_citations.py` — 從 `decisions.full_text` 抽 citations → upsert target placeholder → insert citations
-- `etl/extract_statutes.py` — 抽法條（理由段 & snippet）
-- `app/main.py` — FastAPI app
-- `app/db.py` — DB 連線/簡單查詢層（可用 psycopg）
-- `tests/test_citation_parser.py`
-- `tests/test_statute_parser.py`
-- `tests/test_snippet.py`
-- `data/samples/` — 放 3 份高院判決全文（你提供的），作為抽取測試基準
+Repo 結構：
+- `sql/001_schema.sql` — DB schema（確定版，含 sub_ref）
+- `etl/ingest_decisions.py` — 匯入/Upsert 判決 JSON（含 citation 抽取）
+- `etl/citation_parser.py` — citation 抽取 + snippet 擷取
+- `etl/statute_parser.py` — 法條抽取（3-phase 狀態機）
+- `etl/extract_statutes.py` — 法條 backfill 腳本
+- `etl/law_names.py` — 法律名稱白名單
+- `etl/text_cleaner.py` — clean_text 預處理
+- `etl/simple_court_mapping.py` — 簡易庭對應表
+- `app/main.py` — FastAPI app（rankings + citations API）
+- `app/static/index.html` — 前端排行頁
 
 ---
 
 ## 3) DB Schema
-> 直接把以下內容存成 `sql/001_schema.sql`，用 docker init 或手動 psql 執行。
+> 完整版見 `sql/001_schema.sql`。以下為各表摘要。
 
 ```sql
--- 中文 substring 搜尋（ILIKE '%關鍵字%'）的效能核心
+-- 啟用 pg_trgm（中文 substring 搜尋）
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
--- =========================
--- 1) 法院 / 審判單位（地圖/所在地/篩選用）
--- =========================
-CREATE TABLE court_units (
-  id         BIGSERIAL PRIMARY KEY,
+-- court_units：法院/審判單位（地圖/所在地/篩選用）
+-- decisions：判決節點，自然鍵 (court_root_norm, jyear, jcase_norm, jno)
+-- citations：引用邊 source_id → target_id，含 raw_match / match_start / match_end / snippet
+-- decision_reason_statutes：判決理由段法條，含 article_raw + sub_ref
+-- citation_snippet_statutes：snippet 內法條，含 article_raw + sub_ref
+```
 
-  unit_norm  TEXT NOT NULL,  -- 詳細到：臺灣新北地方法院三重簡易庭
-  root_norm  TEXT NOT NULL,  -- 聚合層級：臺灣新北地方法院 / 臺灣高等法院 / 最高法院
+### 法條表欄位（兩張表結構相同）
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| law | TEXT | 法律名稱，如 `民法` |
+| article_raw | TEXT | 條號，如 `184`、`29之1` |
+| sub_ref | TEXT | 項/款/目，如 `第1項第1款`、`前段`、`''` |
+| raw_match | TEXT | 命中原文片段 |
 
-  level      SMALLINT,       -- 1=最高 2=高院 3=地院 4=簡易庭/分院...
-  county     TEXT,           -- 縣市（例：新北市）
-  district   TEXT,           -- 區（例：三重區）
-  address    TEXT,           -- 地址（可後補）
-  lat        DOUBLE PRECISION,
-  lon        DOUBLE PRECISION,
-
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE UNIQUE INDEX court_units_unit_uniq ON court_units(unit_norm);
-CREATE INDEX court_units_root_idx ON court_units(root_norm);
-CREATE INDEX court_units_county_district_idx ON court_units(county, district);
-CREATE INDEX court_units_geo_idx ON court_units(lat, lon);
-
-
--- =========================
--- 2) 判決節點（唯一真相：placeholder 與完整判決都在這張）
---    placeholder 唯一鍵： (court_root_norm, jyear, jcase_norm, jno)
---    ref_key 由上述四欄位自動生成（不用你手動算）
--- =========================
-CREATE TABLE decisions (
-  id             BIGSERIAL PRIMARY KEY,
-
-  -- ★ placeholder / 去重的自然鍵（最穩）
-  court_root_norm TEXT NOT NULL,     -- 例：臺灣新北地方法院 / 臺灣高等法院 / 最高法院
-  jyear           SMALLINT NOT NULL, -- JYEAR（案號年度）
-  jcase_norm      TEXT NOT NULL,     -- JCASE（字別正規化）
-  jno             INT NOT NULL,      -- JNO（號次）
-
-  -- ★ ref_key：穩定可讀的節點 ID（從自然鍵生成）
-  ref_key         TEXT GENERATED ALWAYS AS (
-                    court_root_norm || '|' ||
-                    jyear::TEXT || '|' ||
-                    jcase_norm || '|' ||
-                    jno::TEXT
-                  ) STORED,
-
-  -- 官方唯一碼（有就存；允許 NULL）
-  jid             TEXT,
-
-  -- 地圖/所在地：只存 FK（乾淨）
-  court_unit_id   BIGINT REFERENCES court_units(id),
-
-  -- 顯示/搜尋/抽取
-  decision_date   DATE,        -- JDATE（裁判日期）
-  title           TEXT,        -- JTITLE
-  full_text       TEXT,        -- JFULL（全文；抽引用/keyword/法條都靠它）
-  pdf_url         TEXT,        -- JPDF（查看原文）
-  raw             JSONB,       -- 原始 JSON（除錯/回補欄位）
-
-  created_at      TIMESTAMPTZ DEFAULT now(),
-  updated_at      TIMESTAMPTZ DEFAULT now(),
-
-  -- 自然鍵唯一：placeholder 釘死在這裡
-  CONSTRAINT decisions_natural_key_uniq UNIQUE (court_root_norm, jyear, jcase_norm, jno)
-);
-
--- ref_key 也加 unique（雖然自然鍵已 unique，但 ref_key 常用來查詢）
-CREATE UNIQUE INDEX decisions_ref_key_uniq ON decisions(ref_key);
-
--- jid 若有也必須唯一（避免同一官方文件重複匯入）
-CREATE UNIQUE INDEX decisions_jid_uniq ON decisions(jid) WHERE jid IS NOT NULL;
-
--- 常用索引
-CREATE INDEX decisions_court_year_idx ON decisions(court_root_norm, jyear);
-CREATE INDEX decisions_unit_idx ON decisions(court_unit_id);
-CREATE INDEX decisions_date_idx ON decisions(decision_date);
-
--- keyword 搜尋索引
-CREATE INDEX decisions_fulltext_trgm ON decisions USING GIN (full_text gin_trgm_ops);
-CREATE INDEX decisions_title_trgm    ON decisions USING GIN (title gin_trgm_ops);
-
-
--- =========================
--- 3) 引用邊（source -> target）
--- =========================
-CREATE TABLE citations (
-  id          BIGSERIAL PRIMARY KEY,
-
-  source_id   BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-  target_id   BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-
-  raw_match   TEXT NOT NULL,   -- 原始命中的引用字串
-  match_start INT,             -- 在 source.full_text 的起點 index
-  match_end   INT,             -- 在 source.full_text 的終點 index
-  snippet     TEXT,            -- 以 match 為中心切出的上下文（展示/除錯）
-
-  created_at  TIMESTAMPTZ DEFAULT now()
-);
-
--- 去重：同來源同目標同一位置不要重複插
-CREATE UNIQUE INDEX citations_uniq ON citations(source_id, target_id, match_start);
-
--- 查「誰引用它」/「它引用誰」都會用到
-CREATE INDEX citations_target_idx ON citations(target_id);
-CREATE INDEX citations_source_idx ON citations(source_id);
-
-
--- =========================
--- 4) 理由段法條（去重）
---    用來做法條 filter（MVP 強建議）
--- =========================
-CREATE TABLE decision_reason_statutes (
-  id          BIGSERIAL PRIMARY KEY,
-  decision_id BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-
-  law         TEXT NOT NULL,  -- 例：民法 / 刑法 / 民事訴訟法...
-  article_raw TEXT NOT NULL,  -- 條號（TEXT 格式，支援「184」「185-3」「184條第1項」）
-  raw_match   TEXT,           -- 命中片段（可選）
-
-  created_at  TIMESTAMPTZ DEFAULT now()
-);
-
--- 去重：同判決理由段，同一法條只留一次
-CREATE UNIQUE INDEX drs_uniq ON decision_reason_statutes(decision_id, law, article_raw);
-
-CREATE INDEX drs_law_article_idx ON decision_reason_statutes(law, article_raw);
-CREATE INDEX drs_decision_idx    ON decision_reason_statutes(decision_id);
-
-
--- =========================
--- 5) 引用 snippet 內法條（回答「這次引用在講哪條法」）
--- =========================
-CREATE TABLE citation_snippet_statutes (
-  id          BIGSERIAL PRIMARY KEY,
-  citation_id BIGINT NOT NULL REFERENCES citations(id) ON DELETE CASCADE,
-
-  law         TEXT NOT NULL,
-  article_raw TEXT NOT NULL,  -- 條號（TEXT 格式，支援「184」「185-3」「184條第1項」）
-  raw_match   TEXT,           -- snippet 內命中片段（可選）
-
-  created_at  TIMESTAMPTZ DEFAULT now()
-);
-
--- 去重：同引用邊 snippet 內，同一法條只記一次
-CREATE UNIQUE INDEX css_uniq ON citation_snippet_statutes(citation_id, law, article_raw);
-
-CREATE INDEX css_law_article_idx ON citation_snippet_statutes(law, article_raw);
-CREATE INDEX css_citation_idx    ON citation_snippet_statutes(citation_id);
+unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
