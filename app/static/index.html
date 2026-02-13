@@ -221,9 +221,12 @@ async function toggle(tr, trS, targetId, caseRef) {
     const snip   = (s.snippet || '').trim().replace(/\r?\n[ \t\u3000]{2,}/g, ' ');
     const statutes = (s.statutes || []);
     const tagsHtml = statutes.length
-      ? `<div class="statute-tags">${statutes.map(t =>
-          `<span class="statute-tag">${escHtml(t.law)}第${t.article}條</span>`
-        ).join('')}</div>`
+      ? `<div class="statute-tags">${statutes.map(t => {
+          // article_raw: "29" → 第29條, "29之1" → 第29條之1
+          const m = String(t.article).match(/^(\d+)(?:之(\d+))?$/);
+          const art = m && m[2] ? `第${m[1]}條之${m[2]}` : `第${t.article}條`;
+          return `<span class="statute-tag">${escHtml(t.law)}${art}</span>`;
+        }).join('')}</div>`
       : '';
     return `
       <div class="snippet-card">

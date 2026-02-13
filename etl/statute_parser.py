@@ -23,14 +23,26 @@ _ALL_NAMES = sorted(set(LAW_NAMES) | PSEUDO_LAWS, key=len, reverse=True)
 
 # 具名法條：白名單法律（含虛指詞）+ 第 X 條
 # group(1) = 法律名稱, group(2) = 條號
+# group(1) = 法律名稱, group(2) = 條號, group(3) = 之N 附號（可能為 None）
+# 台灣法律條號格式：第29條（無附號）或第29條之1（附號在「條」之後）
 LAW_ARTICLE_RE = re.compile(
-    r'(' + '|'.join(re.escape(n) for n in _ALL_NAMES) + r')\s*第\s*(\d+)\s*條'
+    r'(' + '|'.join(re.escape(n) for n in _ALL_NAMES) + r')\s*第\s*(\d+)\s*條(?:之\s*(\d+))?'
 )
 
-# 省略法名的連續條號：「、第X條」「及第X條」等
-# group(1) = 條號
+# 省略法名的連續條號（含前置項款修飾詞 & 條之N 附號）
+# 支援：「、第X條」「及第X條」（無修飾詞）
+#       「第1條第2項及第122條」（後接項號）
+#       「第184條第1項前段、第2項前段及第195條」（項號 + 分隔 + 項號 + 分隔 + 條號）
+#       「第29條第1項、第29條之1」（條之N 附號）
+# 原理：跳過「第N項/款」「前段/後段/但書/本文」及「不接條號的分隔符」，
+#       直到遇到「[分隔符]第N條（之M）」才命中。
+# group(1) = 條號, group(2) = 之N 附號（可能為 None）
 ABBR_ARTICLE_RE = re.compile(
-    r'[、，及與暨或,]\s*第\s*(\d+)\s*條'
+    r'(?:'
+    r'(?:第\s*\d+\s*[項款]|前段|後段|但書|本文)\s*'   # 項款修飾詞
+    r'|[、，及與暨或,]\s*(?!第\s*\d+\s*條)'            # 分隔符（後方不接條號）
+    r')*'
+    r'[、，及與暨或,]\s*第\s*(\d+)\s*條(?:之\s*(\d+))?'  # 真正的分隔符 + 條號（含之N）
 )
 
 # 臺→台 正規化
@@ -77,8 +89,9 @@ def extract_statutes(text: str) -> List[Tuple[str, str, str]]:
         if current_law is not None:
             abbr = ABBR_ARTICLE_RE.match(text, pos)
             if abbr:
-                article_raw = abbr.group(1)
-                raw = abbr.group(0)[1:].lstrip()   # 跳過分隔符
+                _suf = f'之{abbr.group(2)}' if abbr.group(2) else ''
+                article_raw = abbr.group(1) + _suf
+                raw = f'第{abbr.group(1)}條{_suf}'
                 key = (current_law, article_raw)
                 if key not in seen:
                     seen.add(key)
@@ -93,7 +106,8 @@ def extract_statutes(text: str) -> List[Tuple[str, str, str]]:
 
         law_raw = full.group(1)
         law = _normalize(law_raw)
-        article_raw = full.group(2)
+        _suf = f'之{full.group(3)}' if full.group(3) else ''
+        article_raw = full.group(2) + _suf
 
         if law in PSEUDO_LAWS or law_raw in PSEUDO_LAWS:
             # 虛指詞（同法/本法 等）：繼承 current_law（若有的話）
