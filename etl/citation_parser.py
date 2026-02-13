@@ -188,39 +188,38 @@ def extract_snippet(
     text: str,
     match_start: int,
     match_end: int,
-    base_window: int = 200,
-    expand_limit: int = 100,
-    max_window: int = 500,
+    max_back: int = 1000,
+    max_forward_paren: int = 150,
 ) -> str:
     """
-    以 citation match 為中心，取前後 base_window 個字，
-    再往外擴張到最近的句子邊界（\\n 或 。），
-    額外擴張不超過 expand_limit，總上限 max_window。
+    以 citation match 為中心切出 snippet：
+
+    向前：找 match_start 之前最近的 \\r\\n（段落起點），取整段
+    向後：找 match_end 之後最近的 ）（citation 收尾括號），在那裡截止
+          fallback：找 。 或 \\r\\n；都沒有則取到 max_forward_paren
     """
-    raw_start = max(0, match_start - base_window)
-    raw_end = min(len(text), match_end + base_window)
-
-    # 向前擴張
-    expand_back = min(expand_limit, raw_start)
-    search_back = text[raw_start - expand_back: raw_start]
-    boundary_back = max(search_back.rfind('\n'), search_back.rfind('。'))
-    if boundary_back != -1:
-        actual_start = raw_start - expand_back + boundary_back + 1
+    # 向前：找最近的段落起點（\r\n）
+    look_back_start = max(0, match_start - max_back)
+    look_back = text[look_back_start: match_start]
+    para_start = look_back.rfind('\r\n')
+    if para_start != -1:
+        actual_start = look_back_start + para_start + 2  # skip \r\n
     else:
-        actual_start = raw_start
+        actual_start = look_back_start
 
-    # 向後擴張
-    expand_forward = min(expand_limit, len(text) - raw_end)
-    search_forward = text[raw_end: raw_end + expand_forward]
-    boundary_forward = min(
-        search_forward.find('\n') if '\n' in search_forward else expand_forward,
-        search_forward.find('。') if '。' in search_forward else expand_forward,
-    )
-    actual_end = raw_end + boundary_forward
-
-    # max_window 上限
-    actual_start = max(actual_start, match_start - max_window)
-    actual_end = min(actual_end, match_end + max_window)
+    # 向後：找 ）（citation 的收尾括號，如「意旨參照）」）
+    look_forward = text[match_end: match_end + max_forward_paren]
+    paren_pos = look_forward.find('）')
+    if paren_pos != -1:
+        actual_end = match_end + paren_pos + 1
+    else:
+        # fallback：找 。 或 \r\n
+        candidates = []
+        if '。' in look_forward:
+            candidates.append(look_forward.find('。'))
+        if '\r\n' in look_forward:
+            candidates.append(look_forward.find('\r'))
+        actual_end = match_end + (min(candidates) + 1 if candidates else max_forward_paren)
 
     return text[actual_start: actual_end]
 

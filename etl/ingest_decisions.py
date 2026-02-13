@@ -17,6 +17,7 @@ from typing import Optional, Dict, List
 import psycopg
 from court_parser import parse_court_from_folder
 from citation_parser import extract_citations
+from text_cleaner import clean_judgment_text
 
 
 # =========================
@@ -140,17 +141,18 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
         # 正規化
         jcase_norm = normalize_jcase(jcase)
         decision_date = parse_decision_date(jdate)
+        clean_text = clean_judgment_text(jfull) if jfull else None
 
         # Upsert
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO decisions (
                     court_root_norm, jyear, jcase_norm, jno,
-                    jid, court_unit_id, decision_date, title, full_text, pdf_url, raw
+                    jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw
                 )
                 VALUES (
                     %(court_root_norm)s, %(jyear)s, %(jcase_norm)s, %(jno)s,
-                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(pdf_url)s, %(raw)s
+                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s
                 )
                 ON CONFLICT (court_root_norm, jyear, jcase_norm, jno) DO UPDATE
                     SET jid = EXCLUDED.jid,
@@ -158,6 +160,7 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
                         decision_date = EXCLUDED.decision_date,
                         title = EXCLUDED.title,
                         full_text = EXCLUDED.full_text,
+                        clean_text = EXCLUDED.clean_text,
                         pdf_url = EXCLUDED.pdf_url,
                         raw = EXCLUDED.raw,
                         updated_at = now()
@@ -171,6 +174,7 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
                 "decision_date": decision_date,
                 "title": jtitle,
                 "full_text": jfull,
+                "clean_text": clean_text,
                 "pdf_url": jpdf,
                 "raw": json.dumps(json_data, ensure_ascii=False)
             })
@@ -227,19 +231,20 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
         return None
 
 
-def ingest_citations(conn, source_id: int, full_text: str) -> int:
+def ingest_citations(conn, source_id: int, clean_text: str) -> int:
     """
-    從 full_text 抽取所有最高法院引用，寫入 citations 表
+    從 clean_text 抽取所有最高法院引用，寫入 citations 表
+    match_start / match_end 對應 clean_text 的字元位置
 
     Args:
         conn: DB 連線
         source_id: 來源判決的 decisions.id
-        full_text: 來源判決全文
+        clean_text: clean_judgment_text() 處理後的全文
 
     Returns:
         成功寫入的 citation 數量
     """
-    citations = extract_citations(full_text)
+    citations = extract_citations(clean_text)
     inserted = 0
 
     for c in citations:
@@ -319,9 +324,10 @@ def main(folder_path: str):
             if ingest_decision(conn, court_unit_id, court_info["root_norm"], json_data):
                 success_count += 1
 
-                # 同步抽取 citations
-                full_text = json_data.get("JFULL", "") or ""
-                if full_text:
+                # 同步抽取 citations（用 clean_text，offset 對應 clean_text）
+                jfull = json_data.get("JFULL", "") or ""
+                if jfull:
+                    clean_text = clean_judgment_text(jfull)
                     source_id_row = None
                     with conn.cursor() as cur:
                         cur.execute("""
@@ -341,7 +347,7 @@ def main(folder_path: str):
                             source_id_row = row[0]
 
                     if source_id_row:
-                        n = ingest_citations(conn, source_id_row, full_text)
+                        n = ingest_citations(conn, source_id_row, clean_text)
                         if n > 0:
                             print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
             else:
