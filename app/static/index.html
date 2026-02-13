@@ -106,6 +106,22 @@
       color: #92400e;
     }
 
+    .statute-tags {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .statute-tag {
+      display: inline-block;
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      color: #166534;
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 11px;
+    }
+
     .loading { color: #888; padding: 8px 14px; font-style: italic; }
     .rank-num { color: #999; font-size: 12px; width: 36px; }
 
@@ -203,6 +219,12 @@ async function toggle(tr, trS, targetId, caseRef) {
   wrap.innerHTML = data.sources.map(s => {
     const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
     const snip   = (s.snippet || '').trim().replace(/\r?\n[ \t\u3000]{2,}/g, ' ');
+    const statutes = (s.statutes || []);
+    const tagsHtml = statutes.length
+      ? `<div class="statute-tags">${statutes.map(t =>
+          `<span class="statute-tag">${escHtml(t.law)}第${t.article}條</span>`
+        ).join('')}</div>`
+      : '';
     return `
       <div class="snippet-card">
         <div class="snippet-meta">
@@ -212,6 +234,7 @@ async function toggle(tr, trS, targetId, caseRef) {
           &nbsp;·&nbsp;
           <span style="color:#aaa">citation #${s.citation_id}</span>
         </div>
+        ${tagsHtml}
         <div class="snippet-text">${escHtml(snip)}</div>
       </div>`;
   }).join('');

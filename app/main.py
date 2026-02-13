@@ -58,10 +58,20 @@ def citations(target_id: int):
                     src.jcase_norm,
                     src.jno,
                     c.snippet,
-                    c.raw_match
+                    c.raw_match,
+                    COALESCE(
+                        json_agg(
+                            json_build_object('law', css.law, 'article', css.article_raw)
+                            ORDER BY css.law, css.article_raw
+                        ) FILTER (WHERE css.id IS NOT NULL),
+                        '[]'
+                    ) AS statutes
                 FROM citations c
                 JOIN decisions src ON c.source_id = src.id
+                LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
                 WHERE c.target_id = %s
+                GROUP BY c.id, src.court_root_norm, src.jyear, src.jcase_norm,
+                         src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
             """, (target_id,))
             return {"target": target, "sources": cur.fetchall()}
