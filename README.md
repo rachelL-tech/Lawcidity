@@ -88,8 +88,8 @@ GROUP BY root_norm, level;
 - [x] Docker Compose + PostgreSQL
 - [x] Schema 建立
 - [ ] 簡易庭對應表（35 個）
-- [ ] **你的任務**：實作 `normalize_jcase()` 和 `parse_decision_date()`
-- [ ] **你的任務**：測試匯入高等法院判決
+- [ ] 實作 `normalize_jcase()` 和 `parse_decision_date()`
+- [ ] 測試匯入高等法院判決
 - [ ] 抽取 citation（`etl/extract_citations.py`）
 - [ ] 抽取法條（`etl/extract_statutes.py`）
 - [ ] 驗證引用網路是否正確

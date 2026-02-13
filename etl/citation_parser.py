@@ -190,9 +190,10 @@ _PARA_START_RE = re.compile(
     r'\r\n(?=[一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩（])'
 )
 
-# 子條款起點：「。再按：」「。復按：」「。又按：」
-# 出現在長段落內，作為比段落起點更細粒度的向前邊界
-_SUB_CLAUSE_RE = re.compile(r'。(?:再|復|又)按[：:「]')
+# 子條款起點：「。再按」「。復按」「。又按」「。次按」「。末按」「。再者」
+# trailing 字元（：,「 等）為可選——有時直接接法律內容，不帶分隔符
+# 前綴已足以避免誤判「按照」等非子條款用法
+_SUB_CLAUSE_RE = re.compile(r'。(?:(?:再|復|又|次|末)按|再者)[：:，,「]?')
 
 
 def extract_snippet(
@@ -205,48 +206,52 @@ def extract_snippet(
     """
     以 citation match 為中心切出 snippet：
 
-    向前：找 match_start 之前最近的「有編號段落起點」（一、二、壹、㈠ 等）
-          PDF 折行的裸 \\r\\n 不算段落起點，不會被誤判
-          段落起點超過 para_cap：改找「再按/復按/又按」子條款邊界
-          fallback：找最近任意 \\r\\n；再 fallback：從 max_back 位置起
+    向前優先順序：
+    ① 子條款（再按/復按/又按）：match_start 前 para_cap 字內，最靠近 match_start 者
+    ② 編號段落起點（一、二、壹、㈠ 等）：全 look_back 內最後一個
+       距離 ≤ para_cap → 直接用
+       距離 > para_cap → 從硬切點往前找最近 。，從句號後起頭
+    ③ 任意 \\r\\n（fallback）
+    ④ 固定距離 look_back_start（最終 fallback）
+
     向後：找 match_end 之後最近的 ）（citation 收尾括號），在那裡截止
           fallback：找 。 或 \\r\\n；都沒有則取到 max_forward_paren
     """
-    # 向前：找最近的「有編號段落起點」，但距離超過 para_cap 則截斷
     para_cap: int = 600
     look_back_start = max(0, match_start - max_back)
     look_back = text[look_back_start: match_start]
 
-    # 找 look_back 內所有有編號段落起點，取最後一個（最靠近 match_start）
-    last_para = None
-    for m in _PARA_START_RE.finditer(look_back):
-        last_para = m
+    # ① 子條款：在最後 para_cap 字內找，取最靠近 match_start 的那個
+    sub_window_pos = max(0, len(look_back) - para_cap)
+    last_sub = None
+    for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
+        last_sub = m
 
-    if last_para is not None:
-        candidate = look_back_start + last_para.start() + 2  # skip \r\n
-        # 段落起點距 match_start 超過 para_cap，退回固定距離
-        if match_start - candidate <= para_cap:
-            actual_start = candidate
-        else:
-            # 段落太遠：在 para_cap 範圍內找子條款起點（再按/復按/又按）
-            sub_window_pos = max(0, len(look_back) - para_cap)
-            last_sub = None
-            for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
-                last_sub = m
-            if last_sub is not None:
-                actual_start = look_back_start + last_sub.start() + 1  # skip 。
-            else:
-                actual_start = match_start - para_cap
+    if last_sub is not None:
+        actual_start = look_back_start + last_sub.start() + 1  # skip 。
+
     else:
-        # 沒有有編號段落，先試子條款
-        sub_window_pos = max(0, len(look_back) - para_cap)
-        last_sub = None
-        for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
-            last_sub = m
-        if last_sub is not None:
-            actual_start = look_back_start + last_sub.start() + 1  # skip 。
+        # ② 編號段落：全 look_back 找最後一個段落起點
+        last_para = None
+        for m in _PARA_START_RE.finditer(look_back):
+            last_para = m
+
+        if last_para is not None:
+            candidate = look_back_start + last_para.start() + 2  # skip \r\n
+            if match_start - candidate <= para_cap:
+                actual_start = candidate
+            else:
+                # 超過 para_cap：從硬切點往前最多 150 字找最近的句號
+                hard_cut = match_start - para_cap
+                search_start = max(look_back_start, hard_cut - 150)
+                before_cut = text[search_start: hard_cut]
+                period_pos = before_cut.rfind('。')
+                if period_pos != -1:
+                    actual_start = search_start + period_pos + 1
+                else:
+                    actual_start = hard_cut
         else:
-            # fallback：任意 \r\n
+            # ③ 任意換行
             any_newline = look_back.rfind('\r\n')
             actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
 
