@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: casemap-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: citations
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro # PostgreSQL 官方 image 的機制：容器第一次啟動時，會執行 /docker-entrypoint-initdb.d/ 內的所有 .sql 檔案，之後重啟不會再跑
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
