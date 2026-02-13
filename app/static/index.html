@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>判決引用排行</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      font-size: 14px;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 16px 24px;
+    }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header p  { font-size: 12px; opacity: .6; margin-top: 2px; }
+
+    main { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,.1);
+    }
+    thead th {
+      background: #1a1a2e;
+      color: #fff;
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .03em;
+    }
+    tbody tr.row-target {
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+      transition: background .1s;
+    }
+    tbody tr.row-target:hover { background: #f0f4ff; }
+    tbody tr.row-target.open   { background: #eef2ff; }
+
+    td { padding: 10px 14px; vertical-align: top; }
+
+    .badge {
+      display: inline-block;
+      background: #e8eaff;
+      color: #3730a3;
+      border-radius: 12px;
+      padding: 2px 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .case-ref { font-weight: 500; }
+    .court    { color: #555; font-size: 12px; }
+
+    /* Snippet 展開區 */
+    tr.row-snippets { display: none; }
+    tr.row-snippets.open { display: table-row; }
+    tr.row-snippets td {
+      padding: 0;
+      background: #f8f9ff;
+    }
+
+    .snippets-wrap {
+      padding: 12px 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .snippet-card {
+      background: #fff;
+      border: 1px solid #dde3ff;
+      border-left: 4px solid #6366f1;
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    .snippet-meta {
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+    .snippet-meta strong { color: #333; }
+    .snippet-text {
+      white-space: pre-wrap;
+      line-height: 1.7;
+      font-size: 13px;
+      color: #333;
+    }
+    .raw-match {
+      display: inline-block;
+      background: #fef9c3;
+      border-radius: 3px;
+      padding: 0 3px;
+      font-size: 11px;
+      color: #92400e;
+    }
+
+    .loading { color: #888; padding: 8px 14px; font-style: italic; }
+    .rank-num { color: #999; font-size: 12px; width: 36px; }
+
+    .toggle-icon { float: right; color: #6366f1; font-size: 16px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>判決引用排行</h1>
+  <p>依被引用次數降冪排列｜點擊列展開 snippets</p>
+</header>
+
+<main>
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th style="width:40px">#</th>
+        <th>被引用判決</th>
+        <th style="width:120px">被引用法院</th>
+        <th style="width:80px;text-align:center">被引用次數</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</main>
+
+<script>
+const tbody = document.getElementById('tbody');
+
+async function loadRankings() {
+  const res  = await fetch('/api/rankings?limit=500');
+  const rows = await res.json();
+
+  rows.forEach((r, i) => {
+    const caseRef = `${r.jyear}年度${r.jcase_norm}字第${r.jno}號`;
+
+    // 排行列
+    const tr = document.createElement('tr');
+    tr.className = 'row-target';
+    tr.dataset.id = r.id;
+    tr.innerHTML = `
+      <td class="rank-num">${i + 1}</td>
+      <td>
+        <span class="case-ref">${caseRef}</span>
+        <span class="toggle-icon">▶</span>
+      </td>
+      <td><span class="court">${r.target_court}</span></td>
+      <td style="text-align:center"><span class="badge">${r.citation_count}</span></td>
+    `;
+
+    // snippet 展開列
+    const trS = document.createElement('tr');
+    trS.className = 'row-snippets';
+    trS.innerHTML = `<td colspan="4"><div class="snippets-wrap loading">載入中…</div></td>`;
+
+    tr.addEventListener('click', () => toggle(tr, trS, r.id, caseRef));
+
+    tbody.appendChild(tr);
+    tbody.appendChild(trS);
+  });
+}
+
+async function toggle(tr, trS, targetId, caseRef) {
+  const isOpen = tr.classList.contains('open');
+
+  // 關閉
+  if (isOpen) {
+    tr.classList.remove('open');
+    trS.classList.remove('open');
+    tr.querySelector('.toggle-icon').textContent = '▶';
+    return;
+  }
+
+  // 開啟
+  tr.classList.add('open');
+  trS.classList.add('open');
+  tr.querySelector('.toggle-icon').textContent = '▼';
+
+  // 已載入過則略過
+  if (trS.dataset.loaded) return;
+  trS.dataset.loaded = '1';
+
+  const res  = await fetch(`/api/citations/${targetId}`);
+  const data = await res.json();
+  const wrap = trS.querySelector('.snippets-wrap');
+
+  if (!data.sources.length) {
+    wrap.textContent = '（無 snippet）';
+    wrap.classList.remove('loading');
+    return;
+  }
+
+  wrap.classList.remove('loading');
+  wrap.innerHTML = data.sources.map(s => {
+    const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
+    const snip   = (s.snippet || '').trim();
+    return `
+      <div class="snippet-card">
+        <div class="snippet-meta">
+          <strong>${s.source_court}</strong> ${srcRef}
+          &nbsp;·&nbsp;
+          <span class="raw-match">${escHtml(s.raw_match)}</span>
+        </div>
+        <div class="snippet-text">${escHtml(snip)}</div>
+      </div>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+loadRankings();
+</script>
+</body>
+</html>
