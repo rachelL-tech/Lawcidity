@@ -20,7 +20,7 @@ from typing import List, Dict, Set, Optional
 ANY_COURT_CITATION = re.compile(
     r'((?:最高法院|(?:臺灣|台灣|福建)[\u4e00-\u9fff]*?法院)(?:[\u4e00-\u9fff]+分院)?)'
     r'\s*(\d{2,3})\s*年\s*度?\s*'
-    r'([台臺][^字]+?)\s*字\s*第\s*(\d+)\s*號'
+    r'([台臺][^字]{1,20}?)\s*字\s*第\s*(\d+)\s*號'
 )
 
 # 省略法院名的引用（承接前一個 citation 的 current_court）
@@ -28,7 +28,7 @@ ANY_COURT_CITATION = re.compile(
 # 當鏈中出現具名法院（漢字開頭）時，ABBR.match() 自然失敗，鏈中斷
 # group(1) = 年，group(2) = 字別，group(3) = 案號
 ABBR_CITATION = re.compile(
-    r'[、，及與暨或,]\s*(\d{2,3})\s*年\s*度?\s*([台臺][^字]+?)\s*字\s*第\s*(\d+)\s*號'
+    r'[、，及與暨或,]\s*(\d{2,3})\s*年\s*度?\s*([台臺][^字]{1,20}?)\s*字\s*第\s*(\d+)\s*號'
 )
 
 # Week 1 只抓最高法院；Week 2+ 在這裡擴充

@@ -202,6 +202,11 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
     Returns:
         target decision id，失敗回傳 None
     """
+    # 正常案號字別最多約 10 字，超過 50 字幾乎必為 parser 誤抓，直接跳過
+    if len(jcase_norm) > 50:
+        print(f"  跳過：jcase_norm 過長（{len(jcase_norm)} 字），可能為 parser 誤抓：{jcase_norm[:60]!r}")
+        return None
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
