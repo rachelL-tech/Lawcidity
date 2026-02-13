@@ -184,28 +184,71 @@ def extract_citations(
 # =========================
 # Snippet 擷取（混合策略）
 # =========================
+# 有編號的段落起點（一、二、壹、貳、㈠㈡ 等）
+# 這些才是「真正段落起點」；非縮排的 PDF 折行 \r\n 後面不會接這些字元
+_PARA_START_RE = re.compile(
+    r'\r\n(?=[一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩（])'
+)
+
+# 子條款起點：「。再按：」「。復按：」「。又按：」
+# 出現在長段落內，作為比段落起點更細粒度的向前邊界
+_SUB_CLAUSE_RE = re.compile(r'。(?:再|復|又)按[：:「]')
+
+
 def extract_snippet(
     text: str,
     match_start: int,
     match_end: int,
-    max_back: int = 1000,
+    max_back: int = 3000,
     max_forward_paren: int = 150,
 ) -> str:
     """
     以 citation match 為中心切出 snippet：
 
-    向前：找 match_start 之前最近的 \\r\\n（段落起點），取整段
+    向前：找 match_start 之前最近的「有編號段落起點」（一、二、壹、㈠ 等）
+          PDF 折行的裸 \\r\\n 不算段落起點，不會被誤判
+          段落起點超過 para_cap：改找「再按/復按/又按」子條款邊界
+          fallback：找最近任意 \\r\\n；再 fallback：從 max_back 位置起
     向後：找 match_end 之後最近的 ）（citation 收尾括號），在那裡截止
           fallback：找 。 或 \\r\\n；都沒有則取到 max_forward_paren
     """
-    # 向前：找最近的段落起點（\r\n）
+    # 向前：找最近的「有編號段落起點」，但距離超過 para_cap 則截斷
+    para_cap: int = 600
     look_back_start = max(0, match_start - max_back)
     look_back = text[look_back_start: match_start]
-    para_start = look_back.rfind('\r\n')
-    if para_start != -1:
-        actual_start = look_back_start + para_start + 2  # skip \r\n
+
+    # 找 look_back 內所有有編號段落起點，取最後一個（最靠近 match_start）
+    last_para = None
+    for m in _PARA_START_RE.finditer(look_back):
+        last_para = m
+
+    if last_para is not None:
+        candidate = look_back_start + last_para.start() + 2  # skip \r\n
+        # 段落起點距 match_start 超過 para_cap，退回固定距離
+        if match_start - candidate <= para_cap:
+            actual_start = candidate
+        else:
+            # 段落太遠：在 para_cap 範圍內找子條款起點（再按/復按/又按）
+            sub_window_pos = max(0, len(look_back) - para_cap)
+            last_sub = None
+            for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
+                last_sub = m
+            if last_sub is not None:
+                actual_start = look_back_start + last_sub.start() + 1  # skip 。
+            else:
+                actual_start = match_start - para_cap
     else:
-        actual_start = look_back_start
+        # 沒有有編號段落，先試子條款
+        sub_window_pos = max(0, len(look_back) - para_cap)
+        last_sub = None
+        for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
+            last_sub = m
+        if last_sub is not None:
+            actual_start = look_back_start + last_sub.start() + 1  # skip 。
+        else:
+            # fallback：任意 \r\n
+            any_newline = look_back.rfind('\r\n')
+            actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
 
     # 向後：找 ）（citation 的收尾括號，如「意旨參照）」）
     look_forward = text[match_end: match_end + max_forward_paren]
