@@ -35,15 +35,18 @@ CREATE INDEX court_units_geo_idx ON court_units(lat, lon);
 CREATE TABLE decisions (
   id             BIGSERIAL PRIMARY KEY,
 
-  -- ★ placeholder / 去重的自然鍵
-  court_root_norm TEXT NOT NULL,     -- 例：臺灣新北地方法院 / 臺灣高等法院 / 最高法院
+  -- ★ 自然鍵：unit_norm 精確到分院/簡易庭，避免不同分院同號判決互蓋
+  --   已匯入判決：unit_norm = court_units.unit_norm（如「臺灣高等法院臺南分院」）
+  --   最高法院 placeholder：unit_norm = '最高法院'（無分院，直接填）
+  unit_norm       TEXT NOT NULL,     -- 具體審判庭名稱（自然鍵核心）
+  court_root_norm TEXT NOT NULL,     -- 聚合層級（顯示/篩選用）：臺灣高等法院 / 最高法院
   jyear           SMALLINT NOT NULL, -- JYEAR（案號年度）
   jcase_norm      TEXT NOT NULL,     -- JCASE（字別正規化）
   jno             INT NOT NULL,      -- JNO（號次）
 
   -- ★ ref_key：穩定可讀的節點 ID（從自然鍵生成）
   ref_key         TEXT GENERATED ALWAYS AS (
-                    court_root_norm || '|' ||
+                    unit_norm || '|' ||
                     jyear::TEXT || '|' ||
                     jcase_norm || '|' ||
                     jno::TEXT
@@ -59,14 +62,15 @@ CREATE TABLE decisions (
   decision_date   DATE,        -- JDATE（裁判日期）
   title           TEXT,        -- JTITLE
   full_text       TEXT,        -- JFULL（全文；抽引用/keyword/法條都靠它）
+  clean_text      TEXT,        -- clean_judgment_text() 處理後（citation/snippet 用）
   pdf_url         TEXT,        -- JPDF（查看原文）
   raw             JSONB,       -- 原始 JSON（除錯/回補欄位）
 
   created_at      TIMESTAMPTZ DEFAULT now(),
   updated_at      TIMESTAMPTZ DEFAULT now(),
 
-  -- 自然鍵唯一：placeholder 釘死在這裡
-  CONSTRAINT decisions_natural_key_uniq UNIQUE (court_root_norm, jyear, jcase_norm, jno)
+  -- 自然鍵唯一
+  CONSTRAINT decisions_natural_key_uniq UNIQUE (unit_norm, jyear, jcase_norm, jno)
 );
 
 -- ref_key 也加 unique（雖然自然鍵已 unique，但 ref_key 常用來查詢）
@@ -76,9 +80,10 @@ CREATE UNIQUE INDEX decisions_ref_key_uniq ON decisions(ref_key);
 CREATE UNIQUE INDEX decisions_jid_uniq ON decisions(jid) WHERE jid IS NOT NULL;
 
 -- 常用索引
-CREATE INDEX decisions_court_year_idx ON decisions(court_root_norm, jyear);
-CREATE INDEX decisions_unit_idx ON decisions(court_unit_id);
-CREATE INDEX decisions_date_idx ON decisions(decision_date);
+CREATE INDEX decisions_unit_norm_idx   ON decisions(unit_norm);
+CREATE INDEX decisions_court_year_idx  ON decisions(court_root_norm, jyear);
+CREATE INDEX decisions_unit_idx        ON decisions(court_unit_id);
+CREATE INDEX decisions_date_idx        ON decisions(decision_date);
 
 -- keyword 搜尋索引
 CREATE INDEX decisions_fulltext_trgm ON decisions USING GIN (full_text gin_trgm_ops);

@@ -114,14 +114,15 @@ def parse_decision_date(jdate: str) -> Optional[str]:
 # =========================
 # 判決匯入
 # =========================
-def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: Dict) -> bool:
+def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: str, json_data: Dict) -> bool:
     """
     Upsert 單一判決到 decisions 表
 
     Args:
         conn: DB 連線
         court_unit_id: court_units.id
-        court_root_norm: 例如「臺灣高等法院」
+        court_root_norm: 聚合層級，例如「臺灣高等法院」（顯示/篩選用）
+        unit_norm: 具體分院名稱，例如「臺灣高等法院臺南分院」（自然鍵）
         json_data: 判決 JSON（8 個欄位）
 
     Returns:
@@ -143,19 +144,20 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
         decision_date = parse_decision_date(jdate)
         clean_text = clean_judgment_text(jfull) if jfull else None
 
-        # Upsert
+        # Upsert（自然鍵：unit_norm + jyear + jcase_norm + jno）
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO decisions (
-                    court_root_norm, jyear, jcase_norm, jno,
+                    unit_norm, court_root_norm, jyear, jcase_norm, jno,
                     jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw
                 )
                 VALUES (
-                    %(court_root_norm)s, %(jyear)s, %(jcase_norm)s, %(jno)s,
+                    %(unit_norm)s, %(court_root_norm)s, %(jyear)s, %(jcase_norm)s, %(jno)s,
                     %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s
                 )
-                ON CONFLICT (court_root_norm, jyear, jcase_norm, jno) DO UPDATE
-                    SET jid = EXCLUDED.jid,
+                ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO UPDATE
+                    SET court_root_norm = EXCLUDED.court_root_norm,
+                        jid = EXCLUDED.jid,
                         court_unit_id = EXCLUDED.court_unit_id,
                         decision_date = EXCLUDED.decision_date,
                         title = EXCLUDED.title,
@@ -165,6 +167,7 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, json_data: D
                         raw = EXCLUDED.raw,
                         updated_at = now()
             """, {
+                "unit_norm": unit_norm,
                 "court_root_norm": court_root_norm,
                 "jyear": jyear,
                 "jcase_norm": jcase_norm,
@@ -210,9 +213,9 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO decisions (court_root_norm, jyear, jcase_norm, jno)
-                VALUES ('最高法院', %(jyear)s, %(jcase_norm)s, %(jno)s)
-                ON CONFLICT (court_root_norm, jyear, jcase_norm, jno) DO NOTHING
+                INSERT INTO decisions (unit_norm, court_root_norm, jyear, jcase_norm, jno)
+                VALUES ('最高法院', '最高法院', %(jyear)s, %(jcase_norm)s, %(jno)s)
+                ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO NOTHING
                 RETURNING id
             """, {"jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
             row = cur.fetchone()
@@ -222,7 +225,7 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
                 # 已存在，查出 id
                 cur.execute("""
                     SELECT id FROM decisions
-                    WHERE court_root_norm = '最高法院'
+                    WHERE unit_norm = '最高法院'
                       AND jyear = %(jyear)s
                       AND jcase_norm = %(jcase_norm)s
                       AND jno = %(jno)s
@@ -251,6 +254,11 @@ def ingest_citations(conn, source_id: int, clean_text: str) -> int:
     """
     citations = extract_citations(clean_text)
     inserted = 0
+
+    # 重新匯入：先清除舊 citations，避免 match_start 失效的殭屍資料留存
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
+    conn.commit()
 
     for c in citations:
         target_id = upsert_target_placeholder(
@@ -326,7 +334,7 @@ def main(folder_path: str):
             with open(json_file, "r", encoding="utf-8") as f:
                 json_data = json.load(f)
 
-            if ingest_decision(conn, court_unit_id, court_info["root_norm"], json_data):
+            if ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], json_data):
                 success_count += 1
 
                 # 同步抽取 citations（用 clean_text，offset 對應 clean_text）
@@ -337,12 +345,12 @@ def main(folder_path: str):
                     with conn.cursor() as cur:
                         cur.execute("""
                             SELECT id FROM decisions
-                            WHERE court_root_norm = %(root_norm)s
+                            WHERE unit_norm = %(unit_norm)s
                               AND jyear = %(jyear)s
                               AND jcase_norm = %(jcase_norm)s
                               AND jno = %(jno)s
                         """, {
-                            "root_norm": court_info["root_norm"],
+                            "unit_norm": court_info["unit_norm"],
                             "jyear": int(json_data.get("JYEAR")),
                             "jcase_norm": normalize_jcase(json_data.get("JCASE", "")),
                             "jno": int(json_data.get("JNO")),
