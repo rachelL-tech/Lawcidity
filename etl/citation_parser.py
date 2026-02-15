@@ -34,6 +34,16 @@ ABBR_CITATION = re.compile(
 # Week 1 只抓最高法院；Week 2+ 在這裡擴充
 TARGET_COURTS: Set[str] = {'最高法院'}
 
+# 最高法院會議決議：「最高法院77年度第9次民事庭會議決議」
+# group(1)=年, group(2)=次序, group(3)=庭別
+RESOLUTION_RE = re.compile(
+    r'最高法院'
+    r'(\d{2,3})年度?'
+    r'第(\d+)次'
+    r'(民事庭|刑事庭|民刑事庭|民刑事庭總會|刑事庭總會|民事庭總會)'
+    r'(?:會議)?決議'
+)
+
 
 # =========================
 # 預處理
@@ -93,6 +103,7 @@ def _make_result(
             snippet = extract_snippet(processed, fallback_start, fallback_end)
 
     return {
+        "citation_type": "decision",
         "court": court,
         "raw_match": raw_match,
         "match_start": match_start,
@@ -130,7 +141,11 @@ def extract_citations(
         target_courts: 要抓的被引用法院（預設 {'最高法院'}）
 
     Returns:
-        List of {
+        List of dict，有兩種格式：
+
+        decision citation:
+        {
+            "citation_type": "decision",
             "court": str,        # 被引用法院（正規化）
             "raw_match": str,    # 原始命中字串
             "match_start": int,  # 在 clean_text 的起點（PDF 折行無法定位時為 None）
@@ -139,6 +154,18 @@ def extract_citations(
             "jyear": int,
             "jcase_norm": str,
             "jno": int,
+        }
+
+        resolution citation:
+        {
+            "citation_type": "resolution",
+            "raw_match": str,
+            "match_start": int,
+            "match_end": int,
+            "snippet": str,
+            "jyear": int,
+            "seq_no": int,
+            "court_type": str,   # e.g. "民事庭"
         }
     """
     processed = preprocess_text(clean_text)
@@ -188,6 +215,42 @@ def extract_citations(
             ))
         pos = full.end()
 
+    # 掃描會議決議引用（獨立掃描，不影響上方狀態機）
+    for m in RESOLUTION_RE.finditer(processed):
+        raw_match = m.group(0)
+        jyear = int(m.group(1))
+        seq_no = int(m.group(2))
+        court_type = m.group(3)
+
+        # 在 clean_text 定位（同 _make_result 邏輯）
+        orig = re.search(re.escape(raw_match), clean_text)
+        if orig:
+            match_start = orig.start()
+            match_end = orig.end()
+            snippet = extract_snippet(clean_text, match_start, match_end)
+        else:
+            flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
+            flex = re.search(flexible, clean_text)
+            if flex:
+                match_start = flex.start()
+                match_end = flex.end()
+                snippet = extract_snippet(clean_text, match_start, match_end)
+            else:
+                match_start = None
+                match_end = None
+                snippet = extract_snippet(processed, m.start(), m.end())
+
+        results.append({
+            "citation_type": "resolution",
+            "raw_match": raw_match,
+            "match_start": match_start,
+            "match_end": match_end,
+            "snippet": snippet,
+            "jyear": jyear,
+            "seq_no": seq_no,
+            "court_type": court_type,
+        })
+
     return results
 
 
@@ -226,6 +289,11 @@ _SUB_CLAUSE_RE = re.compile(
 # 非標準法院引用（憲法法庭等）的結尾標記：「意旨參照）」
 # 用於 extract_snippet 的 Pass 2 邊界修正
 _CITE_TAIL_RE = re.compile(r'(?:意旨|決議)參照[）)]')
+
+# 引用收尾的「參照」短語（向後 boundary 用）
+# 優先於裸 ）搜尋，解決 resolution 後 （一）/（1）誤截和截太遠兩個問題
+# trailing char 必填（避免匹配「參照民法XX條」這種用法）
+_CITE_REF_CLOSE = re.compile(r'(?:可資參照|足資參照|意旨參照|決議參照|要旨參照|可參|參照)[。，、,）)\]】\s]')
 
 
 def extract_snippet(
@@ -296,9 +364,14 @@ def extract_snippet(
                 else:
                     actual_start = hard_cut
         else:
-            # 任意換行 fallback
-            any_newline = look_back.rfind('\r\n')
-            actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
+            # 先找最後一個句號（比 \r\n 可靠，避免截在 PDF 折行的句子中間）
+            last_period = look_back.rfind('。')
+            if last_period != -1 and (len(look_back) - last_period - 1) <= para_cap:
+                actual_start = look_back_start + last_period + 1
+            else:
+                # 任意換行 fallback
+                any_newline = look_back.rfind('\r\n')
+                actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
 
     # ★ 裁定書尾空行跳過：若 actual_start ~ match_start 之間有 3 個以上連續空行（法院頁尾），
     #   推進到最後一個空行塊之後（通常就是附表/正文起點）
@@ -342,22 +415,27 @@ def extract_snippet(
         if end_pos < match_start:
             actual_start = end_pos
 
-    # 向後：找 ）或 )（citation 的收尾括號），取最早出現者
+    # 向後：① 先找「參照」類結尾（解決 resolution 後 （一）誤截 / 截太遠問題）
     look_forward = text[match_end: match_end + max_forward_paren]
-    paren_fw = look_forward.find('）')
-    paren_hw = look_forward.find(')')
-    candidates_p = [p for p in [paren_fw, paren_hw] if p != -1]
-    paren_pos = min(candidates_p) if candidates_p else -1
-    if paren_pos != -1:
-        actual_end = match_end + paren_pos + 1
+    ref_close = _CITE_REF_CLOSE.search(look_forward)
+    if ref_close:
+        actual_end = match_end + ref_close.end()
     else:
-        # fallback：找 。 或 \r\n
-        candidates = []
-        if '。' in look_forward:
-            candidates.append(look_forward.find('。'))
-        if '\r\n' in look_forward:
-            candidates.append(look_forward.find('\r'))
-        actual_end = match_end + (min(candidates) + 1 if candidates else max_forward_paren)
+        # ② 找 ）或 )（citation 的收尾括號），取最早出現者
+        paren_fw = look_forward.find('）')
+        paren_hw = look_forward.find(')')
+        candidates_p = [p for p in [paren_fw, paren_hw] if p != -1]
+        paren_pos = min(candidates_p) if candidates_p else -1
+        if paren_pos != -1:
+            actual_end = match_end + paren_pos + 1
+        else:
+            # fallback：找 。 或 \r\n
+            candidates = []
+            if '。' in look_forward:
+                candidates.append(look_forward.find('。'))
+            if '\r\n' in look_forward:
+                candidates.append(look_forward.find('\r'))
+            actual_end = match_end + (min(candidates) + 1 if candidates else max_forward_paren)
 
     return text[actual_start: actual_end]
 

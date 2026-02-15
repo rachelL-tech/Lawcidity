@@ -23,15 +23,32 @@ def rankings(limit: int = 100):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    d.id,
-                    d.court_root_norm  AS target_court,
+                    'decision'           AS citation_type,
+                    d.id                 AS target_id,
+                    NULL::BIGINT         AS resolution_id,
+                    d.court_root_norm    AS target_court,
                     d.jyear,
                     d.jcase_norm,
                     d.jno,
-                    COUNT(c.id)        AS citation_count
+                    NULL::TEXT           AS display_title,
+                    COUNT(c.id)          AS citation_count
                 FROM decisions d
                 JOIN citations c ON c.target_id = d.id
                 GROUP BY d.id
+                UNION ALL
+                SELECT
+                    'resolution'         AS citation_type,
+                    NULL::BIGINT,
+                    r.id                 AS resolution_id,
+                    '最高法院'           AS target_court,
+                    r.jyear,
+                    NULL::TEXT           AS jcase_norm,
+                    NULL::INT            AS jno,
+                    r.title              AS display_title,
+                    COUNT(c.id)          AS citation_count
+                FROM resolutions r
+                JOIN citations c ON c.target_resolution_id = r.id
+                GROUP BY r.id
                 ORDER BY citation_count DESC
                 LIMIT %s
             """, (limit,))
@@ -74,6 +91,35 @@ def citations(target_id: int):
                          src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
             """, (target_id,))
+            return {"target": target, "sources": cur.fetchall()}
+
+
+@app.get("/api/resolutions/{resolution_id}/citations")
+def resolution_citations(resolution_id: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title FROM resolutions WHERE id = %s",
+                (resolution_id,)
+            )
+            target = cur.fetchone()
+            if not target:
+                raise HTTPException(status_code=404, detail="Not found")
+
+            cur.execute("""
+                SELECT
+                    c.id                 AS citation_id,
+                    src.court_root_norm  AS source_court,
+                    src.jyear,
+                    src.jcase_norm,
+                    src.jno,
+                    c.snippet,
+                    c.raw_match
+                FROM citations c
+                JOIN decisions src ON c.source_id = src.id
+                WHERE c.target_resolution_id = %s
+                ORDER BY src.decision_date DESC NULLS LAST
+            """, (resolution_id,))
             return {"target": target, "sources": cur.fetchall()}
 
 

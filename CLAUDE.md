@@ -168,5 +168,17 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 
 ## 待辦事項
 
+### 功能擴充
+
+- **keyword 搜尋 API + 前端搜尋框**：`GET /api/search?q=關鍵字` → 對 `decisions.clean_text` 做 `ILIKE '%q%'`（已有 GIN trgm index）；前端加搜尋框，結果顯示排行榜子集。
+- **法條篩選 API**：`GET /api/rankings?law=民法&article=184` → JOIN `decision_reason_statutes`，只顯示引用含指定法條的來源判決的目標排行；`decision_reason_statutes` 已有 191K 筆資料。
+- **來源判決頁螢光筆標示**：`GET /api/citations/{citation_id}` 回傳 source decision + highlight range（match_start/end）+ snippet，前端用 `<mark>` 標示。
+- **時間趨勢**：`GET /api/trends` 每月引用次數、top targets trend。
+- **地圖視覺化**：`GET /api/map` 回傳法院單位座標與統計。
+
+### 維護性
+
 - **前端 snippet 截斷提示**：snippet 若截在句中，末尾補 `…` 並提示使用者點擊查看全文（`app/static/index.html`）。
-- **CSS 重抽腳本**：snippet 邏輯穩定後，建立「清空 `citation_snippet_statutes` → 重跑 `extract_statutes.py --citations`」的一次性腳本，解決 snippet regen 後 CSS 表法條資料過時的問題。
+- **CSS 重抽腳本**：snippet 邏輯穩定後，清空 `citation_snippet_statutes` → 重跑 `extract_statutes.py --citations`，解決 snippet regen 後 CSS 表法條資料過時的問題。
+- **resolution citations 補跑**：現有 12,521 筆 citations 是舊版 ingest 所建（無 resolution 支援）；DB 中有 659 份判決含會議決議引用，需重跑 `ingest_decisions.py --batch` 補齊。
+- **CLAUDE.md schema 區塊更新**：仍是舊版，缺 `unit_norm`、`clean_text`、`resolutions` 表描述。

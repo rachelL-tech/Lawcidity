@@ -126,6 +126,19 @@
     .rank-num { color: #999; font-size: 12px; width: 36px; }
 
     .toggle-icon { float: right; color: #6366f1; font-size: 16px; }
+
+    .badge-resolution {
+      display: inline-block;
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #fcd34d;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body>
@@ -157,19 +170,25 @@ async function loadRankings() {
   const rows = await res.json();
 
   rows.forEach((r, i) => {
-    const caseRef = `${r.jyear}年度${r.jcase_norm}字第${r.jno}號`;
+    const isResolution = r.citation_type === 'resolution';
+    const caseRef = isResolution
+      ? (r.display_title || `最高法院${r.jyear}年度第?次會議決議`)
+      : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號`;
+    const typeBadge = isResolution
+      ? `<span class="badge-resolution">決議</span>`
+      : '';
 
     // 排行列
     const tr = document.createElement('tr');
     tr.className = 'row-target';
-    tr.dataset.id = r.id;
+    tr.dataset.type = r.citation_type;
     tr.innerHTML = `
       <td class="rank-num">${i + 1}</td>
       <td>
-        <span class="case-ref">${caseRef}</span>
+        <span class="case-ref">${escHtml(caseRef)}</span>${typeBadge}
         <span class="toggle-icon">▶</span>
       </td>
-      <td><span class="court">${r.target_court}</span></td>
+      <td><span class="court">${escHtml(r.target_court)}</span></td>
       <td style="text-align:center"><span class="badge">${r.citation_count}</span></td>
     `;
 
@@ -178,8 +197,11 @@ async function loadRankings() {
     trS.className = 'row-snippets';
     trS.innerHTML = `<td colspan="4"><div class="snippets-wrap loading">載入中…</div></td>`;
 
-    tr.addEventListener('click', () => toggle(tr, trS, r.id, caseRef));
-
+    if (isResolution) {
+      tr.addEventListener('click', () => toggleResolution(tr, trS, r.resolution_id, caseRef));
+    } else {
+      tr.addEventListener('click', () => toggle(tr, trS, r.target_id, caseRef));
+    }
     tbody.appendChild(tr);
     tbody.appendChild(trS);
   });
@@ -240,6 +262,52 @@ async function toggle(tr, trS, targetId, caseRef) {
           <span style="color:#aaa">citation #${s.citation_id}</span>
         </div>
         ${tagsHtml}
+        <div class="snippet-text">${escHtml(snip)}</div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleResolution(tr, trS, resolutionId, caseRef) {
+  const isOpen = tr.classList.contains('open');
+
+  if (isOpen) {
+    tr.classList.remove('open');
+    trS.classList.remove('open');
+    tr.querySelector('.toggle-icon').textContent = '▶';
+    return;
+  }
+
+  tr.classList.add('open');
+  trS.classList.add('open');
+  tr.querySelector('.toggle-icon').textContent = '▼';
+
+  if (trS.dataset.loaded) return;
+  trS.dataset.loaded = '1';
+
+  const res  = await fetch(`/api/resolutions/${resolutionId}/citations`);
+  const data = await res.json();
+  const wrap = trS.querySelector('.snippets-wrap');
+
+  if (!data.sources.length) {
+    wrap.textContent = '（無 snippet）';
+    wrap.classList.remove('loading');
+    return;
+  }
+
+  wrap.classList.remove('loading');
+  wrap.innerHTML = data.sources.map(s => {
+    const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
+    const snip   = (s.snippet || '').trim()
+      .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
+    return `
+      <div class="snippet-card">
+        <div class="snippet-meta">
+          <strong>${escHtml(s.source_court)}</strong> ${escHtml(srcRef)}
+          &nbsp;·&nbsp;
+          <span class="raw-match">${escHtml(s.raw_match)}</span>
+          &nbsp;·&nbsp;
+          <span style="color:#aaa">citation #${s.citation_id}</span>
+        </div>
         <div class="snippet-text">${escHtml(snip)}</div>
       </div>`;
   }).join('');
