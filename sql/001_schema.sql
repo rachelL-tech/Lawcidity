@@ -1,5 +1,12 @@
+-- 台灣判決引用關係排行榜 — 完整 Schema
+-- 最後更新：2026-02（整合 001 + 002 + 003）
+--
+-- 執行順序：只需跑這一個檔案（全新安裝）
+-- Migration 歷史：sql/002_ingest_error_log.sql、sql/003_resolutions.sql
+
 -- 中文 substring 搜尋（ILIKE '%關鍵字%'）的效能核心
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 
 -- =========================
 -- 1) 法院 / 審判單位（地圖/所在地/篩選用）
@@ -10,7 +17,7 @@ CREATE TABLE court_units (
   unit_norm  TEXT NOT NULL,  -- 詳細到：臺灣新北地方法院三重簡易庭
   root_norm  TEXT NOT NULL,  -- 聚合層級：臺灣新北地方法院 / 臺灣高等法院 / 最高法院
 
-  level      SMALLINT,       -- 1=最高 2=高院 3=地院 4=簡易庭/分院...
+  level      SMALLINT,       -- 1=最高 2=高院 3=地院 4=簡易庭/分院
   county     TEXT,           -- 縣市（例：新北市）
   district   TEXT,           -- 區（例：三重區）
   address    TEXT,           -- 地址（可後補）
@@ -28,23 +35,23 @@ CREATE INDEX court_units_geo_idx ON court_units(lat, lon);
 
 
 -- =========================
--- 2) 判決節點（唯一真相：placeholder 與完整判決都在這張）
---    placeholder 唯一鍵： (unit_norm, jyear, jcase_norm, jno)
---    ref_key 由上述四欄位自動生成（不用你手動算）
+-- 2) 判決節點
+--    placeholder 與完整判決都在這張表
+--    自然鍵：(unit_norm, jyear, jcase_norm, jno)
 -- =========================
 CREATE TABLE decisions (
   id             BIGSERIAL PRIMARY KEY,
 
   -- ★ 自然鍵：unit_norm 精確到分院/簡易庭，避免不同分院同號判決互蓋
   --   已匯入判決：unit_norm = court_units.unit_norm（如「臺灣高等法院臺南分院」）
-  --   最高法院 placeholder：unit_norm = '最高法院'（無分院，直接填）
-  unit_norm       TEXT NOT NULL,     -- 具體審判庭名稱（自然鍵核心）
-  court_root_norm TEXT NOT NULL,     -- 聚合層級（顯示/篩選用）：臺灣高等法院 / 最高法院
-  jyear           SMALLINT NOT NULL, -- JYEAR（案號年度）
-  jcase_norm      TEXT NOT NULL,     -- JCASE（字別正規化）
-  jno             INT NOT NULL,      -- JNO（號次）
+  --   最高法院 placeholder：unit_norm = '最高法院'
+  unit_norm       TEXT NOT NULL,
+  court_root_norm TEXT NOT NULL,     -- 聚合層級（顯示/篩選）：臺灣高等法院 / 最高法院
+  jyear           SMALLINT NOT NULL,
+  jcase_norm      TEXT NOT NULL,     -- JCASE 正規化（臺→台）
+  jno             INT NOT NULL,
 
-  -- ★ ref_key：穩定可讀的節點 ID（從自然鍵生成）
+  -- ref_key：穩定可讀的節點 ID（從自然鍵生成）
   ref_key         TEXT GENERATED ALWAYS AS (
                     unit_norm || '|' ||
                     jyear::TEXT || '|' ||
@@ -52,118 +59,125 @@ CREATE TABLE decisions (
                     jno::TEXT
                   ) STORED,
 
-  -- 官方唯一碼（有就存；允許 NULL）
-  jid             TEXT,
-
-  -- 地圖/所在地：只存 FK（乾淨）
+  jid             TEXT,              -- 官方唯一碼（有就存；允許 NULL）
   court_unit_id   BIGINT REFERENCES court_units(id),
 
-  -- 顯示/搜尋/抽取
-  decision_date   DATE,        -- JDATE（裁判日期）
-  title           TEXT,        -- JTITLE
-  full_text       TEXT,        -- JFULL（全文；抽引用/keyword/法條都靠它）
-  clean_text      TEXT,        -- clean_judgment_text() 處理後（citation/snippet 用）
-  pdf_url         TEXT,        -- JPDF（查看原文）
-  raw             JSONB,       -- 原始 JSON（除錯/回補欄位）
+  decision_date   DATE,
+  title           TEXT,
+  full_text       TEXT,              -- JFULL（原始全文）
+  clean_text      TEXT,              -- clean_judgment_text() 處理後（citation/snippet 用）
+  pdf_url         TEXT,
+  raw             JSONB,             -- 原始 JSON
 
   created_at      TIMESTAMPTZ DEFAULT now(),
   updated_at      TIMESTAMPTZ DEFAULT now(),
 
-  -- 自然鍵唯一
   CONSTRAINT decisions_natural_key_uniq UNIQUE (unit_norm, jyear, jcase_norm, jno)
 );
 
--- ref_key 也加 unique（雖然自然鍵已 unique，但 ref_key 常用來查詢）
 CREATE UNIQUE INDEX decisions_ref_key_uniq ON decisions(ref_key);
-
--- jid 若有也必須唯一（避免同一官方文件重複匯入）
 CREATE UNIQUE INDEX decisions_jid_uniq ON decisions(jid) WHERE jid IS NOT NULL;
-
--- 常用索引
--- 注意：unit_norm 單欄 index 已由自然鍵複合 index 的最左前綴覆蓋，不額外建立
 CREATE INDEX decisions_court_year_idx  ON decisions(court_root_norm, jyear);
 CREATE INDEX decisions_unit_idx        ON decisions(court_unit_id);
 CREATE INDEX decisions_date_idx        ON decisions(decision_date);
-
--- keyword 搜尋索引（對 clean_text 建 GIN trgm，搜尋時用 clean_text ILIKE '%keyword%'）
-CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
-CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
+CREATE INDEX decisions_cleantext_trgm  ON decisions USING GIN (clean_text gin_trgm_ops);
+CREATE INDEX decisions_title_trgm      ON decisions USING GIN (title gin_trgm_ops);
 
 
 -- =========================
--- 3) 引用邊（source -> target）
+-- 3) 最高法院會議決議
+--    自然鍵：(jyear, seq_no, court_type)
 -- =========================
-CREATE TABLE citations (
+CREATE TABLE resolutions (
   id          BIGSERIAL PRIMARY KEY,
 
-  source_id   BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-  target_id   BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-
-  raw_match   TEXT NOT NULL,   -- 原始命中的引用字串
-  match_start INT,             -- 在 source.clean_text 的起點 index（PDF折行無法定位時為 NULL）
-  match_end   INT,             -- 在 source.clean_text 的終點 index
-  snippet     TEXT,            -- 以 match 為中心切出的上下文（展示/除錯）
+  jyear       SMALLINT NOT NULL,
+  seq_no      SMALLINT NOT NULL,
+  court_type  TEXT NOT NULL,  -- '民事庭' | '刑事庭' | '民刑事庭總會' 等
+  title       TEXT,           -- 完整標題，如「最高法院77年度第9次民事庭會議決議」
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 去重：同來源同目標同一位置不要重複插
--- 注意：PostgreSQL unique index 把 NULL 視為各不相同，
---       match_start IS NULL 的列不受此 index 保護（由程式層防重）
-CREATE UNIQUE INDEX citations_uniq ON citations(source_id, target_id, match_start);
-
--- 查「誰引用它」/「它引用誰」都會用到
-CREATE INDEX citations_target_idx ON citations(target_id);
-CREATE INDEX citations_source_idx ON citations(source_id);
+CREATE UNIQUE INDEX resolutions_natural_key ON resolutions(jyear, seq_no, court_type);
 
 
 -- =========================
--- 4) 理由段法條（去重）
---    用來做法條 filter（MVP 強建議）
+-- 4) 引用邊（source -> target）
+--    target 為判決（target_id）或會議決議（target_resolution_id），擇一非 NULL
+-- =========================
+CREATE TABLE citations (
+  id          BIGSERIAL PRIMARY KEY,
+
+  source_id            BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  target_id            BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
+  target_resolution_id BIGINT          REFERENCES resolutions(id) ON DELETE CASCADE,
+
+  raw_match   TEXT NOT NULL,
+  match_start INT,    -- 在 source.clean_text 的起點（PDF 折行無法定位時為 NULL）
+  match_end   INT,
+  snippet     TEXT,
+
+  created_at  TIMESTAMPTZ DEFAULT now(),
+
+  CONSTRAINT citations_target_check CHECK (
+    (target_id IS NOT NULL AND target_resolution_id IS NULL) OR
+    (target_id IS NULL     AND target_resolution_id IS NOT NULL)
+  )
+);
+
+-- 去重（PostgreSQL unique index 把 NULL 視為各不相同，
+--       match_start IS NULL 的列不受保護，由程式層防重）
+CREATE UNIQUE INDEX citations_uniq ON citations(source_id, target_id, match_start);
+CREATE UNIQUE INDEX citations_resolution_uniq ON citations(source_id, target_resolution_id, match_start);
+
+CREATE INDEX citations_target_idx     ON citations(target_id);
+CREATE INDEX citations_source_idx     ON citations(source_id);
+CREATE INDEX citations_resolution_idx ON citations(target_resolution_id);
+
+
+-- =========================
+-- 5) 判決理由段法條（去重）
 -- =========================
 CREATE TABLE decision_reason_statutes (
   id          BIGSERIAL PRIMARY KEY,
   decision_id BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
 
-  law         TEXT NOT NULL,              -- 例：民法 / 刑法 / 民事訴訟法...
-  article_raw TEXT NOT NULL,             -- 條號（TEXT 格式，如「184」「29之1」）
-  sub_ref     TEXT NOT NULL DEFAULT '',  -- 項/款/目 qualifier（如「第1項第1款」「前段」）
-  raw_match   TEXT,                      -- 命中片段（可選）
+  law         TEXT NOT NULL,
+  article_raw TEXT NOT NULL,             -- 條號（如「184」「29之1」）
+  sub_ref     TEXT NOT NULL DEFAULT '',  -- 項/款/目（如「第1項第1款」「前段」）
+  raw_match   TEXT,
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 去重：同判決理由段，同一法條＋項款只留一次
 CREATE UNIQUE INDEX drs_uniq ON decision_reason_statutes(decision_id, law, article_raw, sub_ref);
-
 CREATE INDEX drs_law_article_idx ON decision_reason_statutes(law, article_raw);
 CREATE INDEX drs_decision_idx    ON decision_reason_statutes(decision_id);
 
 
 -- =========================
--- 5) 引用 snippet 內法條（回答「這次引用在講哪條法」）
+-- 6) 引用 snippet 內法條
 -- =========================
 CREATE TABLE citation_snippet_statutes (
   id          BIGSERIAL PRIMARY KEY,
   citation_id BIGINT NOT NULL REFERENCES citations(id) ON DELETE CASCADE,
 
   law         TEXT NOT NULL,
-  article_raw TEXT NOT NULL,             -- 條號（TEXT 格式，如「184」「29之1」）
-  sub_ref     TEXT NOT NULL DEFAULT '',  -- 項/款/目 qualifier（如「第1項第1款」「前段」）
-  raw_match   TEXT,                      -- snippet 內命中片段（可選）
+  article_raw TEXT NOT NULL,
+  sub_ref     TEXT NOT NULL DEFAULT '',
+  raw_match   TEXT,
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 去重：同引用邊 snippet 內，同一法條＋項款只記一次
 CREATE UNIQUE INDEX css_uniq ON citation_snippet_statutes(citation_id, law, article_raw, sub_ref);
-
 CREATE INDEX css_law_article_idx ON citation_snippet_statutes(law, article_raw);
 CREATE INDEX css_citation_idx    ON citation_snippet_statutes(citation_id);
 
 
 -- =========================
--- 6) 匯入紀錄（追蹤哪些資料夾已處理）
+-- 7) 匯入紀錄
 -- =========================
 CREATE TABLE ingest_log (
   folder_name    TEXT PRIMARY KEY,
@@ -172,3 +186,26 @@ CREATE TABLE ingest_log (
   citation_count INT,
   notes          TEXT
 );
+
+
+-- =========================
+-- 8) 匯入錯誤紀錄
+--    A = JSON 讀取失敗
+--    B = 欄位缺失 / 資料異常
+--    D = Citation 抽取 / 寫入失敗
+-- =========================
+CREATE TABLE ingest_error_log (
+  id           BIGSERIAL PRIMARY KEY,
+  logged_at    TIMESTAMPTZ DEFAULT now(),
+
+  folder_name  TEXT NOT NULL,
+  file_name    TEXT NOT NULL,
+  error_type   TEXT NOT NULL,  -- 'A' | 'B' | 'D'
+  error_msg    TEXT,
+
+  resolved     BOOLEAN DEFAULT false,
+  resolved_at  TIMESTAMPTZ
+);
+
+CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
+CREATE INDEX ingest_error_log_resolved_idx ON ingest_error_log(resolved);
