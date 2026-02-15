@@ -61,7 +61,17 @@ def parse_court_from_folder(folder_name: str) -> Optional[Dict[str, any]]:
             "level": 1
         }
 
-    # 2. 高等法院（含分院）
+    # 2. 智慧財產及商業法院（專業法院，相當於高院層級）
+    if "智慧財產及商業法院" in court_name:
+        return {
+            "unit_norm": "智慧財產及商業法院",
+            "root_norm": "智慧財產及商業法院",
+            "county": "臺北市",
+            "district": None,
+            "level": 2
+        }
+
+    # 3. 高等法院（含分院）
     if "高等法院" in court_name:
         # 判斷是否為分院
         branch_match = re.search(r'高等法院(.+)分院', court_name)
