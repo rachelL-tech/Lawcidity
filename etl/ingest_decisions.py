@@ -306,8 +306,9 @@ def main(folder_path: str):
         return
 
     # 解析法院資訊
-    folder_name = folder.name
-    court_info = parse_court_from_folder(folder_name)
+    # ingest_log key 格式：「月份批次/資料夾名稱」（如 202511/臺灣高等法院民事）
+    folder_name = f"{folder.parent.name}/{folder.name}"
+    court_info = parse_court_from_folder(folder.name)
     if not court_info:
         print(f"錯誤：無法解析法院 - {folder_name}")
         return
