@@ -366,8 +366,31 @@ def main(folder_path: str):
             print(f"錯誤：無法讀取 {json_file.name} - {e}")
             fail_count += 1
 
+    # 計算本次寫入的 citation 總數
+    total_citations = 0
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT COUNT(*) FROM citations c
+            JOIN decisions d ON d.id = c.source_id
+            WHERE d.court_unit_id = %s
+        """, (court_unit_id,))
+        total_citations = cur.fetchone()[0]
+
+    # 寫入 ingest_log
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO ingest_log (folder_name, decision_count, citation_count)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (folder_name) DO UPDATE
+                SET ingested_at     = now(),
+                    decision_count  = EXCLUDED.decision_count,
+                    citation_count  = EXCLUDED.citation_count
+        """, (folder_name, success_count, total_citations))
+    conn.commit()
+
     conn.close()
     print(f"\n完成！成功 {success_count} 筆，失敗 {fail_count} 筆")
+    print(f"✓ 已寫入 ingest_log：{folder_name}")
 
 
 def main_batch(base_dir: str, keyword: str = "高等法院,民事"):
@@ -380,6 +403,7 @@ def main_batch(base_dir: str, keyword: str = "高等法院,民事"):
 
     範例：
         python etl/ingest_decisions.py --batch /Users/rachel/Downloads/202511
+        python etl/ingest_decisions.py --batch /Users/rachel/Downloads/202511 高等法院,刑事
     """
     base = Path(base_dir)
     folders = [f for f in base.iterdir() if f.is_dir() and all(k in f.name for k in keyword.split(","))]
@@ -401,6 +425,7 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print("錯誤：--batch 需要指定基底目錄")
             sys.exit(1)
-        main_batch(sys.argv[2])
+        keyword = sys.argv[3] if len(sys.argv) > 3 else "高等法院,民事"
+        main_batch(sys.argv[2], keyword)
     else:
         main(sys.argv[1])

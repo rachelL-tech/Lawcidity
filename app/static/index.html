@@ -218,7 +218,8 @@ async function toggle(tr, trS, targetId, caseRef) {
   wrap.classList.remove('loading');
   wrap.innerHTML = data.sources.map(s => {
     const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
-    const snip   = (s.snippet || '').trim().replace(/\r?\n[ \t\u3000]{2,}/g, ' ');
+    const snip   = (s.snippet || '').trim()
+      .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
     const statutes = (s.statutes || []);
     const tagsHtml = statutes.length
       ? `<div class="statute-tags">${statutes.map(t => {

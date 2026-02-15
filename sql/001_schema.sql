@@ -153,3 +153,15 @@ CREATE UNIQUE INDEX css_uniq ON citation_snippet_statutes(citation_id, law, arti
 
 CREATE INDEX css_law_article_idx ON citation_snippet_statutes(law, article_raw);
 CREATE INDEX css_citation_idx    ON citation_snippet_statutes(citation_id);
+
+
+-- =========================
+-- 6) 匯入紀錄（追蹤哪些資料夾已處理）
+-- =========================
+CREATE TABLE ingest_log (
+  folder_name    TEXT PRIMARY KEY,
+  ingested_at    TIMESTAMPTZ DEFAULT now(),
+  decision_count INT,
+  citation_count INT,
+  notes          TEXT
+);

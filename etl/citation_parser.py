@@ -68,19 +68,29 @@ def _make_result(
 ) -> Dict:
     """
     建構 citation result dict。
-    先嘗試在原始 full_text 修正偏移量；找不到時退回 processed 的位置。
+    1. 先嘗試在 clean_text（full_text 參數）直接搜尋 raw_match（完整字串）
+    2. 找不到（PDF 折行造成 \\r\\n 中斷）→ 改用 flexible pattern（允許任意空白）重新定位
+    3. 兩者都失敗 → fallback 到 processed 偏移（snippet 品質最差）
     """
     jcase_norm = jcase_raw.replace(' ', '').replace('臺', '台')
 
     orig = re.search(re.escape(raw_match), full_text)
     if orig:
         match_start = orig.start()
-        match_end = orig.end()
+        match_end   = orig.end()
         snippet = extract_snippet(full_text, match_start, match_end)
     else:
-        match_start = None
-        match_end = None
-        snippet = extract_snippet(processed, fallback_start, fallback_end)
+        # PDF 折行：citation 中間有 \r\n，逐字允許 \s* 重新定位
+        flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
+        flex = re.search(flexible, full_text)
+        if flex:
+            match_start = flex.start()
+            match_end   = flex.end()
+            snippet = extract_snippet(full_text, match_start, match_end)
+        else:
+            match_start = None
+            match_end   = None
+            snippet = extract_snippet(processed, fallback_start, fallback_end)
 
     return {
         "court": court,
@@ -184,26 +194,37 @@ def extract_citations(
 # =========================
 # Snippet 擷取（混合策略）
 # =========================
-# 有編號的段落起點（一、二、壹、貳、㈠㈡、①②、⑴⑵、⒈⒉ 等）
+# 有編號的段落起點（一、二、壹、貳、㈠㈡、①②、⑴⑵、⒈⒉、(一) 等）
 # 這些才是「真正段落起點」；非縮排的 PDF 折行 \r\n 後面不會接這些字元
+# 加入半形 ( ：支援 (一)(二) 格式（舊式段落編號）
 _PARA_START_RE = re.compile(
-    r'\r\n(?=[一二三四五六七八九十壹貳參肆伍陸柒捌玖'
+    r'\r\n[ \t　]{0,4}'      # 允許最多 4 個前導空白（修：\r\n  ㈢ 格式）
+    r'(?='
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖'
     r'㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩'
     r'①②③④⑤⑥⑦⑧⑨⑩'
     r'⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽'   # 括號數字 U+2474–U+247D
     r'⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑'   # 數字句號 U+2488–U+2491
-    r'（])'
+    r'（(]'                  # ] 關閉字元集；全形和半形左括號
+    r'|[1-9][0-9]*[.、]'    # 阿拉伯數字條號（1. 2. 3、等）
+    r')'                     # 關閉 lookahead
 )
 
 # 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」
 #             「再者」「所謂」「另」「按」（行首）
-# 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、）
+# 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、㈠、⑴ 等）
+# \u3200-\u32ff：Enclosed CJK（㈠㈡…㊿），出現於 \r\n 與關鍵字之間
+# \u2460-\u24ff：Enclosed Alphanumerics（①②…、⑴⑵…），處理附表內「。 ⑴按」格式
 # group(1) = 關鍵字起始位置（用於 actual_start）
 _SUB_CLAUSE_RE = re.compile(
-    r'(?:(?:。|\r\n)[\uf000-\uffff\u3000-\u303f\t 　]{0,6})'
+    r'(?:(?:。|\r\n)[\uf000-\uffff\u3000-\u303f\u3200-\u32ff\u2460-\u24ff\t 　]{0,6})'
     r'((?:再|復|又|次|末|且|惟)按|再者|所謂|另(?![行有外附])|按(?!照))'
     r'[：:，,「]?'
 )
+
+# 非標準法院引用（憲法法庭等）的結尾標記：「意旨參照）」
+# 用於 extract_snippet 的 Pass 2 邊界修正
+_CITE_TAIL_RE = re.compile(r'意旨參照[）)]')
 
 
 def extract_snippet(
@@ -216,32 +237,45 @@ def extract_snippet(
     """
     以 citation match 為中心切出 snippet：
 
-    向前優先順序：
-    ① 子條款（再按/復按/又按）：match_start 前 para_cap 字內，最靠近 match_start 者
-    ② 編號段落起點（一、二、壹、㈠ 等）：全 look_back 內最後一個
-       距離 ≤ para_cap → 直接用
-       距離 > para_cap → 從硬切點往前找最近 。，從句號後起頭
-    ③ 任意 \\r\\n（fallback）
-    ④ 固定距離 look_back_start（最終 fallback）
+    向前：在 para_cap 窗口內，同時找子條款（再按/復按 等）和編號段落起點（一、二、㈠ 等），
+          取兩者中最靠近 match_start 者（max 位置）。
+          窗口內都找不到 → 退回更遠的段落起點（超過 para_cap 則硬切）→ 任意換行 fallback。
 
-    向後：找 match_end 之後最近的 ）（citation 收尾括號），在那裡截止
-          fallback：找 。 或 \\r\\n；都沒有則取到 max_forward_paren
+    向後：找 match_end 之後最近的 ）（citation 收尾括號），在那裡截止；
+          fallback：找 。 或 \\r\\n；都沒有則取到 max_forward_paren。
     """
     para_cap: int = 600
     look_back_start = max(0, match_start - max_back)
     look_back = text[look_back_start: match_start]
 
-    # ① 子條款：在最後 para_cap 字內找，取最靠近 match_start 的那個
+    # 在 para_cap 窗口內，同時找子條款和編號段落起點，取最靠近 match_start 者
     sub_window_pos = max(0, len(look_back) - para_cap)
+
     last_sub = None
     for m in _SUB_CLAUSE_RE.finditer(look_back, sub_window_pos):
         last_sub = m
 
-    if last_sub is not None:
-        actual_start = look_back_start + last_sub.start(1)  # group(1) = 關鍵字起點
+    last_para_near = None
+    for m in _PARA_START_RE.finditer(look_back, sub_window_pos):
+        last_para_near = m
 
+    sub_pos = look_back_start + last_sub.start(1) if last_sub is not None else None
+    para_pos = look_back_start + last_para_near.start() + 2 if last_para_near is not None else None
+
+    if sub_pos is not None and para_pos is not None:
+        if 0 <= sub_pos - para_pos <= 20:
+            # 同一段落單元（如 ㈠按、⑴按）：sub 緊接在 para 之後
+            # 用 para_pos（包含段落標記，如 ㈠、⑴）
+            actual_start = para_pos
+        else:
+            # 不同位置：取最靠近 match_start 者（max）
+            actual_start = max(sub_pos, para_pos)
+    elif sub_pos is not None:
+        actual_start = sub_pos
+    elif para_pos is not None:
+        actual_start = para_pos
     else:
-        # ② 編號段落：全 look_back 找最後一個段落起點
+        # 完整 look_back 找最後一個編號段落起點（距離可能 > para_cap）
         last_para = None
         for m in _PARA_START_RE.finditer(look_back):
             last_para = m
@@ -261,19 +295,43 @@ def extract_snippet(
                 else:
                     actual_start = hard_cut
         else:
-            # ③ 任意換行
+            # 任意換行 fallback
             any_newline = look_back.rfind('\r\n')
             actual_start = look_back_start + any_newline + 2 if any_newline != -1 else look_back_start
 
-    # ★ 引用邊界後處理：若 actual_start ~ match_start 之間有其他法院具名引用，
-    #   推進 actual_start 到最後一個引用收尾 ）之後（跳過空白/換行）
+    # ★ 裁定書尾空行跳過：若 actual_start ~ match_start 之間有 3 個以上連續空行（法院頁尾），
+    #   推進到最後一個空行塊之後（通常就是附表/正文起點）
+    blank_cluster = re.compile(r'(?:\r\n){3,}')
+    last_blank_m = None
+    for m in blank_cluster.finditer(text, actual_start, match_start):
+        last_blank_m = m
+    if last_blank_m is not None:
+        candidate = last_blank_m.end()
+        while candidate < match_start and text[candidate] in '\r\n \t　':
+            candidate += 1
+        if candidate < match_start:
+            actual_start = candidate
+
+    # ★ 引用邊界後處理：推進 actual_start 到各引用收尾之後（跳過空白/換行）
+    # Pass 1: ANY_COURT_CITATION（同時檢查全形 ）和半形 )，取較早出現者）
     in_lb_start = actual_start - look_back_start
     for m in ANY_COURT_CITATION.finditer(look_back, in_lb_start):
         after_cite = look_back_start + m.end()
         window = text[after_cite: after_cite + 80]
-        paren_pos = window.find('）')
+        paren_fw = window.find('）')
+        paren_hw = window.find(')')
+        candidates_p = [p for p in [paren_fw, paren_hw] if p != -1]
+        paren_pos = min(candidates_p) if candidates_p else -1
         end_pos = after_cite + paren_pos + 1 if paren_pos != -1 else after_cite
-        # 跳過緊接的 。\r\n 空白
+        while end_pos < match_start and text[end_pos] in '。\r\n \t　':
+            end_pos += 1
+        if end_pos < match_start:
+            actual_start = end_pos
+
+    # Pass 2: 意旨參照）（非標準法院如憲法法庭，不被 ANY_COURT_CITATION 匹配）
+    in_lb_start2 = actual_start - look_back_start
+    for m in _CITE_TAIL_RE.finditer(look_back, in_lb_start2):
+        end_pos = look_back_start + m.end()
         while end_pos < match_start and text[end_pos] in '。\r\n \t　':
             end_pos += 1
         if end_pos < match_start:
