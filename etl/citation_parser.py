@@ -61,32 +61,32 @@ def _make_result(
     jyear_str: str,
     jcase_raw: str,
     jno_str: str,
-    full_text: str,
+    clean_text: str,
     processed: str,
     fallback_start: int,
     fallback_end: int,
 ) -> Dict:
     """
     建構 citation result dict。
-    1. 先嘗試在 clean_text（full_text 參數）直接搜尋 raw_match（完整字串）
+    1. 先在 clean_text 直接搜尋 raw_match（完整字串）
     2. 找不到（PDF 折行造成 \\r\\n 中斷）→ 改用 flexible pattern（允許任意空白）重新定位
     3. 兩者都失敗 → fallback 到 processed 偏移（snippet 品質最差）
     """
     jcase_norm = jcase_raw.replace(' ', '').replace('臺', '台')
 
-    orig = re.search(re.escape(raw_match), full_text)
+    orig = re.search(re.escape(raw_match), clean_text)
     if orig:
         match_start = orig.start()
         match_end   = orig.end()
-        snippet = extract_snippet(full_text, match_start, match_end)
+        snippet = extract_snippet(clean_text, match_start, match_end)
     else:
         # PDF 折行：citation 中間有 \r\n，逐字允許 \s* 重新定位
         flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
-        flex = re.search(flexible, full_text)
+        flex = re.search(flexible, clean_text)
         if flex:
             match_start = flex.start()
             match_end   = flex.end()
-            snippet = extract_snippet(full_text, match_start, match_end)
+            snippet = extract_snippet(clean_text, match_start, match_end)
         else:
             match_start = None
             match_end   = None
@@ -108,40 +108,40 @@ def _make_result(
 # 抽取 citations（狀態機）
 # =========================
 def extract_citations(
-    full_text: str,
+    clean_text: str,
     target_courts: Set[str] = TARGET_COURTS,
 ) -> List[Dict]:
     """
     從全文抽取引用判決的 citation（狀態機版）
 
     演算法：
-    1. 在預處理文字上線性掃描
+    1. 在 preprocess_text(clean_text) 上線性掃描（移除換行以跨行 match citation）
     2. ① 嘗試 ABBR.match(pos)（只在 current_court 存在時）
           → 成功：繼承 current_court；若在 target_courts 內則 append；pos 前進
           → 失敗：進 ②
        ② ANY_COURT_CITATION.search(processed, pos)
-          → 更新 current_court；若在 target_courts 內則 append；pos 跳到 full.end()
+          → 更新 current_court；若在 target_courts 內則 append；pos 跳到 match.end()
           → 找不到 → break
     3. 省略引用鏈遇到具名法院（漢字開頭）時，ABBR 自然失敗，current_court 由 ② 更新
-    4. 偏移量修正至原始 full_text；snippet 從原始 full_text 取（保留換行）
+    4. 偏移量修正至 clean_text；snippet 從 clean_text 取（保留換行、段落結構）
 
     Args:
-        full_text: 原始全文
+        clean_text: clean_judgment_text() 處理後的全文
         target_courts: 要抓的被引用法院（預設 {'最高法院'}）
 
     Returns:
         List of {
             "court": str,        # 被引用法院（正規化）
             "raw_match": str,    # 原始命中字串
-            "match_start": int,  # 在原始 full_text 的起點（None 若找不到）
-            "match_end": int,    # 在原始 full_text 的終點（None 若找不到）
+            "match_start": int,  # 在 clean_text 的起點（PDF 折行無法定位時為 None）
+            "match_end": int,    # 在 clean_text 的終點
             "snippet": str,
             "jyear": int,
             "jcase_norm": str,
             "jno": int,
         }
     """
-    processed = preprocess_text(full_text)
+    processed = preprocess_text(clean_text)
     results = []
     current_court: Optional[str] = None
     pos = 0
@@ -160,7 +160,7 @@ def extract_citations(
                         jyear_str=abbr.group(1),
                         jcase_raw=abbr.group(2),
                         jno_str=abbr.group(3),
-                        full_text=full_text,
+                        clean_text=clean_text,
                         processed=processed,
                         fallback_start=abbr.start(1),  # 年份起點，跳過分隔符
                         fallback_end=abbr.end(),
@@ -181,7 +181,7 @@ def extract_citations(
                 jyear_str=full.group(2),
                 jcase_raw=full.group(3),
                 jno_str=full.group(4),
-                full_text=full_text,
+                clean_text=clean_text,
                 processed=processed,
                 fallback_start=full.start(),
                 fallback_end=full.end(),
