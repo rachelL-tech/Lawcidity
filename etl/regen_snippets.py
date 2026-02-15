@@ -31,7 +31,7 @@ def main():
     # match_start IS NULL 表示當初 PDF 折行導致反查失敗，這次也一起補救
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT c.id, c.match_start, c.match_end, c.raw_match,
+            SELECT c.id, c.source_id, c.target_id, c.match_start, c.match_end, c.raw_match,
                    d.clean_text
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
@@ -46,19 +46,38 @@ def main():
     recovered = 0  # 原本 match_start IS NULL、這次成功定位的
 
     with conn.cursor() as cur:
-        for i, (cid, start, end, raw_match, clean_text) in enumerate(rows):
+        for i, (cid, source_id, target_id, start, end, raw_match, clean_text) in enumerate(rows):
             try:
+                # stale match_start：offset 超出 clean_text 長度（舊版匯入殘留）→ 重置為 NULL
+                if start is not None and start >= len(clean_text):
+                    start = end = None
+                    cur.execute(
+                        "UPDATE citations SET match_start=NULL, match_end=NULL WHERE id=%s",
+                        (cid,)
+                    )
+
                 # match_start IS NULL：PDF 折行，用 flexible pattern 重新定位
                 if start is None and raw_match:
                     flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
                     flex = re.search(flexible, clean_text)
                     if flex:
-                        start, end = flex.start(), flex.end()
+                        new_start, new_end = flex.start(), flex.end()
+                        # 位置已被同一（source, target）的其他 citation 佔用 → 這筆是重複，直接刪除
                         cur.execute(
-                            "UPDATE citations SET match_start=%s, match_end=%s WHERE id=%s",
-                            (start, end, cid)
+                            "SELECT 1 FROM citations WHERE source_id=%s AND target_id=%s AND match_start=%s AND id!=%s",
+                            (source_id, target_id, new_start, cid)
                         )
-                        recovered += 1
+                        if cur.fetchone() is not None:
+                            cur.execute("DELETE FROM citations WHERE id=%s", (cid,))
+                            skipped += 1
+                            continue
+                        else:
+                            start, end = new_start, new_end
+                            cur.execute(
+                                "UPDATE citations SET match_start=%s, match_end=%s WHERE id=%s",
+                                (start, end, cid)
+                            )
+                            recovered += 1
 
                 if start is None:
                     skipped += 1
@@ -72,6 +91,7 @@ def main():
                 updated += 1
             except Exception as e:
                 print(f"  跳過 citation #{cid}：{e}")
+                conn.rollback()  # 清除 aborted transaction，避免 cascade 失敗
                 skipped += 1
 
             if (i + 1) % 500 == 0:

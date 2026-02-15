@@ -163,3 +163,10 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 | raw_match | TEXT | 命中原文片段 |
 
 unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
+
+---
+
+## 待辦事項
+
+- **前端 snippet 截斷提示**：snippet 若截在句中，末尾補 `…` 並提示使用者點擊查看全文（`app/static/index.html`）。
+- **CSS 重抽腳本**：snippet 邏輯穩定後，建立「清空 `citation_snippet_statutes` → 重跑 `extract_statutes.py --citations`」的一次性腳本，解決 snippet regen 後 CSS 表法條資料過時的問題。

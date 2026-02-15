@@ -200,13 +200,14 @@ def extract_citations(
 _PARA_START_RE = re.compile(
     r'\r\n[ \t　]{0,4}'      # 允許最多 4 個前導空白（修：\r\n  ㈢ 格式）
     r'(?='
-    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖'
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁戊己庚辛壬癸'  # 加：甲乙丙丁... 大綱字
     r'㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩'
     r'①②③④⑤⑥⑦⑧⑨⑩'
     r'⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽'   # 括號數字 U+2474–U+247D
     r'⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑'   # 數字句號 U+2488–U+2491
-    r'（(]'                  # ] 關閉字元集；全形和半形左括號
-    r'|[1-9][0-9]*[.、]'    # 阿拉伯數字條號（1. 2. 3、等）
+    r']'                     # 關閉字元集（（( 移至下方受限格式）
+    r'|[（(][一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁戊己庚辛壬癸]'  # （一）(一) 但不配（最高法院...
+    r'|[1-9][0-9]*[.、 　]'  # 阿拉伯數字條號（1. 2. 3、8 精神慰撫金 等）
     r')'                     # 關閉 lookahead
 )
 
@@ -217,14 +218,14 @@ _PARA_START_RE = re.compile(
 # \u2460-\u24ff：Enclosed Alphanumerics（①②…、⑴⑵…），處理附表內「。 ⑴按」格式
 # group(1) = 關鍵字起始位置（用於 actual_start）
 _SUB_CLAUSE_RE = re.compile(
-    r'(?:(?:。|\r\n)[\uf000-\uffff\u3000-\u303f\u3200-\u32ff\u2460-\u24ff\t 　]{0,6})'
-    r'((?:再|復|又|次|末|且|惟)按|再者|所謂|另(?![行有外附])|按(?!照))'
+    r'(?:(?:。|\r\n|[：:])[\uf000-\uffff\u3000-\u303f\u3200-\u32ff\u2460-\u24ff\t 　]{0,6})'  # 加：[：:] 邊界（修：：　　按 格式）
+    r'((?:再|復|又|次|末|且|惟)按|又(?!按)|再者|所謂|另(?![行有外附])|按(?!照))'              # 加：又(?!按) 獨立關鍵字
     r'[：:，,「]?'
 )
 
 # 非標準法院引用（憲法法庭等）的結尾標記：「意旨參照）」
 # 用於 extract_snippet 的 Pass 2 邊界修正
-_CITE_TAIL_RE = re.compile(r'意旨參照[）)]')
+_CITE_TAIL_RE = re.compile(r'(?:意旨|決議)參照[）)]')
 
 
 def extract_snippet(
@@ -317,6 +318,10 @@ def extract_snippet(
     in_lb_start = actual_start - look_back_start
     for m in ANY_COURT_CITATION.finditer(look_back, in_lb_start):
         after_cite = look_back_start + m.end()
+        # ★ 同一引用鏈：after_cite 到 match_start 之間無句號/換行 → 不推進
+        between = text[after_cite: match_start]
+        if '。' not in between and '\r\n' not in between:
+            continue
         window = text[after_cite: after_cite + 80]
         paren_fw = window.find('）')
         paren_hw = window.find(')')
@@ -337,9 +342,12 @@ def extract_snippet(
         if end_pos < match_start:
             actual_start = end_pos
 
-    # 向後：找 ）（citation 的收尾括號，如「意旨參照）」）
+    # 向後：找 ）或 )（citation 的收尾括號），取最早出現者
     look_forward = text[match_end: match_end + max_forward_paren]
-    paren_pos = look_forward.find('）')
+    paren_fw = look_forward.find('）')
+    paren_hw = look_forward.find(')')
+    candidates_p = [p for p in [paren_fw, paren_hw] if p != -1]
+    paren_pos = min(candidates_p) if candidates_p else -1
     if paren_pos != -1:
         actual_end = match_end + paren_pos + 1
     else:
