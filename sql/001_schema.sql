@@ -29,7 +29,7 @@ CREATE INDEX court_units_geo_idx ON court_units(lat, lon);
 
 -- =========================
 -- 2) 判決節點（唯一真相：placeholder 與完整判決都在這張）
---    placeholder 唯一鍵： (court_root_norm, jyear, jcase_norm, jno)
+--    placeholder 唯一鍵： (unit_norm, jyear, jcase_norm, jno)
 --    ref_key 由上述四欄位自動生成（不用你手動算）
 -- =========================
 CREATE TABLE decisions (
@@ -80,14 +80,14 @@ CREATE UNIQUE INDEX decisions_ref_key_uniq ON decisions(ref_key);
 CREATE UNIQUE INDEX decisions_jid_uniq ON decisions(jid) WHERE jid IS NOT NULL;
 
 -- 常用索引
-CREATE INDEX decisions_unit_norm_idx   ON decisions(unit_norm);
+-- 注意：unit_norm 單欄 index 已由自然鍵複合 index 的最左前綴覆蓋，不額外建立
 CREATE INDEX decisions_court_year_idx  ON decisions(court_root_norm, jyear);
 CREATE INDEX decisions_unit_idx        ON decisions(court_unit_id);
 CREATE INDEX decisions_date_idx        ON decisions(decision_date);
 
--- keyword 搜尋索引
-CREATE INDEX decisions_fulltext_trgm ON decisions USING GIN (full_text gin_trgm_ops);
-CREATE INDEX decisions_title_trgm    ON decisions USING GIN (title gin_trgm_ops);
+-- keyword 搜尋索引（對 clean_text 建 GIN trgm，搜尋時用 clean_text ILIKE '%keyword%'）
+CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
+CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
 
 
 -- =========================
@@ -100,14 +100,16 @@ CREATE TABLE citations (
   target_id   BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
 
   raw_match   TEXT NOT NULL,   -- 原始命中的引用字串
-  match_start INT,             -- 在 source.full_text 的起點 index
-  match_end   INT,             -- 在 source.full_text 的終點 index
+  match_start INT,             -- 在 source.clean_text 的起點 index（PDF折行無法定位時為 NULL）
+  match_end   INT,             -- 在 source.clean_text 的終點 index
   snippet     TEXT,            -- 以 match 為中心切出的上下文（展示/除錯）
 
   created_at  TIMESTAMPTZ DEFAULT now()
 );
 
 -- 去重：同來源同目標同一位置不要重複插
+-- 注意：PostgreSQL unique index 把 NULL 視為各不相同，
+--       match_start IS NULL 的列不受此 index 保護（由程式層防重）
 CREATE UNIQUE INDEX citations_uniq ON citations(source_id, target_id, match_start);
 
 -- 查「誰引用它」/「它引用誰」都會用到
