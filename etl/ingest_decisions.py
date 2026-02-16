@@ -308,71 +308,50 @@ def ingest_citations(conn, source_id: int, clean_text: str) -> int:
     Returns:
         (成功寫入的 citation 數量, 錯誤訊息清單)
     """
-    citations = extract_citations(clean_text)
+    raw_citations = extract_citations(clean_text)
     inserted = 0
     errors = []
 
-    # 重新匯入：先清除舊 citations，避免 match_start 失效的殭屍資料留存
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
-    conn.commit()
-
-    for c in citations:
+    # Phase 1：解析所有 target ID（各自在自己的 transaction 完成）
+    resolved = []
+    for c in raw_citations:
         ctype = c.get("citation_type", "decision")
-
         if ctype == "resolution":
             res_id = upsert_resolution(conn, c["jyear"], c["seq_no"], c["court_type"])
-            if res_id is None:
-                continue
-            try:
-                with conn.cursor() as cur:
+            if res_id is not None:
+                resolved.append((ctype, res_id, c))
+        else:
+            target_id = upsert_target_placeholder(conn, c["jyear"], c["jcase_norm"], c["jno"])
+            if target_id is not None:
+                resolved.append((ctype, target_id, c))
+
+    # Phase 2：DELETE + INSERT 全部放同一個 transaction，避免 crash 留下空資料
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
+            for ctype, target, c in resolved:
+                if ctype == "resolution":
                     cur.execute("""
                         INSERT INTO citations (source_id, target_resolution_id, raw_match, match_start, match_end, snippet)
-                        VALUES (%(source_id)s, %(res_id)s, %(raw_match)s, %(match_start)s, %(match_end)s, %(snippet)s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (source_id, target_resolution_id, match_start) DO NOTHING
-                    """, {
-                        "source_id": source_id,
-                        "res_id": res_id,
-                        "raw_match": c["raw_match"],
-                        "match_start": c["match_start"],
-                        "match_end": c["match_end"],
-                        "snippet": c["snippet"],
-                    })
-                    conn.commit()
-                    inserted += 1
-            except Exception as e:
-                msg = f"resolution citation {c['raw_match']!r}: {e}"
-                print(f"錯誤：寫入 resolution citation 失敗 - {msg}")
-                errors.append(msg)
-                conn.rollback()
-        else:
-            # decision citation（原有流程）
-            target_id = upsert_target_placeholder(
-                conn, c["jyear"], c["jcase_norm"], c["jno"]
-            )
-            if target_id is None:
-                continue
-            try:
-                with conn.cursor() as cur:
+                        RETURNING id
+                    """, (source_id, target, c["raw_match"], c["match_start"], c["match_end"], c["snippet"]))
+                else:
                     cur.execute("""
                         INSERT INTO citations (source_id, target_id, raw_match, match_start, match_end, snippet)
-                        VALUES (%(source_id)s, %(target_id)s, %(raw_match)s, %(match_start)s, %(match_end)s, %(snippet)s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (source_id, target_id, match_start) DO NOTHING
-                    """, {
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "raw_match": c["raw_match"],
-                        "match_start": c["match_start"],
-                        "match_end": c["match_end"],
-                        "snippet": c["snippet"],
-                    })
-                    conn.commit()
+                        RETURNING id
+                    """, (source_id, target, c["raw_match"], c["match_start"], c["match_end"], c["snippet"]))
+                if cur.fetchone() is not None:
                     inserted += 1
-            except Exception as e:
-                msg = f"citation {c['raw_match']!r}: {e}"
-                print(f"錯誤：寫入 citation 失敗 - {msg}")
-                errors.append(msg)
-                conn.rollback()
+        conn.commit()
+    except Exception as e:
+        msg = f"source_id={source_id} transaction failed: {e}"
+        print(f"錯誤：citation 交易失敗 - {msg}")
+        errors.append(msg)
+        conn.rollback()
 
     return inserted, errors
 

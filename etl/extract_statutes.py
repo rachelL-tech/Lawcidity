@@ -33,20 +33,24 @@ def ingest_decision_statutes(conn, decision_id: int, clean_text: str) -> int:
     Returns: 寫入筆數
     """
     statutes = extract_statutes(clean_text)
+    if not statutes:
+        return 0
     inserted = 0
-    for law, article_raw, sub_ref, raw in statutes:
-        try:
-            with conn.cursor() as cur:
+    try:
+        with conn.cursor() as cur:
+            for law, article_raw, sub_ref, raw in statutes:
                 cur.execute("""
                     INSERT INTO decision_reason_statutes (decision_id, law, article_raw, sub_ref, raw_match)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (decision_id, law, article_raw, sub_ref) DO NOTHING
+                    RETURNING id
                 """, (decision_id, law, article_raw, sub_ref, raw))
-                conn.commit()
-                inserted += 1
-        except Exception as e:
-            print(f"  錯誤：decision_id={decision_id} {law}第{article_raw}條 - {e}")
-            conn.rollback()
+                if cur.fetchone() is not None:
+                    inserted += 1
+        conn.commit()
+    except Exception as e:
+        print(f"  錯誤：decision_id={decision_id} - {e}")
+        conn.rollback()
     return inserted
 
 
@@ -86,20 +90,24 @@ def ingest_citation_statutes(conn, citation_id: int, snippet: str) -> int:
     Returns: 寫入筆數
     """
     statutes = extract_statutes(snippet)
+    if not statutes:
+        return 0
     inserted = 0
-    for law, article_raw, sub_ref, raw in statutes:
-        try:
-            with conn.cursor() as cur:
+    try:
+        with conn.cursor() as cur:
+            for law, article_raw, sub_ref, raw in statutes:
                 cur.execute("""
                     INSERT INTO citation_snippet_statutes (citation_id, law, article_raw, sub_ref, raw_match)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (citation_id, law, article_raw, sub_ref) DO NOTHING
+                    RETURNING id
                 """, (citation_id, law, article_raw, sub_ref, raw))
-                conn.commit()
-                inserted += 1
-        except Exception as e:
-            print(f"  錯誤：citation_id={citation_id} {law}第{article_raw}條 - {e}")
-            conn.rollback()
+                if cur.fetchone() is not None:
+                    inserted += 1
+        conn.commit()
+    except Exception as e:
+        print(f"  錯誤：citation_id={citation_id} - {e}")
+        conn.rollback()
     return inserted
 
 
