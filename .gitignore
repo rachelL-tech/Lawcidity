@@ -22,3 +22,7 @@ data/downloads/
 # Claude
 /.agents/
 /.claude/
+/docs/
+/memory/
+AGENTS.md
+

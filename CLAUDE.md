@@ -12,19 +12,20 @@
 
 ### MVP 的關鍵字（keyword）
 - **不做**自動 keyword tagging、主題分類。
-- keyword = 使用者輸入任意字串/片語 → 在來源判決的 `full_text` 做 substring 搜尋。
-- 技術：PostgreSQL `ILIKE '%keyword%'` + `pg_trgm` GIN index（中文 substring 友善）。
+- keyword = 使用者輸入任意字串/片語 → 篩選「來源判決」集合，再用該集合重算被引用排行。
+- 技術（建議路線）：OpenSearch（AWS）做混合式搜尋（一般欄位 + ngram），回 `source_id` 清單後由 PostgreSQL 聚合 citations → rankings。
+- 備用/對照：PostgreSQL `ILIKE '%keyword%'` + `pg_trgm`（對 `decisions.clean_text` 已有 GIN trgm index）。
 
 ### 引用 snippet（可重現、不追求完美段落）
 - snippet = 以 citation match 為中心的 window（預設 ±200 字）+ 句子/換行邊界擴張。
 - **必存** `raw_match`、`match_start`、`match_end`（方便重切、也能做螢光筆定位）。
-- `match_start` / `match_end` 對應**原始 full_text** 的 index（非預處理後），snippet 也從原始文字取。
+- `match_start` / `match_end` 對應 `decisions.clean_text` 的 index（PDF 折行無法定位時可為 NULL），snippet 也從 `clean_text` 取。
 
 ### Snippet 邊界擴張策略（混合式）
 - 向前優先順序：① 子條款關鍵字（再按/復按/按等）→ ② 編號段落起點（一、㈠、①等）→ ③ 任意 `\r\n` → ④ 固定距離 fallback
 - 向後：找 match_end 之後最近的 `）`（citation 收尾括號），fallback 找 `。` 或 `\r\n`
 - 引用邊界後處理：actual_start ~ match_start 之間若有其他法院具名引用，推進 actual_start 到最後一個引用收尾之後
-- **注意**：snippet 從原始 full_text（含換行）取，才能做換行邊界擴張。
+- **注意**：snippet 從 `clean_text`（保留換行與段落結構的清理版本）取，才能做換行邊界擴張。
 
 ### Week 1 範圍（非常重要）
 - **來源判決（source / 引用判決）**：先做「高等法院層級」。
@@ -91,21 +92,6 @@
 - 臺灣高等法院民事 / 臺中分院民事 / 臺南分院民事 / 花蓮分院民事 / 高雄分院民事
 - 福建高等法院金門分院民事
 
-### 常用指令
-```bash
-# 啟動 DB
-docker start casemap-db
-
-# 啟動 API server
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Ingest（batch 模式）
-python3 etl/ingest_decisions.py --batch "/Users/rachel/Downloads/202511" "高等法院民事"
-
-# 法條抽取
-python3 etl/extract_statutes.py --all
-```
-
 ### Docker / DB
 - container: `casemap-db`（postgres:15-alpine, port 5432）
 - DB: `citations` / user: `postgres` / password: `postgres`
@@ -115,7 +101,7 @@ python3 etl/extract_statutes.py --all
 
 ## 1) Non-goals（MVP 不做，避免爆炸）
 - 不做全量 1996–2025 回溯。
-- 不引入 Elasticsearch / OpenSearch 作為必要依賴（先用 Postgres pg_trgm）。
+- Week 1 以前不把搜尋服務當成必要依賴；若 keyword 搜尋效能/體驗需要，可在 Week 1–3 引入 OpenSearch（AWS 路線）。
 - 不做向量 RAG、相似判決推薦（可以是 Week 4–6 加分，但不能卡住核心）。
 - 不做複雜前端：Week 1 以 API + 最簡頁/Swagger demo 為主。
 
@@ -168,9 +154,34 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 
 ## 待辦事項
 
+## 里程碑（時程非常短，請嚴格守住）
+
+> 日期參考：期初報告 `2026-02-23`、期中報告 `2026-03-09`、期末報告 `2026-03-30`。
+
+### Phase 1（Week 1）：核心功能可 demo（現在 → 2026-02-23）
+- **核心交付**：能以 filters 篩來源判決，重算「被引用最多」排行；點擊可看 citations/snippets。
+- **Keyword 搜尋（source filter → rankings）**：定義 `/api/search?q=...` 規格與前端互動。
+- **Snippet 全文高亮（展示效果強，建議納入）**：點擊 snippet card 顯示來源判決全文，標示 `<mark>` 並自動捲動（參考 `docs/plans/2026-02-16-snippet-fulltext-highlight.md`）。
+- **文件同步**：把本週的 demo 範圍、已知限制、下一步寫回本檔（避免方向散亂）。
+
+### Phase 2（Week 2–3）：週邊功能 + 流程（2026-02-24 → 2026-03-09）
+- **時間趨勢**：`/api/trends`（按月引用次數、top targets trend）+ 前端基本圖表。
+- **地圖視覺化**：`/api/map`（court_units 座標 + 統計）+ 前端地圖展示與篩選。
+- **擴增案件類型**：納入刑事/行政/家事（資料夾解析、匯入策略、統計呈現）。
+- **批次下載資料**：新增「從網站批次下載壓縮 JSON + 解壓 + 校驗」腳本，讓資料取得可重現。
+
+### Phase 3（Week 4–6）：除錯、效能、UX 收斂（2026-03-10 → 2026-03-30）
+- **正確性與效能**：ETL 可重跑一致性、搜尋/聚合查詢超時保護、索引調校、資料品質檢查。
+- **UI/UX 重設計（加分）**：若要學 TypeScript + React，建議放在此 Phase，避免 Week 1–3 變更前端技術棧拖慢交付。
+
+## 2/23 Demo 目標（已決定）
+- **必做**：keyword 搜尋（篩來源判決 → 重算 rankings）。優先走 OpenSearch；Postgres `ILIKE + pg_trgm` 可做 fallback/對照。
+- **必做（demo 版）**：snippet 全文高亮（點擊 snippet → 新分頁顯示 `clean_text` + `<mark>` 高亮並自動捲動）。
+- **延後決策（Week 2–3）**：全文呈現 UI/UX（modal vs 跳轉、版面風格、React/TS 重設計）。
+
 ### 功能擴充
 
-- **keyword 搜尋 API + 前端搜尋框**：`GET /api/search?q=關鍵字` → 對 `decisions.clean_text` 做 `ILIKE '%q%'`（已有 GIN trgm index）；前端加搜尋框，結果顯示排行榜子集。
+- **keyword 搜尋 API + 前端搜尋框**：`GET /api/search?q=關鍵字` → OpenSearch 取回命中的 `source_id` → PostgreSQL 聚合 `citations` 產出 rankings；必要時保留 `ILIKE + pg_trgm` 作 fallback/對照。
 - **法條篩選 API**：`GET /api/rankings?law=民法&article=184` → JOIN `decision_reason_statutes`，只顯示引用含指定法條的來源判決的目標排行；`decision_reason_statutes` 已有 191K 筆資料。
 - **來源判決頁螢光筆標示**：`GET /api/citations/{citation_id}` 回傳 source decision + highlight range（match_start/end）+ snippet，前端用 `<mark>` 標示。
 - **時間趨勢**：`GET /api/trends` 每月引用次數、top targets trend。
@@ -179,6 +190,4 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 ### 維護性
 
 - **前端 snippet 截斷提示**：snippet 若截在句中，末尾補 `…` 並提示使用者點擊查看全文（`app/static/index.html`）。
-- **CSS 重抽腳本**：snippet 邏輯穩定後，清空 `citation_snippet_statutes` → 重跑 `extract_statutes.py --citations`，解決 snippet regen 後 CSS 表法條資料過時的問題。
-- **resolution citations 補跑**：現有 12,521 筆 citations 是舊版 ingest 所建（無 resolution 支援）；DB 中有 659 份判決含會議決議引用，需重跑 `ingest_decisions.py --batch` 補齊。
 - **CLAUDE.md schema 區塊更新**：仍是舊版，缺 `unit_norm`、`clean_text`、`resolutions` 表描述。
