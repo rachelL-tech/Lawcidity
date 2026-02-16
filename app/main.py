@@ -55,7 +55,7 @@ def rankings(limit: int = 100):
             return cur.fetchall()
 
 
-@app.get("/api/citations/{target_id}")
+@app.get("/api/decisions/{target_id}/citations")
 def citations(target_id: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -81,7 +81,7 @@ def citations(target_id: int):
                             json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
                             ORDER BY css.law, css.article_raw, css.sub_ref
                         ) FILTER (WHERE css.id IS NOT NULL),
-                        '[]'
+                        '[]'::json
                     ) AS statutes
                 FROM citations c
                 JOIN decisions src ON c.source_id = src.id
@@ -114,10 +114,20 @@ def resolution_citations(resolution_id: int):
                     src.jcase_norm,
                     src.jno,
                     c.snippet,
-                    c.raw_match
+                    c.raw_match,
+                    COALESCE(
+                        json_agg(
+                            json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
+                            ORDER BY css.law, css.article_raw, css.sub_ref
+                        ) FILTER (WHERE css.id IS NOT NULL),
+                        '[]'::json
+                    ) AS statutes
                 FROM citations c
                 JOIN decisions src ON c.source_id = src.id
+                LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
                 WHERE c.target_resolution_id = %s
+                GROUP BY c.id, src.court_root_norm, src.jyear, src.jcase_norm,
+                         src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
             """, (resolution_id,))
             return {"target": target, "sources": cur.fetchall()}

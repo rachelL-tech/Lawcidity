@@ -227,7 +227,7 @@ async function toggle(tr, trS, targetId, caseRef) {
   if (trS.dataset.loaded) return;
   trS.dataset.loaded = '1';
 
-  const res  = await fetch(`/api/citations/${targetId}`);
+  const res  = await fetch(`/api/decisions/${targetId}/citations`);
   const data = await res.json();
   const wrap = trS.querySelector('.snippets-wrap');
 
@@ -299,6 +299,15 @@ async function toggleResolution(tr, trS, resolutionId, caseRef) {
     const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
     const snip   = (s.snippet || '').trim()
       .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
+    const statutes = (s.statutes || []);
+    const tagsHtml = statutes.length
+      ? `<div class="statute-tags">${statutes.map(t => {
+          const m = String(t.article).match(/^(\d+)(?:之(\d+))?$/);
+          const art = m && m[2] ? `第${m[1]}條之${m[2]}` : `第${t.article}條`;
+          const sub = t.sub || '';
+          return `<span class="statute-tag">${escHtml(t.law)}${art}${escHtml(sub)}</span>`;
+        }).join('')}</div>`
+      : '';
     return `
       <div class="snippet-card">
         <div class="snippet-meta">
@@ -308,6 +317,7 @@ async function toggleResolution(tr, trS, resolutionId, caseRef) {
           &nbsp;·&nbsp;
           <span style="color:#aaa">citation #${s.citation_id}</span>
         </div>
+        ${tagsHtml}
         <div class="snippet-text">${escHtml(snip)}</div>
       </div>`;
   }).join('');

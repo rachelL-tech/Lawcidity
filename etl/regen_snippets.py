@@ -31,8 +31,8 @@ def main():
     # match_start IS NULL 表示當初 PDF 折行導致反查失敗，這次也一起補救
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT c.id, c.source_id, c.target_id, c.match_start, c.match_end, c.raw_match,
-                   d.clean_text
+            SELECT c.id, c.source_id, c.target_id, c.target_resolution_id,
+                   c.match_start, c.match_end, c.raw_match, d.clean_text
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
             WHERE d.clean_text IS NOT NULL
@@ -46,7 +46,7 @@ def main():
     recovered = 0  # 原本 match_start IS NULL、這次成功定位的
 
     with conn.cursor() as cur:
-        for i, (cid, source_id, target_id, start, end, raw_match, clean_text) in enumerate(rows):
+        for i, (cid, source_id, target_id, target_resolution_id, start, end, raw_match, clean_text) in enumerate(rows):
             try:
                 # stale match_start：offset 超出 clean_text 長度（舊版匯入殘留）→ 重置為 NULL
                 if start is not None and start >= len(clean_text):
@@ -64,8 +64,12 @@ def main():
                         new_start, new_end = flex.start(), flex.end()
                         # 位置已被同一（source, target）的其他 citation 佔用 → 這筆是重複，直接刪除
                         cur.execute(
-                            "SELECT 1 FROM citations WHERE source_id=%s AND target_id=%s AND match_start=%s AND id!=%s",
-                            (source_id, target_id, new_start, cid)
+                            "SELECT 1 FROM citations"
+                            " WHERE source_id=%s"
+                            " AND (target_id IS NOT DISTINCT FROM %s)"
+                            " AND (target_resolution_id IS NOT DISTINCT FROM %s)"
+                            " AND match_start=%s AND id!=%s",
+                            (source_id, target_id, target_resolution_id, new_start, cid)
                         )
                         if cur.fetchone() is not None:
                             cur.execute("DELETE FROM citations WHERE id=%s", (cid,))
@@ -101,6 +105,12 @@ def main():
     conn.commit()
     conn.close()
     print(f"\n完成！更新 {updated} 筆，補救 match_start {recovered} 筆，跳過 {skipped} 筆")
+
+    # 重建被 cascade 刪除的 citation_snippet_statutes
+    import os, subprocess
+    script = os.path.join(os.path.dirname(__file__), "extract_statutes.py")
+    print("\n重建 citation_snippet_statutes...")
+    subprocess.run(["python", script, "--citations"], check=True)
 
 
 if __name__ == "__main__":
