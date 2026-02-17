@@ -15,6 +15,7 @@
 - keyword = 使用者輸入任意字串/片語 → 篩選「來源判決」集合，再用該集合重算被引用排行。
 - 技術（建議路線）：OpenSearch（AWS）做混合式搜尋（一般欄位 + ngram），回 `source_id` 清單後由 PostgreSQL 聚合 citations → rankings。
 - 備用/對照：PostgreSQL `ILIKE '%keyword%'` + `pg_trgm`（對 `decisions.clean_text` 已有 GIN trgm index）。
+- OpenSearch 也可支援：facets/aggregations（如各法院、各年度、各案件類型的命中數統計）、highlight（回傳命中片段並標示）、以及結構化 filter（如 court=最高法院、year>=2022、case_type=民事）。
 
 ### 引用 snippet（可重現、不追求完美段落）
 - snippet = 以 citation match 為中心的 window（預設 ±200 字）+ 句子/換行邊界擴張。
@@ -103,6 +104,7 @@
 - 不做全量 1996–2025 回溯。
 - Week 1 以前不把搜尋服務當成必要依賴；若 keyword 搜尋效能/體驗需要，可在 Week 1–3 引入 OpenSearch（AWS 路線）。
 - 不做向量 RAG、相似判決推薦（可以是 Week 4–6 加分，但不能卡住核心）。
+- 若未來要做自然語言/語意相似功能，可能需要引入向量資料庫（semantic search）。
 - 不做複雜前端：Week 1 以 API + 最簡頁/Swagger demo 為主。
 
 ---
@@ -160,7 +162,7 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 
 ### Phase 1（Week 1）：核心功能可 demo（現在 → 2026-02-23）
 - **核心交付**：能以 filters 篩來源判決，重算「被引用最多」排行；點擊可看 citations/snippets。
-- **Keyword 搜尋（source filter → rankings）**：定義 `/api/search?q=...` 規格與前端互動。
+- **Keyword 搜尋（source filter → rankings）**：定義 `/api/search?q=...` 規格與前端互動。這一步會立刻暴露：索引不夠、查詢太慢、欄位漏存、或抽取結果不符合直覺 → 可以在資料量還小時修掉
 - **Snippet 全文高亮（展示效果強，建議納入）**：點擊 snippet card 顯示來源判決全文，標示 `<mark>` 並自動捲動（參考 `docs/plans/2026-02-16-snippet-fulltext-highlight.md`）。
 - **文件同步**：把本週的 demo 範圍、已知限制、下一步寫回本檔（避免方向散亂）。
 
