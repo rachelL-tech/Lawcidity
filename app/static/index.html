@@ -169,13 +169,15 @@ async function loadRankings() {
   const res  = await fetch('/api/rankings?limit=500');
   const rows = await res.json();
 
+  const AUTH_BADGE_LABEL = { resolution: '決議', grand_interp: '釋字', conference: '座談會' };
+
   rows.forEach((r, i) => {
-    const isResolution = r.citation_type === 'resolution';
-    const caseRef = isResolution
-      ? (r.display_title || `最高法院${r.jyear}年度第?次會議決議`)
+    const isAuthority = r.citation_type === 'authority';
+    const caseRef = isAuthority
+      ? (r.display_title || '（未知）')
       : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號`;
-    const typeBadge = isResolution
-      ? `<span class="badge-resolution">決議</span>`
+    const typeBadge = isAuthority
+      ? `<span class="badge-resolution">${AUTH_BADGE_LABEL[r.auth_type] || r.auth_type}</span>`
       : '';
 
     // 排行列
@@ -188,7 +190,7 @@ async function loadRankings() {
         <span class="case-ref">${escHtml(caseRef)}</span>${typeBadge}
         <span class="toggle-icon">▶</span>
       </td>
-      <td><span class="court">${escHtml(r.target_court)}</span></td>
+      <td><span class="court">${escHtml(r.target_court || '')}</span></td>
       <td style="text-align:center"><span class="badge">${r.citation_count}</span></td>
     `;
 
@@ -197,8 +199,8 @@ async function loadRankings() {
     trS.className = 'row-snippets';
     trS.innerHTML = `<td colspan="4"><div class="snippets-wrap loading">載入中…</div></td>`;
 
-    if (isResolution) {
-      tr.addEventListener('click', () => toggleResolution(tr, trS, r.resolution_id, caseRef));
+    if (isAuthority) {
+      tr.addEventListener('click', () => toggleAuthority(tr, trS, r.authority_id, caseRef));
     } else {
       tr.addEventListener('click', () => toggle(tr, trS, r.target_id, caseRef));
     }
@@ -267,7 +269,7 @@ async function toggle(tr, trS, targetId, caseRef) {
   }).join('');
 }
 
-async function toggleResolution(tr, trS, resolutionId, caseRef) {
+async function toggleAuthority(tr, trS, authorityId, caseRef) {
   const isOpen = tr.classList.contains('open');
 
   if (isOpen) {
@@ -284,7 +286,7 @@ async function toggleResolution(tr, trS, resolutionId, caseRef) {
   if (trS.dataset.loaded) return;
   trS.dataset.loaded = '1';
 
-  const res  = await fetch(`/api/resolutions/${resolutionId}/citations`);
+  const res  = await fetch(`/api/authorities/${authorityId}/citations`);
   const data = await res.json();
   const wrap = trS.querySelector('.snippets-wrap');
 

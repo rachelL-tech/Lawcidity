@@ -24,8 +24,9 @@ def rankings(limit: int = 100):
             cur.execute("""
                 SELECT
                     'decision'           AS citation_type,
+                    NULL::TEXT           AS auth_type,
                     d.id                 AS target_id,
-                    NULL::BIGINT         AS resolution_id,
+                    NULL::BIGINT         AS authority_id,
                     d.court_root_norm    AS target_court,
                     d.jyear,
                     d.jcase_norm,
@@ -37,18 +38,23 @@ def rankings(limit: int = 100):
                 GROUP BY d.id
                 UNION ALL
                 SELECT
-                    'resolution'         AS citation_type,
-                    NULL::BIGINT,
-                    r.id                 AS resolution_id,
-                    '最高法院'           AS target_court,
-                    r.jyear,
+                    'authority'          AS citation_type,
+                    a.auth_type          AS auth_type,
+                    NULL::BIGINT         AS target_id,
+                    a.id                 AS authority_id,
+                    CASE a.auth_type
+                        WHEN 'resolution'   THEN '最高法院'
+                        WHEN 'grand_interp' THEN '司法院'
+                        ELSE split_part(a.auth_key, '|', 1)
+                    END                  AS target_court,
+                    NULL::SMALLINT       AS jyear,
                     NULL::TEXT           AS jcase_norm,
                     NULL::INT            AS jno,
-                    r.title              AS display_title,
+                    a.display            AS display_title,
                     COUNT(c.id)          AS citation_count
-                FROM resolutions r
-                JOIN citations c ON c.target_resolution_id = r.id
-                GROUP BY r.id
+                FROM authorities a
+                JOIN citations c ON c.target_authority_id = a.id
+                GROUP BY a.id
                 ORDER BY citation_count DESC
                 LIMIT %s
             """, (limit,))
@@ -94,13 +100,13 @@ def citations(target_id: int):
             return {"target": target, "sources": cur.fetchall()}
 
 
-@app.get("/api/resolutions/{resolution_id}/citations")
-def resolution_citations(resolution_id: int):
+@app.get("/api/authorities/{authority_id}/citations")
+def authority_citations(authority_id: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT title FROM resolutions WHERE id = %s",
-                (resolution_id,)
+                "SELECT auth_type, auth_key, display FROM authorities WHERE id = %s",
+                (authority_id,)
             )
             target = cur.fetchone()
             if not target:
@@ -125,11 +131,11 @@ def resolution_citations(resolution_id: int):
                 FROM citations c
                 JOIN decisions src ON c.source_id = src.id
                 LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-                WHERE c.target_resolution_id = %s
+                WHERE c.target_authority_id = %s
                 GROUP BY c.id, src.court_root_norm, src.jyear, src.jcase_norm,
                          src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
-            """, (resolution_id,))
+            """, (authority_id,))
             return {"target": target, "sources": cur.fetchall()}
 
 

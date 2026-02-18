@@ -212,13 +212,14 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
 # =========================
 # Citation 處理
 # =========================
-def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Optional[int]:
+def upsert_decision(conn, court: str, jyear: int, jcase_norm: str, jno: int) -> Optional[int]:
     """
-    在 decisions 表 upsert 最高法院 placeholder（僅自然鍵欄位）
+    在 decisions 表 upsert target 判決 placeholder（僅自然鍵欄位）
     回傳 target decision_id
 
     Args:
         conn: DB 連線
+        court: 目標法院 unit_norm（'最高法院' / '最高行政法院' / '憲法法庭'）
         jyear, jcase_norm, jno: 從 citation 抽取的自然鍵
 
     Returns:
@@ -233,10 +234,10 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO decisions (unit_norm, court_root_norm, jyear, jcase_norm, jno)
-                VALUES ('最高法院', '最高法院', %(jyear)s, %(jcase_norm)s, %(jno)s)
+                VALUES (%(court)s, %(court)s, %(jyear)s, %(jcase_norm)s, %(jno)s)
                 ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO NOTHING
                 RETURNING id
-            """, {"jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
+            """, {"court": court, "jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
             row = cur.fetchone()
             if row:
                 target_id = row[0]
@@ -244,61 +245,65 @@ def upsert_target_placeholder(conn, jyear: int, jcase_norm: str, jno: int) -> Op
                 # 已存在，查出 id
                 cur.execute("""
                     SELECT id FROM decisions
-                    WHERE unit_norm = '最高法院'
+                    WHERE unit_norm = %(court)s
                       AND jyear = %(jyear)s
                       AND jcase_norm = %(jcase_norm)s
                       AND jno = %(jno)s
-                """, {"jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
+                """, {"court": court, "jyear": jyear, "jcase_norm": jcase_norm, "jno": jno})
                 target_id = cur.fetchone()[0]
             conn.commit()
             return target_id
     except Exception as e:
-        print(f"錯誤：upsert target placeholder 失敗 - {e}")
+        print(f"錯誤：upsert decision 失敗 - {e}")
         conn.rollback()
         return None
 
 
-def upsert_resolution(conn, jyear: int, seq_no: int, court_type: str) -> Optional[int]:
+def upsert_authority(conn, auth_type: str, auth_key: str, display: Optional[str] = None) -> Optional[int]:
     """
-    在 resolutions 表 upsert 會議決議，回傳 resolution id
+    在 authorities 表 upsert 非裁判性引用（會議決議、釋字、法律座談會等），回傳 authority id
 
     Args:
         conn: DB 連線
-        jyear, seq_no, court_type: 從 citation 抽取的自然鍵
+        auth_type: 類型（'resolution' / 'grand_interp' / 'conference' / ...）
+        auth_key: 自然鍵（如 '民事庭|77|9'、'釋字|144'）
+        display: 顯示用完整名稱（可選；已存在時不覆蓋原有值）
 
     Returns:
-        resolution id，失敗回傳 None
+        authority id，失敗回傳 None
     """
-    title = f"最高法院{jyear}年度第{seq_no}次{court_type}會議決議"
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO resolutions (jyear, seq_no, court_type, title)
-                VALUES (%(jyear)s, %(seq_no)s, %(court_type)s, %(title)s)
-                ON CONFLICT (jyear, seq_no, court_type) DO NOTHING
+                INSERT INTO authorities (auth_type, auth_key, display)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (auth_type, auth_key) DO UPDATE
+                  SET display = COALESCE(EXCLUDED.display, authorities.display)
                 RETURNING id
-            """, {"jyear": jyear, "seq_no": seq_no, "court_type": court_type, "title": title})
+            """, (auth_type, auth_key, display))
             row = cur.fetchone()
             if row:
-                res_id = row[0]
+                auth_id = row[0]
             else:
-                cur.execute("""
-                    SELECT id FROM resolutions
-                    WHERE jyear = %(jyear)s AND seq_no = %(seq_no)s AND court_type = %(court_type)s
-                """, {"jyear": jyear, "seq_no": seq_no, "court_type": court_type})
-                res_id = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT id FROM authorities WHERE auth_type = %s AND auth_key = %s",
+                    (auth_type, auth_key)
+                )
+                auth_id = cur.fetchone()[0]
             conn.commit()
-            return res_id
+            return auth_id
     except Exception as e:
-        print(f"錯誤：upsert resolution 失敗 - {e}")
+        print(f"錯誤：upsert authority 失敗 - {e}")
         conn.rollback()
         return None
 
 
-def ingest_citations(conn, source_id: int, clean_text: str) -> int:
+def ingest_citations(conn, source_id: int, clean_text: str) -> tuple:
     """
-    從 clean_text 抽取所有最高法院引用，寫入 citations 表
-    match_start / match_end 對應 clean_text 的字元位置
+    從 clean_text 抽取所有引用，寫入 citations 表。
+    採增量 upsert：同一 (source, target, match_start) 衝突時 UPDATE snippet，
+    本次未再出現的舊引用邊最後統一刪除（stale cleanup）。
+    match_start / match_end 對應 clean_text 的字元位置。
 
     Args:
         conn: DB 連線
@@ -306,7 +311,7 @@ def ingest_citations(conn, source_id: int, clean_text: str) -> int:
         clean_text: clean_judgment_text() 處理後的全文
 
     Returns:
-        (成功寫入的 citation 數量, 錯誤訊息清單)
+        (成功寫入/更新的 citation 數量, 錯誤訊息清單)
     """
     raw_citations = extract_citations(clean_text)
     inserted = 0
@@ -316,36 +321,85 @@ def ingest_citations(conn, source_id: int, clean_text: str) -> int:
     resolved = []
     for c in raw_citations:
         ctype = c.get("citation_type", "decision")
-        if ctype == "resolution":
-            res_id = upsert_resolution(conn, c["jyear"], c["seq_no"], c["court_type"])
-            if res_id is not None:
-                resolved.append((ctype, res_id, c))
-        else:
-            target_id = upsert_target_placeholder(conn, c["jyear"], c["jcase_norm"], c["jno"])
+        if ctype == "authority":
+            auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
+            if auth_id is not None:
+                resolved.append((ctype, auth_id, c))
+        else:  # "decision"
+            target_id = upsert_decision(conn, c["court"], c["jyear"], c["jcase_norm"], c["jno"])
             if target_id is not None:
                 resolved.append((ctype, target_id, c))
 
-    # Phase 2：DELETE + INSERT 全部放同一個 transaction，避免 crash 留下空資料
+    # Phase 2：增量 upsert，同一 transaction
+    # match_start IS NOT NULL → ON CONFLICT (source, target, match_start) DO UPDATE
+    # match_start IS NULL     → ON CONFLICT (source, target, raw_match) WHERE match_start IS NULL DO UPDATE
+    #                           （依賴 citations_null_match_*_uniq partial unique index）
+    # 最後刪除本次未出現的 stale 引用邊
     try:
+        current_ids: set = set()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
             for ctype, target, c in resolved:
-                if ctype == "resolution":
-                    cur.execute("""
-                        INSERT INTO citations (source_id, target_resolution_id, raw_match, match_start, match_end, snippet)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (source_id, target_resolution_id, match_start) DO NOTHING
-                        RETURNING id
-                    """, (source_id, target, c["raw_match"], c["match_start"], c["match_end"], c["snippet"]))
-                else:
-                    cur.execute("""
-                        INSERT INTO citations (source_id, target_id, raw_match, match_start, match_end, snippet)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (source_id, target_id, match_start) DO NOTHING
-                        RETURNING id
-                    """, (source_id, target, c["raw_match"], c["match_start"], c["match_end"], c["snippet"]))
-                if cur.fetchone() is not None:
+                ms = c.get("match_start")
+
+                if ctype == "authority":
+                    if ms is not None:
+                        cur.execute("""
+                            INSERT INTO citations
+                              (source_id, target_authority_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (source_id, target_authority_id, match_start) DO UPDATE
+                              SET snippet   = EXCLUDED.snippet,
+                                  match_end = EXCLUDED.match_end,
+                                  raw_match = EXCLUDED.raw_match
+                            RETURNING id
+                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"]))
+                    else:
+                        cur.execute("""
+                            INSERT INTO citations
+                              (source_id, target_authority_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, NULL, NULL, %s)
+                            ON CONFLICT (source_id, target_authority_id, raw_match)
+                              WHERE match_start IS NULL DO UPDATE
+                              SET snippet = EXCLUDED.snippet
+                            RETURNING id
+                        """, (source_id, target, c["raw_match"], c["snippet"]))
+                else:  # decision
+                    if ms is not None:
+                        cur.execute("""
+                            INSERT INTO citations
+                              (source_id, target_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (source_id, target_id, match_start) DO UPDATE
+                              SET snippet   = EXCLUDED.snippet,
+                                  match_end = EXCLUDED.match_end,
+                                  raw_match = EXCLUDED.raw_match
+                            RETURNING id
+                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"]))
+                    else:
+                        cur.execute("""
+                            INSERT INTO citations
+                              (source_id, target_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, NULL, NULL, %s)
+                            ON CONFLICT (source_id, target_id, raw_match)
+                              WHERE match_start IS NULL DO UPDATE
+                              SET snippet = EXCLUDED.snippet
+                            RETURNING id
+                        """, (source_id, target, c["raw_match"], c["snippet"]))
+
+                row = cur.fetchone()
+                if row:
+                    current_ids.add(row[0])
                     inserted += 1
+
+            # stale cleanup：刪除本次未出現的舊引用邊
+            if current_ids:
+                cur.execute(
+                    "DELETE FROM citations WHERE source_id = %s AND id != ALL(%s)",
+                    (source_id, list(current_ids))
+                )
+            else:
+                cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
+
         conn.commit()
     except Exception as e:
         msg = f"source_id={source_id} transaction failed: {e}"

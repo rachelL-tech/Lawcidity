@@ -1,8 +1,6 @@
 -- 台灣判決引用關係排行榜 — 完整 Schema
--- 最後更新：2026-02（整合 001 + 002 + 003）
---
+-- 最後更新：2026-02
 -- 執行順序：只需跑這一個檔案（全新安裝）
--- Migration 歷史：sql/002_ingest_error_log.sql、sql/003_resolutions.sql
 
 -- 中文 substring 搜尋（ILIKE '%關鍵字%'）的效能核心
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
