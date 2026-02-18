@@ -1,5 +1,4 @@
 # 簡易庭對應表
-# 請檢查並修正 parent_court, county, district 欄位
 
 SIMPLE_COURT_MAPPING = {
     "三重簡易庭": {

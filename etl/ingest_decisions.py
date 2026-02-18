@@ -61,7 +61,8 @@ def log_error(conn, folder_name: str, file_name: str, error_type: str, error_msg
 # =========================
 def upsert_court_unit(conn, court_info: Dict) -> int:
     """
-    Upsert court_units 表，回傳 court_unit_id
+    Insert court_units 若不存在，回傳 court_unit_id。
+    已存在則不更新（避免覆蓋手動修正的資料）。
 
     Args:
         conn: DB 連線
@@ -74,14 +75,12 @@ def upsert_court_unit(conn, court_info: Dict) -> int:
         cur.execute("""
             INSERT INTO court_units (unit_norm, root_norm, level, county, district)
             VALUES (%(unit_norm)s, %(root_norm)s, %(level)s, %(county)s, %(district)s)
-            ON CONFLICT (unit_norm) DO UPDATE
-                SET root_norm = EXCLUDED.root_norm,
-                    level = EXCLUDED.level,
-                    county = EXCLUDED.county,
-                    district = EXCLUDED.district,
-                    updated_at = now()
-            RETURNING id
+            ON CONFLICT (unit_norm) DO NOTHING
         """, court_info)
+        cur.execute(
+            "SELECT id FROM court_units WHERE unit_norm = %s",
+            (court_info["unit_norm"],)
+        )
         court_unit_id = cur.fetchone()[0]
         conn.commit()
         return court_unit_id
@@ -132,7 +131,7 @@ def parse_decision_date(jdate: str) -> Optional[str]:
 # =========================
 # 判決匯入
 # =========================
-def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: str, json_data: Dict) -> bool:
+def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: str, case_type: Optional[str], json_data: Dict) -> bool:
     """
     Upsert 單一判決到 decisions 表
 
@@ -141,6 +140,7 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
         court_unit_id: court_units.id
         court_root_norm: 聚合層級，例如「臺灣高等法院」（顯示/篩選用）
         unit_norm: 具體分院名稱，例如「臺灣高等法院臺南分院」（自然鍵）
+        case_type: 案件類型（民事/刑事/行政/憲法），或 None
         json_data: 判決 JSON（8 個欄位）
 
     Returns:
@@ -167,11 +167,13 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
             cur.execute("""
                 INSERT INTO decisions (
                     unit_norm, court_root_norm, jyear, jcase_norm, jno,
-                    jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw
+                    jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw,
+                    case_type
                 )
                 VALUES (
                     %(unit_norm)s, %(court_root_norm)s, %(jyear)s, %(jcase_norm)s, %(jno)s,
-                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s
+                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s,
+                    %(case_type)s
                 )
                 ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO UPDATE
                     SET court_root_norm = EXCLUDED.court_root_norm,
@@ -183,6 +185,7 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
                         clean_text = EXCLUDED.clean_text,
                         pdf_url = EXCLUDED.pdf_url,
                         raw = EXCLUDED.raw,
+                        case_type = EXCLUDED.case_type,
                         updated_at = now()
             """, {
                 "unit_norm": unit_norm,
@@ -197,7 +200,8 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
                 "full_text": jfull,
                 "clean_text": clean_text,
                 "pdf_url": jpdf,
-                "raw": json.dumps(json_data, ensure_ascii=False)
+                "raw": json.dumps(json_data, ensure_ascii=False),
+                "case_type": case_type,
             })
             conn.commit()
             return True, None
@@ -463,7 +467,7 @@ def main(folder_path: str):
             continue
 
         # B 類：判決匯入失敗
-        ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], json_data)
+        ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], court_info.get("case_type"), json_data)
         if not ok:
             fail_count += 1
             log_error(conn, folder_name, json_file.name, "B", err_msg or "ingest_decision failed")
@@ -636,7 +640,7 @@ def main_retry(base_dir: str):
                 print(f"  A 仍失敗：{file_name} - {e}")
                 continue
 
-            ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], json_data)
+            ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], court_info.get("case_type"), json_data)
             if not ok:
                 print(f"  B 仍失敗：{file_name} - {err_msg}")
                 continue

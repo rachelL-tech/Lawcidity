@@ -15,7 +15,7 @@ CREATE TABLE court_units (
   unit_norm  TEXT NOT NULL,  -- 詳細到：臺灣新北地方法院三重簡易庭
   root_norm  TEXT NOT NULL,  -- 聚合層級：臺灣新北地方法院 / 臺灣高等法院 / 最高法院
 
-  level      SMALLINT,       -- 1=最高 2=高院 3=地院 4=簡易庭/分院
+  level      SMALLINT,       -- 1=最高 2=高院 3=地院 4=簡易庭
   county     TEXT,           -- 縣市（例：新北市）
   district   TEXT,           -- 區（例：三重區）
   address    TEXT,           -- 地址（可後補）
@@ -41,7 +41,6 @@ CREATE TABLE decisions (
   id             BIGSERIAL PRIMARY KEY,
 
   -- ★ 自然鍵：unit_norm 精確到分院/簡易庭，避免不同分院同號判決互蓋
-  --   已匯入判決：unit_norm = court_units.unit_norm（如「臺灣高等法院臺南分院」）
   --   最高法院 placeholder：unit_norm = '最高法院'
   unit_norm       TEXT NOT NULL,
   court_root_norm TEXT NOT NULL,     -- 聚合層級（顯示/篩選）：臺灣高等法院 / 最高法院
