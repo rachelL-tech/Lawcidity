@@ -83,33 +83,38 @@ CREATE INDEX decisions_title_trgm      ON decisions USING GIN (title gin_trgm_op
 
 
 -- =========================
--- 3) 最高法院會議決議
---    自然鍵：(jyear, seq_no, court_type)
+-- 3) 裁判外權威資料（會議決議、釋字、法律座談會等）
+--    auth_type 慣用值（開放文字，不用 ENUM，未來可直接新增）：
+--      'resolution'     最高法院民事/刑事庭會議決議
+--      'grand_interp'   司法院大法官釋字
+--      'conference'     法律座談會（高等法院/高等行政法院/司法院）
+--      'agency_opinion' 研審小組意見
+--    auth_key 自然鍵範例：'民事庭|77|9'、'釋字|144'、'高等法院|111|21'
 -- =========================
-CREATE TABLE resolutions (
-  id          BIGSERIAL PRIMARY KEY,
+CREATE TABLE authorities (
+  id         BIGSERIAL PRIMARY KEY,
+  auth_type  TEXT NOT NULL,
+  auth_key   TEXT NOT NULL,   -- 自然鍵
+  display    TEXT,            -- 顯示用完整名稱
+  meta       JSONB,           -- 備用結構化欄位
+  created_at TIMESTAMPTZ DEFAULT now(),
 
-  jyear       SMALLINT NOT NULL,
-  seq_no      SMALLINT NOT NULL,
-  court_type  TEXT NOT NULL,  -- '民事庭' | '刑事庭' | '民刑事庭總會' 等
-  title       TEXT,           -- 完整標題，如「最高法院77年度第9次民事庭會議決議」
-
-  created_at  TIMESTAMPTZ DEFAULT now()
+  UNIQUE (auth_type, auth_key)
 );
 
-CREATE UNIQUE INDEX resolutions_natural_key ON resolutions(jyear, seq_no, court_type);
+CREATE INDEX authorities_type_idx ON authorities(auth_type);
 
 
 -- =========================
 -- 4) 引用邊（source -> target）
---    target 為判決（target_id）或會議決議（target_resolution_id），擇一非 NULL
+--    target 為判決（target_id）或裁判外權威（target_authority_id），擇一非 NULL
 -- =========================
 CREATE TABLE citations (
   id          BIGSERIAL PRIMARY KEY,
 
-  source_id            BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-  target_id            BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
-  target_resolution_id BIGINT          REFERENCES resolutions(id) ON DELETE CASCADE,
+  source_id          BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  target_id          BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
+  target_authority_id BIGINT         REFERENCES authorities(id) ON DELETE CASCADE,
 
   raw_match   TEXT NOT NULL,
   match_start INT,    -- 在 source.clean_text 的起點（PDF 折行無法定位時為 NULL）
@@ -119,19 +124,31 @@ CREATE TABLE citations (
   created_at  TIMESTAMPTZ DEFAULT now(),
 
   CONSTRAINT citations_target_check CHECK (
-    (target_id IS NOT NULL AND target_resolution_id IS NULL) OR
-    (target_id IS NULL     AND target_resolution_id IS NOT NULL)
+    num_nonnulls(target_id, target_authority_id) = 1
   )
 );
 
--- 去重（PostgreSQL unique index 把 NULL 視為各不相同，
---       match_start IS NULL 的列不受保護，由程式層防重）
-CREATE UNIQUE INDEX citations_uniq ON citations(source_id, target_id, match_start);
-CREATE UNIQUE INDEX citations_resolution_uniq ON citations(source_id, target_resolution_id, match_start);
+-- 判決引用去重（match_start IS NOT NULL）
+CREATE UNIQUE INDEX citations_uniq
+  ON citations(source_id, target_id, match_start);
 
-CREATE INDEX citations_target_idx     ON citations(target_id);
-CREATE INDEX citations_source_idx     ON citations(source_id);
-CREATE INDEX citations_resolution_idx ON citations(target_resolution_id);
+-- authority 引用去重（match_start IS NOT NULL）
+CREATE UNIQUE INDEX citations_authority_uniq
+  ON citations(source_id, target_authority_id, match_start);
+
+-- match_start IS NULL 去重用 partial unique index
+-- （避免同一 source + target + raw_match 的 NULL 列重複堆疊）
+CREATE UNIQUE INDEX citations_null_match_decision_uniq
+  ON citations(source_id, target_id, raw_match)
+  WHERE match_start IS NULL;
+
+CREATE UNIQUE INDEX citations_null_match_authority_uniq
+  ON citations(source_id, target_authority_id, raw_match)
+  WHERE match_start IS NULL;
+
+CREATE INDEX citations_target_idx    ON citations(target_id);
+CREATE INDEX citations_source_idx    ON citations(source_id);
+CREATE INDEX citations_authority_idx ON citations(target_authority_id);
 
 
 -- =========================
