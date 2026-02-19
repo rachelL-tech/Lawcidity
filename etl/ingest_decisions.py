@@ -302,7 +302,7 @@ def upsert_authority(conn, auth_type: str, auth_key: str, display: Optional[str]
         return None
 
 
-def ingest_citations(conn, source_id: int, clean_text: str) -> tuple:
+def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str = None) -> tuple:
     """
     從 clean_text 抽取所有引用，寫入 citations 表。
     採增量 upsert：同一 (source, target, match_start) 衝突時 UPDATE snippet，
@@ -313,11 +313,12 @@ def ingest_citations(conn, source_id: int, clean_text: str) -> tuple:
         conn: DB 連線
         source_id: 來源判決的 decisions.id
         clean_text: clean_judgment_text() 處理後的全文
+        court_root_norm: 來源判決的法院 root_norm，用於解析「本院」引用
 
     Returns:
         (成功寫入/更新的 citation 數量, 錯誤訊息清單)
     """
-    raw_citations = extract_citations(clean_text)
+    raw_citations = extract_citations(clean_text, court_root_norm=court_root_norm)
     inserted = 0
     errors = []
 
@@ -501,7 +502,7 @@ def main(folder_path: str):
                         source_id_row = row[0]
 
                 if source_id_row:
-                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text)
+                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text, court_root_norm=court_info["root_norm"])
                     if n > 0:
                         print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
                     # D 類：citation 寫入失敗
@@ -668,7 +669,7 @@ def main_retry(base_dir: str):
                     })
                     row = cur.fetchone()
                 if row:
-                    n, cite_errors = ingest_citations(conn, row[0], clean_text)
+                    n, cite_errors = ingest_citations(conn, row[0], clean_text, court_root_norm=court_info["root_norm"])
                     if cite_errors:
                         print(f"  D 仍有錯：{file_name} - {cite_errors[0]}")
                         continue
