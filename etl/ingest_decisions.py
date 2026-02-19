@@ -475,6 +475,10 @@ def main(folder_path: str):
             success_count += 1
 
             # 同步抽取 citations（用 clean_text，offset 對應 clean_text）
+            # 憲法法庭判決不作為來源，跳過 citation 抽取
+            if court_info["unit_norm"] == "憲法法庭":
+                continue
+
             jfull = json_data.get("JFULL", "") or ""
             if jfull:
                 clean_text = clean_judgment_text(jfull)
