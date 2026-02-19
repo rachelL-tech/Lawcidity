@@ -458,14 +458,14 @@ _PARA_START_RE = re.compile(
 )
 
 # 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」「惟查」「惟依」
-#             「再者」「所謂」「另」「按」（行首）
+#             「再者」「所謂」「另」「按」（行首）、「惟」（行首，後不跟按/查/依）
 # 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、㈠、⑴ 等）
 # \u3200-\u32ff：Enclosed CJK（㈠㈡…㊿），出現於 \r\n 與關鍵字之間
 # \u2460-\u24ff：Enclosed Alphanumerics（①②…、⑴⑵…），處理附表內「。 ⑴按」格式
 # group(1) = 關鍵字起始位置（用於 actual_start）
 _SUB_CLAUSE_RE = re.compile(
     r'(?:(?:。|\r\n|[：:])[\uf000-\uffff\u3000-\u303f\u3200-\u32ff\u2460-\u24ff\t 　]{0,6})'  # 加：[：:] 邊界（修：：　　按 格式）
-    r'((?:再|復|又|次|末|且)按|惟(?:按|查|依)|又(?!按)|再者|所謂|另(?![行有外附])|按(?!照))'  # 加：惟查、惟依
+    r'((?:再|復|又|次|末|且)按|惟(?:按|查|依)?|又(?!按)|再者|所謂|另(?![行有外附])|按(?!照))'  # 修：惟(?:按|查|依)? 支援裸「惟」行首
     r'[：:，,「]?'
 )
 
@@ -488,20 +488,46 @@ _EVIDENCE_CITE_RE = re.compile(
     r'[（( ](?:見)?(?:本院|偵查|原審|審理|上訴|抗告).{0,5}卷'
 )
 
-# 引用收尾標記：任何這些出現在 FP pattern 之前，代表引用已合法結束，不過濾
-_CITE_CLOSING_RE = re.compile(r'[）)。]|意旨|參照|見解|裁定意旨|判決意旨')
+# 引用收尾標記：出現在 FP pattern 之前，代表引用已合法結束，不過濾
+# 只允許有意義的引用收尾詞（意旨/參照/見解）或句號
+# ★ 不包含裸 ）/）：避免「（下稱某某）」的右括號被誤認為引用收尾
+_CITE_CLOSING_RE = re.compile(r'意旨|參照|見解|裁定意旨|判決意旨|。')
+
+
+# =========================
+# 段落結構：當事人陳述段落 vs 法院論斷段落（用於 FP 過濾）
+# =========================
+
+# 當事人陳述段落起頭：「三、原告起訴主張及聲明：」「四、上訴人主張略以：」等
+# .{0,30}：允許段號後有少量說明文字，再接關鍵詞（如「四、上訴人對原判決上訴，主張略以：」）
+_PARTY_SECTION_RE = re.compile(
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+'
+    r'[、：,，].{0,30}'
+    r'(?:原告(?:起訴)?主張|被告(?:答辯|抗辯)?|抗告意旨|上訴意旨|主張略以|被告則以|兩造不爭)'
+)
+
+# 法院論斷段落起頭：「五、本院之判斷：」「四、本院查：」等
+_COURT_SECTION_RE = re.compile(
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+'
+    r'[、：,，].{0,10}'
+    r'(?:本院(?:之|的)?判斷|本院查|本院認為|惟查|經查)'
+)
 
 
 def _is_false_positive_citation(processed: str, match_end: int) -> bool:
     """
-    判斷此 citation 是否為 false positive（前案程序史 或 卷證附件引用）。
+    判斷此 citation 是否為 false positive。
 
-    統一套「收尾標記前才算」邏輯：
-    若 FP 模式在 match_end 後 50 字內命中，且命中點之前沒有引用收尾標記 → False positive。
-    例：
-      「號刑事判決（見本院卷第357頁）」 → 無收尾 → 過濾 ✓
-      「號判決意旨參照）。查...（本院卷第71頁）」→ ） 先出現 → 不過濾 ✓
-      「號裁定參照）。本件...裁定所載」 → ） 先出現 → 不過濾 ✓
+    Check 1：前案程序史 / 卷證附件引用
+      若 FP 模式在 match_end 後 50 字內命中，且命中點之前沒有引用收尾標記 → FP。
+      收尾標記：意旨/參照/見解（裸 ）不算，避免「（下稱xxx）」觸發誤判）。
+      例：
+        「號民事裁定（下稱系爭裁定）駁回上訴確定在案」→ 無收尾 → 過濾 ✓
+        「號判決意旨參照）。查...（本院卷第71頁）」 → 意旨 先出現 → 不過濾 ✓
+
+    Check 2：段落結構（當事人陳述段落）
+      往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
+      而非法院論斷（本院判斷/本院查等）→ FP。
     """
     after = processed[match_end: match_end + 50]
 
@@ -512,13 +538,26 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
             if not _CITE_CLOSING_RE.search(before_fp):
                 return True
 
+    # Check 2：段落結構
+    window = processed[max(0, match_end - 3000): match_end]
+    last_party = None
+    for m in _PARTY_SECTION_RE.finditer(window):
+        last_party = m
+    last_court = None
+    for m in _COURT_SECTION_RE.finditer(window):
+        last_court = m
+    if last_party is not None:
+        if last_court is None or last_party.start() > last_court.start():
+            return True
+
     return False
 
 
 # authority citation 後允許接的 trailing text（Pass 2 look_back 推進用）
-# 允許以決議/研討結果/解釋結尾，不強制參照/）
+# 允許以決議/研討結果/解釋理由/解釋結尾，不強制參照/）
 # 字元集而非詞組，避免漏網任意排列組合
-_AUTH_TRAIL_RE = re.compile(r'[意旨參照解釋研討結決議裁判、，。 \t　）)]{0,30}')
+# 加：果（研討結「果」）、理、由（解釋「理由」）
+_AUTH_TRAIL_RE = re.compile(r'[意旨參照解釋研討結果決議裁判理由、，。 \t　）)]{0,30}')
 
 # 引用收尾的「參照」短語（向後 boundary 用，decision 模式）
 # 優先於裸 ）搜尋，解決 resolution 後 （一）/（1）誤截和截太遠兩個問題
@@ -647,7 +686,8 @@ def extract_snippet(
 
     # Pass 2: authority citations in look_back（決議、釋字、座談會，不被 ANY_COURT_CITATION 匹配）
     # 允許 match 後接決議/研討結果/解釋等 trailing text，不強制參照/）結尾
-    in_lb_start2 = actual_start - look_back_start
+    # ★ 多往前 80 字：捕捉 actual_start 落在 authority citation 中間的情況（hard_cut 場景）
+    in_lb_start2 = max(0, actual_start - look_back_start - 80)
     for auth_re in (RESOLUTION_RE, GRAND_INTERP_RE, CONFERENCE_RE):
         for m in auth_re.finditer(look_back, in_lb_start2):
             end_pos = look_back_start + m.end()
@@ -655,6 +695,11 @@ def extract_snippet(
             tail = _AUTH_TRAIL_RE.match(text, end_pos)
             if tail and tail.end() > end_pos:
                 end_pos = tail.end()
+            # ★ 同一句內的 authority citation：end_pos 到 match_start 之間無句號/換行
+            #   → 與 target citation 同一子句，不推進 actual_start（避免推過頭後只剩連接詞）
+            between = text[end_pos: match_start]
+            if '。' not in between and '\r\n' not in between:
+                continue
             while end_pos < match_start and text[end_pos] in '。\r\n \t　':
                 end_pos += 1
             if end_pos < match_start:

@@ -185,3 +185,96 @@ def test_evidence_exhibit_filtered():
     assert len(decision_results) == 0, (
         f"卷證附件引用不應產生 decision citation，但得到：{decision_results}"
     )
+
+
+# ─── Case 11：裸「惟」子條款起頭（不接按/查/依）─────────────────────────────────
+
+def test_bare_wei_sub_clause():
+    """惟（不接按/查/依）應被辨識為子條款起頭，snippet 從「惟」開始"""
+    text = (
+        "一、按某某法律說明如下。\r\n"
+        "惟行為人若具備責任能力，被害人仍得請求損害賠償。"
+        "最高法院99年度台上字第1號判決意旨參照）。\r\n"
+        "二、被告行為..."
+    )
+    start, end = _pos(text, "最高法院99年度台上字第1號")
+    snip = extract_snippet(text, start, end)
+    assert "惟行為人若" in snip
+    assert "二、被告行為" not in snip
+
+
+# ─── Case 12：釋字與 target 同句，Pass 2 不推進 actual_start ──────────────────
+
+def test_grand_interp_same_clause_no_advance():
+    """
+    釋字與 target citation 同一子句（之間無句號/換行），
+    actual_start 不應推進到釋字之後（避免只剩「及最高法院…」）。
+    """
+    text = (
+        "按某法律規定。\r\n"
+        "又依司法院大法官釋字第775號解釋及"
+        "最高法院110年度台上大字第5660號裁定意旨，自應認定如此。\r\n"
+        "二、..."
+    )
+    start, end = _pos(text, "最高法院110年度台上大字第5660號")
+    snip = extract_snippet(text, start, end)
+    # 同句 guard → actual_start 留在「又依」→ snippet 包含釋字
+    assert "釋字第775號" in snip
+    assert "又依" in snip
+
+
+# ─── Case 13：座談會「研討結果參照）。」完整吸收 ─────────────────────────────────
+
+def test_conference_result_trail_absorbed():
+    """
+    座談會 trailing「研討結果參照）。」應被 _AUTH_TRAIL_RE 完整吸收，
+    不應以「果參照）。」截斷開頭。
+    """
+    text = (
+        "按某法律規定。\r\n"
+        "臺灣高等法院暨所屬法院112年法律座談會刑事類提案第3號研討結果參照）。"
+        "最高法院96年度台上字第3409號判決意旨參照）。\r\n"
+        "二、..."
+    )
+    start, end = _pos(text, "最高法院96年度台上字第3409號")
+    snip = extract_snippet(text, start, end)
+    # 修復前：_AUTH_TRAIL_RE 在「果」停下 → snippet 以「果參照）。最高法院…」開頭
+    assert not snip.startswith("果")
+    assert "判決意旨參照）" in snip
+
+
+# ─── Case 14：原告主張段落 citation 應被過濾為 FP ─────────────────────────────────
+
+def test_party_section_citation_filtered():
+    """
+    當事人陳述段落（一、原告主張：…）中的 citation 應被過濾，
+    不產生 decision citation。
+    """
+    text = (
+        "一、原告主張：按法律關係不明確，原告有即受確認判決之法律上利益，"
+        "最高法院42年台上字第1031號判例參照。\r\n"
+        "二、本院之判斷：經查..."
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"原告主張段落不應產生 decision citation，但得到：{decision_results}"
+    )
+
+
+# ─── Case 15：本院判斷段落 citation 不應被過濾 ────────────────────────────────────
+
+def test_court_section_citation_not_filtered():
+    """
+    法院論斷段落（二、本院之判斷：…）中的 citation 不應被過濾。
+    """
+    text = (
+        "一、原告主張：略以...\r\n"
+        "二、本院之判斷：按法律關係不明確，"
+        "最高法院42年台上字第1031號判例參照。"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1, (
+        f"本院判斷段落應保留 1 筆 decision citation，但得到 {len(decision_results)} 筆"
+    )
