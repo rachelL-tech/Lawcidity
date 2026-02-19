@@ -268,20 +268,21 @@ def extract_citations(
             abbr = ABBR_CITATION.match(processed, pos)
             if abbr:
                 if current_court in target_courts:
-                    # group(0) = 「、114年度台抗字第310號」，strip 掉開頭分隔符號
-                    a_raw = abbr.group(0)[1:].lstrip()
-                    results.append(_make_result(
-                        court=current_court,
-                        raw_match=a_raw,
-                        jyear_str=abbr.group(1),
-                        jcase_raw=abbr.group(2),
-                        jno_str=abbr.group(3),
-                        clean_text=clean_text,
-                        processed=processed,
-                        fallback_start=abbr.start(1),  # 年份起點，跳過分隔符
-                        fallback_end=abbr.end(),
-                        authority_mode=(current_court == '憲法法庭'),
-                    ))
+                    if not _is_false_positive_citation(processed, abbr.end()):
+                        # group(0) = 「、114年度台抗字第310號」，strip 掉開頭分隔符號
+                        a_raw = abbr.group(0)[1:].lstrip()
+                        results.append(_make_result(
+                            court=current_court,
+                            raw_match=a_raw,
+                            jyear_str=abbr.group(1),
+                            jcase_raw=abbr.group(2),
+                            jno_str=abbr.group(3),
+                            clean_text=clean_text,
+                            processed=processed,
+                            fallback_start=abbr.start(1),  # 年份起點，跳過分隔符
+                            fallback_end=abbr.end(),
+                            authority_mode=(current_court == '憲法法庭'),
+                        ))
                 pos = abbr.end()
                 continue
 
@@ -300,6 +301,10 @@ def extract_citations(
                 if '參' not in (ctx_before + ctx_after) and '見' not in (ctx_before + ctx_after):
                     pos = full.end()
                     continue
+            # False positive 過濾：前案程序史 / 卷證附件引用
+            if not is_const_court and _is_false_positive_citation(processed, full.end()):
+                pos = full.end()
+                continue
             results.append(_make_result(
                 court=current_court,
                 raw_match=full.group(0),
@@ -452,7 +457,7 @@ _PARA_START_RE = re.compile(
     r')'                     # 關閉 lookahead
 )
 
-# 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」
+# 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」「惟查」「惟依」
 #             「再者」「所謂」「另」「按」（行首）
 # 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、㈠、⑴ 等）
 # \u3200-\u32ff：Enclosed CJK（㈠㈡…㊿），出現於 \r\n 與關鍵字之間
@@ -460,9 +465,55 @@ _PARA_START_RE = re.compile(
 # group(1) = 關鍵字起始位置（用於 actual_start）
 _SUB_CLAUSE_RE = re.compile(
     r'(?:(?:。|\r\n|[：:])[\uf000-\uffff\u3000-\u303f\u3200-\u32ff\u2460-\u24ff\t 　]{0,6})'  # 加：[：:] 邊界（修：：　　按 格式）
-    r'((?:再|復|又|次|末|且|惟)按|又(?!按)|再者|所謂|另(?![行有外附])|按(?!照))'              # 加：又(?!按) 獨立關鍵字
+    r'((?:再|復|又|次|末|且)按|惟(?:按|查|依)|又(?!按)|再者|所謂|另(?![行有外附])|按(?!照))'  # 加：惟查、惟依
     r'[：:，,「]?'
 )
+
+# =========================
+# False positive 過濾（程序史引用、證據附件引用）
+# =========================
+
+# 前案程序史：「駁回確定」「駁回上訴確定」「判決上訴駁回」「裁判確定處N年」等
+# 這些引用是描述被告/原告前案結果，不作為法律見解引用
+_PRIOR_CASE_RE = re.compile(
+    r'駁回(?:上訴|抗告)?確定'           # 駁回確定 / 駁回上訴確定 / 駁回抗告確定
+    r'|上訴(?:駁回|不受理)'             # 上訴駁回（後通常接確定）
+    r'|判決上訴駁回'                    # 判決上訴駁回（確定）
+    r'|裁判確定(?:處\d|，|。)'          # 裁判確定處N年 / 裁判確定，
+    r'|(?:判決|裁定)所載'               # 引用判決/裁定的記載內容（非見解）
+)
+
+# 卷證附件引用：「（見本院卷」「 本院卷一第」等——此時是把判決當作卷證提出，非引用法律見解
+_EVIDENCE_CITE_RE = re.compile(
+    r'[（( ](?:見)?(?:本院|偵查|原審|審理|上訴|抗告).{0,5}卷'
+)
+
+# 引用收尾標記：任何這些出現在 FP pattern 之前，代表引用已合法結束，不過濾
+_CITE_CLOSING_RE = re.compile(r'[）)。]|意旨|參照|見解|裁定意旨|判決意旨')
+
+
+def _is_false_positive_citation(processed: str, match_end: int) -> bool:
+    """
+    判斷此 citation 是否為 false positive（前案程序史 或 卷證附件引用）。
+
+    統一套「收尾標記前才算」邏輯：
+    若 FP 模式在 match_end 後 50 字內命中，且命中點之前沒有引用收尾標記 → False positive。
+    例：
+      「號刑事判決（見本院卷第357頁）」 → 無收尾 → 過濾 ✓
+      「號判決意旨參照）。查...（本院卷第71頁）」→ ） 先出現 → 不過濾 ✓
+      「號裁定參照）。本件...裁定所載」 → ） 先出現 → 不過濾 ✓
+    """
+    after = processed[match_end: match_end + 50]
+
+    for pattern in (_PRIOR_CASE_RE, _EVIDENCE_CITE_RE):
+        m = pattern.search(after)
+        if m:
+            before_fp = after[: m.start()]
+            if not _CITE_CLOSING_RE.search(before_fp):
+                return True
+
+    return False
+
 
 # authority citation 後允許接的 trailing text（Pass 2 look_back 推進用）
 # 允許以決議/研討結果/解釋結尾，不強制參照/）

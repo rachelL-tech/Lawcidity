@@ -1,5 +1,5 @@
 """
-tests/test_snippet.py — extract_snippet() 回歸測試
+tests/test_snippet.py — extract_snippet() + extract_citations() 回歸測試
 
 每個 case 來自真實 DB citation，說明當初的 bug 是什麼。
 跑法：python -m pytest tests/test_snippet.py -v
@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, 'etl')
 
 import pytest
-from etl.citation_parser import extract_snippet
+from etl.citation_parser import extract_snippet, extract_citations
 
 
 # ─── 工具 ─────────────────────────────────────────────────────────────────────
@@ -146,3 +146,42 @@ def test_forward_yizhi_paren():
     snip = extract_snippet(text, start, end)
     assert snip.endswith("參照）")
     assert "二、被告行為" not in snip
+
+
+# ─── Case 9：前案程序史（駁回確定）不應產生 citation ─────────────────────────
+
+def test_prior_case_dismissed_filtered():
+    """
+    被告前案歷史敘述（判決上訴駁回確定）不應被計入 citation。
+    刑事判決常見：「並由最高法院XXX號判決上訴駁回確定」。
+    """
+    text = (
+        "被告前因詐欺案件，經臺灣高等法院以108年度上訴字第100號判決後，"
+        "並由最高法院109年度台上字第500號判決上訴駁回確定，"
+        "於109年5月1日執行完畢等情，有前案紀錄表在卷可參。"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"前案程序史不應產生 decision citation，但得到：{decision_results}"
+    )
+
+
+# ─── Case 10：卷證附件引用（見本院卷）不應產生 citation ──────────────────────
+
+def test_evidence_exhibit_filtered():
+    """
+    判決作為卷宗附件提出（見本院卷第N頁）時不應被計入 citation。
+    行政/刑事判決常見：列舉附件時提到最高法院判決。
+    """
+    text = (
+        "肆、兩造不爭之事實：\r\n"
+        "如事實概要欄所述，業據提出臺灣新北地方法院108年度訴字第1060號刑事判決"
+        "（見本院卷第345至348頁）、最高法院110年度台上字第4475號刑事判決"
+        "（見本院卷第357至358頁）、原告113年3月22日申請書為證。"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"卷證附件引用不應產生 decision citation，但得到：{decision_results}"
+    )
