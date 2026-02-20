@@ -76,7 +76,7 @@ def citations(target_id: int):
             cur.execute("""
                 SELECT
                     c.id                 AS citation_id,
-                    src.court_root_norm  AS source_court,
+                    src.unit_norm  AS source_court,
                     src.jyear,
                     src.jcase_norm,
                     src.jno,
@@ -93,7 +93,7 @@ def citations(target_id: int):
                 JOIN decisions src ON c.source_id = src.id
                 LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
                 WHERE c.target_id = %s
-                GROUP BY c.id, src.court_root_norm, src.jyear, src.jcase_norm,
+                GROUP BY c.id, src.unit_norm, src.jyear, src.jcase_norm,
                          src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
             """, (target_id,))
@@ -115,7 +115,7 @@ def authority_citations(authority_id: int):
             cur.execute("""
                 SELECT
                     c.id                 AS citation_id,
-                    src.court_root_norm  AS source_court,
+                    src.unit_norm  AS source_court,
                     src.jyear,
                     src.jcase_norm,
                     src.jno,
@@ -132,7 +132,7 @@ def authority_citations(authority_id: int):
                 JOIN decisions src ON c.source_id = src.id
                 LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
                 WHERE c.target_authority_id = %s
-                GROUP BY c.id, src.court_root_norm, src.jyear, src.jcase_norm,
+                GROUP BY c.id, src.unit_norm, src.jyear, src.jcase_norm,
                          src.jno, src.decision_date
                 ORDER BY src.decision_date DESC NULLS LAST
             """, (authority_id,))

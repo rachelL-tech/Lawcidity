@@ -302,7 +302,7 @@ def upsert_authority(conn, auth_type: str, auth_key: str, display: Optional[str]
         return None
 
 
-def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str = None) -> tuple:
+def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str = None, source_self_key: Optional[tuple] = None) -> tuple:
     """
     從 clean_text 抽取所有引用，寫入 citations 表。
     採增量 upsert：同一 (source, target, match_start) 衝突時 UPDATE snippet，
@@ -318,7 +318,7 @@ def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str
     Returns:
         (成功寫入/更新的 citation 數量, 錯誤訊息清單)
     """
-    raw_citations = extract_citations(clean_text, court_root_norm=court_root_norm)
+    raw_citations = extract_citations(clean_text, court_root_norm=court_root_norm, self_key=source_self_key)
     inserted = 0
     errors = []
 
@@ -369,27 +369,30 @@ def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str
                             RETURNING id
                         """, (source_id, target, c["raw_match"], c["snippet"]))
                 else:  # decision
+                    doc_type = c.get("doc_type")
                     if ms is not None:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                              (source_id, target_id, raw_match, match_start, match_end, snippet, doc_type)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (source_id, target_id, match_start) DO UPDATE
                               SET snippet   = EXCLUDED.snippet,
                                   match_end = EXCLUDED.match_end,
-                                  raw_match = EXCLUDED.raw_match
+                                  raw_match = EXCLUDED.raw_match,
+                                  doc_type  = EXCLUDED.doc_type
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"]))
+                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"], doc_type))
                     else:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet)
-                            VALUES (%s, %s, %s, NULL, NULL, %s)
+                              (source_id, target_id, raw_match, match_start, match_end, snippet, doc_type)
+                            VALUES (%s, %s, %s, NULL, NULL, %s, %s)
                             ON CONFLICT (source_id, target_id, raw_match)
                               WHERE match_start IS NULL DO UPDATE
-                              SET snippet = EXCLUDED.snippet
+                              SET snippet   = EXCLUDED.snippet,
+                                  doc_type  = EXCLUDED.doc_type
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], c["snippet"]))
+                        """, (source_id, target, c["raw_match"], c["snippet"], doc_type))
 
                 row = cur.fetchone()
                 if row:
@@ -502,7 +505,14 @@ def main(folder_path: str):
                         source_id_row = row[0]
 
                 if source_id_row:
-                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text, court_root_norm=court_info["root_norm"])
+                    _self_jcase = normalize_jcase(json_data.get("JCASE", ""))
+                    _self_key = (
+                        court_info["unit_norm"].replace('臺', '台'),
+                        int(json_data.get("JYEAR")),
+                        _self_jcase,
+                        int(json_data.get("JNO")),
+                    )
+                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text, court_root_norm=court_info["root_norm"], source_self_key=_self_key)
                     if n > 0:
                         print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
                     # D 類：citation 寫入失敗

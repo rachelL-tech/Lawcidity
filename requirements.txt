@@ -1,3 +1,6 @@
 psycopg[binary]>=3.1.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
+
+citation_id: 102332：應該從「1.按」開始切
+citation_id: 141139：「（二）著作權為15年。」與「（三）商標權」中間有不自然空白，clean_text 不乾淨，而且應該從「⒈行為時」開始切

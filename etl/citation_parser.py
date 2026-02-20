@@ -49,6 +49,7 @@ ANY_COURT_CITATION = re.compile(
     r'(?:(?:刑事|民事|行政)?大法庭)?'
     r'\s*(\d{2,3})\s*年\s*度?\s*'
     r'([\u4e00-\u9fff]{1,10}?)\s*字?\s*第\s*(\d+)\s*號'
+    r'(?:\s*(判決|裁定))?'  # group(5)：文書類型（選擇性）
 )
 
 # 省略法院名的引用（承接前一個 citation 的 current_court）
@@ -58,6 +59,7 @@ ANY_COURT_CITATION = re.compile(
 # 字別改為純 CJK {1,10}?（與 ANY_COURT_CITATION 一致，防止跨引用誤吃數字）
 ABBR_CITATION = re.compile(
     r'[、，及與暨或,]\s*(\d{2,3})\s*年\s*度?\s*([\u4e00-\u9fff]{1,10}?)\s*字?\s*第\s*(\d+)\s*號'
+    r'(?:\s*(判決|裁定))?'  # group(4)：文書類型（選擇性）
 )
 
 # 被引用法院白名單（正規化後）
@@ -108,7 +110,7 @@ TARGET_COURTS: Set[str] = {
 
 # 地方法院引用 guard：號碼後 10 字內需有「參照」或「意旨」才算法律見解引用
 # 地方法院引用雜訊多（犯罪事實、卷宗頁碼等），用此快速濾除
-_CITE_INTENT_RE = re.compile(r'參照|意旨')
+_CITE_INTENT_RE = re.compile(r'參照|意旨|供參')
 
 # 最高法院會議決議：「最高法院77年度第9次民事庭會議決議」
 # 加：本院（source = 最高法院 時自引）
@@ -275,6 +277,7 @@ def _make_result(
     fallback_start: int,
     fallback_end: int,
     authority_mode: bool = False,
+    doc_type: str = None,
 ) -> Dict:
     """
     建構 citation result dict。
@@ -286,15 +289,28 @@ def _make_result(
     """
     jcase_norm = jcase_raw.replace(' ', '').replace('臺', '台')
 
-    orig = re.search(re.escape(raw_match), clean_text)
+    # 計算本次 raw_match 是 processed 中第幾次出現（1-indexed）
+    n_in_proc = len(re.findall(re.escape(raw_match), processed[:fallback_end]))
+
+    # 在 clean_text 找第 n_in_proc 次出現（避免同一 raw_match 多次出現時固定取第一筆）
+    orig = None
+    for _cnt, _m in enumerate(re.finditer(re.escape(raw_match), clean_text), 1):
+        if _cnt == n_in_proc:
+            orig = _m
+            break
+
     if orig:
         match_start = orig.start()
         match_end   = orig.end()
         snippet = extract_snippet(clean_text, match_start, match_end, authority_mode=authority_mode)
     else:
-        # PDF 折行：citation 中間有 \r\n，逐字允許 \s* 重新定位
+        # PDF 折行：citation 中間有 \r\n，逐字允許 \s* 重新定位（同樣取第 N 次）
         flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
-        flex = re.search(flexible, clean_text)
+        flex = None
+        for _cnt, _m in enumerate(re.finditer(flexible, clean_text), 1):
+            if _cnt == n_in_proc:
+                flex = _m
+                break
         if flex:
             match_start = flex.start()
             match_end   = flex.end()
@@ -314,6 +330,7 @@ def _make_result(
         "jyear": int(jyear_str),
         "jcase_norm": jcase_norm,
         "jno": int(jno_str),
+        "doc_type": doc_type,  # 判決 | 裁定 | None（原文未明示）
     }
 
 
@@ -324,6 +341,7 @@ def extract_citations(
     clean_text: str,
     target_courts: Set[str] = TARGET_COURTS,
     court_root_norm: Optional[str] = None,
+    self_key: Optional[tuple] = None,
 ) -> List[Dict]:
     """
     從全文抽取引用判決的 citation（狀態機版）
@@ -407,6 +425,7 @@ def extract_citations(
                             fallback_start=abbr.start(1),  # 年份起點，跳過分隔符
                             fallback_end=abbr.end(),
                             authority_mode=(current_court == '憲法法庭'),
+                            doc_type=abbr.group(4),
                         ))
                 pos = abbr.end()
                 continue
@@ -422,6 +441,15 @@ def extract_citations(
         if current_court == '本院':
             current_court = _normalize_court(court_root_norm) if court_root_norm else None
         if current_court in target_courts:
+            # 自引 guard：跳過與來源判決自然鍵完全相同的 citation（文件頭部誤抓等）
+            if self_key is not None:
+                _jcase_chk = full.group(3).replace(' ', '').replace('臺', '台')
+                if (current_court == self_key[0]
+                        and int(full.group(2)) == self_key[1]
+                        and _jcase_chk == self_key[2]
+                        and int(full.group(4)) == self_key[3]):
+                    pos = full.end()
+                    continue
             # 本院 guard：原始是「本院」時，號碼後 10 字內需有「參照」或「意旨」
             if is_ben_yuan:
                 if not _CITE_INTENT_RE.search(processed[full.end(): full.end() + 10]):
@@ -455,6 +483,7 @@ def extract_citations(
                 fallback_start=full.start(),
                 fallback_end=full.end(),
                 authority_mode=is_const_court,
+                doc_type=full.group(5),
             ))
         pos = full.end()
 
@@ -718,11 +747,13 @@ _SUB_CLAUSE_RE = re.compile(
 # False positive 過濾（程序史引用、證據附件引用）
 # =========================
 
-# 前案程序史：「認定」「確定」「駁回確定」「駁回上訴確定」「判決上訴駁回」「裁判確定處N年」等
+# 前案程序史：「認定」「確定」「廢棄」「發回」「駁回確定」「駁回上訴確定」「判決上訴駁回」「裁判確定處N年」等
 # 這些引用是描述被告/原告前案結果，不作為法律見解引用
 _PRIOR_CASE_RE = re.compile(
     r'認定'                              # 認定犯罪/認定事實（程序史）
-    r'|確定'                             # 裁定/判決已確定在案（程序史）
+    r'|確定'                            # 裁定/判決已確定在案（程序史）
+    r'|廢棄'
+    r'|發回'
     r'|駁回(?:上訴|抗告)?確定'           # 駁回確定 / 駁回上訴確定 / 駁回抗告確定
     r'|上訴(?:駁回|不受理)'             # 上訴駁回（後通常接確定）
     r'|判決上訴駁回'                    # 判決上訴駁回（確定）
@@ -754,7 +785,7 @@ _EVIDENCE_CITE_RE = re.compile(
 # 引用收尾標記：出現在 FP pattern 之前，代表引用已合法結束，不過濾
 # 只允許有意義的引用收尾詞（意旨/參照/見解）或句號
 # ★ 不包含裸 ）/）：避免「（下稱某某）」的右括號被誤認為引用收尾
-_CITE_CLOSING_RE = re.compile(r'意旨|參照|見解|裁定意旨|判決意旨|。')
+_CITE_CLOSING_RE = re.compile(r'意旨|參照|見解|供參|裁定意旨|判決意旨|。')
 
 
 # =========================
@@ -794,7 +825,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
     判斷此 citation 是否為 false positive。
 
     Check 1：前案程序史 / 卷證附件引用
-      若 FP 模式在 match_end 後 30 字內命中，且命中點之前沒有引用收尾標記 → FP。
+      若 FP 模式在 match_end 後 40 字內命中，且命中點之前沒有引用收尾標記 → FP。
       收尾標記：意旨/參照/見解（裸 ）不算，避免「（下稱xxx）」觸發誤判）。
       例：
         「號民事裁定（下稱系爭裁定）駁回上訴確定在案」→ 無收尾 → 過濾 ✓
@@ -804,7 +835,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
       往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
       而非法院論斷（本院判斷/本院查等）→ FP。
     """
-    after = processed[match_end: match_end + 30]
+    after = processed[match_end: match_end + 40]
 
     for pattern in (_PRIOR_CASE_RE, _EVIDENCE_CITE_RE):
         m = pattern.search(after)

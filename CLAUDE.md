@@ -166,13 +166,13 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 - **文件同步**：把本週的 demo 範圍、已知限制、下一步寫回本檔（避免方向散亂）。
 
 ### Phase 2（Week 2–3）：週邊功能 + 流程（2026-02-24 → 2026-03-09）
+- **收藏功能**：可以讓使用者收藏重要的判決。
 - **時間趨勢**：`/api/trends`（按月引用次數、top targets trend）+ 前端基本圖表。
 - **地圖視覺化**：`/api/map`（court_units 座標 + 統計）+ 前端地圖展示與篩選。
-- **擴增案件類型**：納入刑事/行政/家事（資料夾解析、匯入策略、統計呈現）。
 - **批次下載資料**：新增「從網站批次下載壓縮 JSON + 解壓 + 校驗」腳本，讓資料取得可重現。
 
 ### Phase 3（Week 4–6）：除錯、效能、UX 收斂（2026-03-10 → 2026-03-30）
-- **正確性與效能**：ETL 可重跑一致性、搜尋/聚合查詢超時保護、索引調校、資料品質檢查。
+- **正確性與效能**：ETL 可重跑一致性、搜尋/聚合查詢超時保護、索引調校、資料品質檢查、確保api設計符合RESTFUL。
 - **UI/UX 重設計（加分）**：若要學 TypeScript + React，建議放在此 Phase，避免 Week 1–3 變更前端技術棧拖慢交付。
 
 ## 2/23 Demo 目標（已決定）
@@ -185,6 +185,7 @@ unique index：`(decision_id/citation_id, law, article_raw, sub_ref)`
 - **keyword 搜尋 API + 前端搜尋框**：`GET /api/search?q=關鍵字` → OpenSearch 取回命中的 `source_id` → PostgreSQL 聚合 `citations` 產出 rankings；必要時保留 `ILIKE + pg_trgm` 作 fallback/對照。
 - **法條篩選 API**：`GET /api/rankings?law=民法&article=184` → JOIN `decision_reason_statutes`，只顯示引用含指定法條的來源判決的目標排行；`decision_reason_statutes` 已有 191K 筆資料。
 - **來源判決頁螢光筆標示**：`GET /api/citations/{citation_id}` 回傳 source decision + highlight range（match_start/end）+ snippet，前端用 `<mark>` 標示。
+- **收藏功能**：可以讓使用者收藏重要的判決。
 - **時間趨勢**：`GET /api/trends` 每月引用次數、top targets trend。
 - **地圖視覺化**：`GET /api/map` 回傳法院單位座標與統計。
 
