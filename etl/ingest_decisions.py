@@ -540,21 +540,23 @@ def main(folder_path: str):
     print(f"✓ 已寫入 ingest_log：{folder_name}")
 
 
-def main_batch(base_dir: str, keyword: str = "高等法院,民事"):
+def main_batch(base_dir: str, keyword: str = ""):
     """
     批次匯入：掃描 base_dir 下所有符合 keyword 的資料夾
 
     Args:
         base_dir: 例如 "/Users/rachel/Downloads/202511"
-        keyword: 資料夾名稱關鍵字，預設 "高等法院民事"
+        keyword: 逗號分隔關鍵字（AND 條件）；留空則匯入全部資料夾
 
     範例：
         python etl/ingest_decisions.py --batch /Users/rachel/Downloads/202511
         python etl/ingest_decisions.py --batch /Users/rachel/Downloads/202511 高等法院,刑事
     """
     base = Path(base_dir)
-    folders = [f for f in base.iterdir() if f.is_dir() and all(k in f.name for k in keyword.split(","))]
-    print(f"找到 {len(folders)} 個資料夾符合 '{keyword}'")
+    keywords = [k for k in keyword.split(",") if k]  # 空字串 → 不過濾
+    folders = [f for f in base.iterdir() if f.is_dir() and all(k in f.name for k in keywords)]
+    label = f"'{keyword}'" if keywords else "（全部）"
+    print(f"找到 {len(folders)} 個資料夾符合 {label}")
     for folder in sorted(folders):
         print(f"\n{'='*40}")
         print(f"處理：{folder.name}")
@@ -699,7 +701,7 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print("錯誤：--batch 需要指定基底目錄")
             sys.exit(1)
-        keyword = sys.argv[3] if len(sys.argv) > 3 else "高等法院,民事"
+        keyword = sys.argv[3] if len(sys.argv) > 3 else ""
         main_batch(sys.argv[2], keyword)
     elif sys.argv[1] == "--retry":
         if len(sys.argv) < 3:

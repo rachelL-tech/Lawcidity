@@ -176,6 +176,30 @@ CONFERENCE_RE = re.compile(
     r')?'
 )
 
+# 研審小組意見（司法院各廳法律問題研審小組；主要出現於消費者債務清理條例案件）
+#
+# 格式多樣，以「研審小組」+「意見」為雙重錨點，向前吸收上下文：
+#   Option A（年份在前）：民國?XX年...研審小組...意見
+#     group(1) = 年份
+#   Option B（司法院廳開頭）：司法院XX廳...研審小組...意見
+#     group(1) = None（從 raw_match 補）
+#   Option C（高等法院開頭）：高等法院XX年...研審小組...意見
+#     group(1) = None（從 raw_match 補）
+#
+# 中間 filler（≤80字）：吸收研究會期數、號碼、專題名稱、文號等
+# 不跨越句號（\u3002）與換行（\r\n），防止跨句誤吃
+_AGENCY_OPINION_RE = re.compile(
+    r'(?:'
+    r'(?:民國\s*)?(\d{2,3})年'              # Option A：年份開頭
+    r'|司法院[\u4e00-\u9fff]{0,5}廳?'       # Option B：司法院廳開頭
+    r'|(?:臺灣)?高等(?:行政)?法院'           # Option C：高等法院開頭
+    r')'
+    r'[\u4e00-\u9fff\d（）()第號期屆年月日、，\s]{5,80}?'  # 前段內容（允許括號）
+    r'研審小組'
+    r'(?:[\u4e00-\u9fff\d（）()第號期屆年月日、，\s]{0,80}?)?'  # 後段內容（研審小組在中間時）
+    r'(?:研審)?意見'
+)
+
 
 # =========================
 # 預處理
@@ -351,6 +375,7 @@ def extract_citations(
     processed = preprocess_text(clean_text)
     results = []
     current_court: Optional[str] = None
+    chain_is_ben_yuan: bool = False  # 目前 chain 是否由「本院」具名引用發起
     pos = 0
 
     while pos < len(processed):
@@ -359,6 +384,11 @@ def extract_citations(
             abbr = ABBR_CITATION.match(processed, pos)
             if abbr:
                 if current_court in target_courts:
+                    # 本院 chain guard：本院鏈中的省略引用也需 10 字內有「參照」或「意旨」
+                    if chain_is_ben_yuan:
+                        if not _CITE_INTENT_RE.search(processed[abbr.end(): abbr.end() + 10]):
+                            pos = abbr.end()
+                            continue
                     if '地方法院' in (current_court or ''):
                         if not _CITE_INTENT_RE.search(processed[abbr.end(): abbr.end() + 10]):
                             pos = abbr.end()
@@ -387,9 +417,16 @@ def extract_citations(
             break
 
         current_court = _normalize_court(full.group(1))
+        is_ben_yuan = (current_court == '本院')
+        chain_is_ben_yuan = is_ben_yuan  # 新 chain 開始，重設 flag
         if current_court == '本院':
             current_court = _normalize_court(court_root_norm) if court_root_norm else None
         if current_court in target_courts:
+            # 本院 guard：原始是「本院」時，號碼後 10 字內需有「參照」或「意旨」
+            if is_ben_yuan:
+                if not _CITE_INTENT_RE.search(processed[full.end(): full.end() + 10]):
+                    pos = full.end()
+                    continue
             # 地方法院 guard：號碼後 10 字內需有「參照」或「意旨」
             if '地方法院' in (current_court or ''):
                 if not _CITE_INTENT_RE.search(processed[full.end(): full.end() + 10]):
@@ -591,6 +628,57 @@ def extract_citations(
             "snippet": snippet,
         })
 
+    # 掃描研審小組意見 → authority (agency_opinion)（獨立掃描）
+    for m in _AGENCY_OPINION_RE.finditer(processed):
+        raw_match = m.group(0)
+
+        # 提取年份：Option A 有 group(1)；Option B/C 從 raw_match 補
+        year_str = m.group(1)
+        if not year_str:
+            yr_m = re.search(r'(\d{2,3})年', raw_match)
+            year_str = yr_m.group(1) if yr_m else None
+        year = int(year_str) if year_str else None
+
+        # 從 raw_match 提取最後一個「第N號」作為案號（通常是研究會案號）
+        no_matches = re.findall(r'第(\d+)號', raw_match)
+        no = no_matches[-1] if no_matches else None
+
+        auth_key = '研審小組'
+        if year:
+            auth_key += f'|{year}'
+        if no:
+            auth_key += f'|{no}'
+
+        display = raw_match[:60] + ('…' if len(raw_match) > 60 else '')
+
+        orig = re.search(re.escape(raw_match), clean_text)
+        if orig:
+            match_start = orig.start()
+            match_end = orig.end()
+            snippet = extract_snippet(clean_text, match_start, match_end)
+        else:
+            flexible = r'[\s\r\n]*'.join(re.escape(c) for c in raw_match)
+            flex = re.search(flexible, clean_text)
+            if flex:
+                match_start = flex.start()
+                match_end = flex.end()
+                snippet = extract_snippet(clean_text, match_start, match_end)
+            else:
+                match_start = None
+                match_end = None
+                snippet = extract_snippet(processed, m.start(), m.end())
+
+        results.append({
+            "citation_type": "authority",
+            "auth_type": "agency_opinion",
+            "auth_key": auth_key,
+            "display": display,
+            "raw_match": raw_match,
+            "match_start": match_start,
+            "match_end": match_end,
+            "snippet": snippet,
+        })
+
     return results
 
 
@@ -630,10 +718,12 @@ _SUB_CLAUSE_RE = re.compile(
 # False positive 過濾（程序史引用、證據附件引用）
 # =========================
 
-# 前案程序史：「駁回確定」「駁回上訴確定」「判決上訴駁回」「裁判確定處N年」等
+# 前案程序史：「認定」「確定」「駁回確定」「駁回上訴確定」「判決上訴駁回」「裁判確定處N年」等
 # 這些引用是描述被告/原告前案結果，不作為法律見解引用
 _PRIOR_CASE_RE = re.compile(
-    r'駁回(?:上訴|抗告)?確定'           # 駁回確定 / 駁回上訴確定 / 駁回抗告確定
+    r'認定'                              # 認定犯罪/認定事實（程序史）
+    r'|確定'                             # 裁定/判決已確定在案（程序史）
+    r'|駁回(?:上訴|抗告)?確定'           # 駁回確定 / 駁回上訴確定 / 駁回抗告確定
     r'|上訴(?:駁回|不受理)'             # 上訴駁回（後通常接確定）
     r'|判決上訴駁回'                    # 判決上訴駁回（確定）
     r'|裁判確定(?:處\d|，|。)'          # 裁判確定處N年 / 裁判確定，
@@ -644,7 +734,7 @@ _PRIOR_CASE_RE = re.compile(
 # ★ 順序重要：更長的 pattern 放前面，避免被短 pattern 截斷
 _EVIDENCE_CITE_RE = re.compile(
     r'[（( ](?:見)?(?:本院|偵查|原審|審理|上訴|抗告).{0,5}卷'  # （本院卷 / （見偵查卷
-    r'|見本院卷'                          # 無括號版「見本院卷」
+    r'|見本院'                          # 無括號版「（見本院X年度X字第X號第X頁」
     r'|見外放'                            # 見外放上開判決書
     r'|刑事(?:卷宗?|判決書)'             # 刑事卷 / 刑事卷宗 / 刑事判決書
     r'|偵(?:查影卷|字卷|查卷)'           # 偵查影卷 / 偵字卷
@@ -656,6 +746,8 @@ _EVIDENCE_CITE_RE = re.compile(
     r'|光碟'
     r'|在卷(?:可[稽查])?'               # 在卷可稽
     r'|可稽'
+    r'|足稽'
+    r'|可佐'
     r'|為證[，。；\s]'                   # 以…為證
 )
 
@@ -682,7 +774,7 @@ _PARTY_SECTION_RE = re.compile(
     r'(?:原告(?:起訴|之|的)?主張|被告(?:答辯|抗辯)?|抗告意旨|上訴意旨'
     r'|主張略以|答辯略以|抗辯略以|聲請人主張|反訴主張|反請求主張'
     r'|被告則以|兩造不爭|不爭之事實|主張要旨|答辯要旨'
-    r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以)'
+    r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以|聲請再審意旨略以)'
     # B. 無節次符號
     r'|(?:本件)?(?:聲請|上訴|抗告)意旨略(?:以|謂)'
 )
@@ -702,7 +794,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
     判斷此 citation 是否為 false positive。
 
     Check 1：前案程序史 / 卷證附件引用
-      若 FP 模式在 match_end 後 50 字內命中，且命中點之前沒有引用收尾標記 → FP。
+      若 FP 模式在 match_end 後 30 字內命中，且命中點之前沒有引用收尾標記 → FP。
       收尾標記：意旨/參照/見解（裸 ）不算，避免「（下稱xxx）」觸發誤判）。
       例：
         「號民事裁定（下稱系爭裁定）駁回上訴確定在案」→ 無收尾 → 過濾 ✓
@@ -712,7 +804,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
       往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
       而非法院論斷（本院判斷/本院查等）→ FP。
     """
-    after = processed[match_end: match_end + 50]
+    after = processed[match_end: match_end + 30]
 
     for pattern in (_PRIOR_CASE_RE, _EVIDENCE_CITE_RE):
         m = pattern.search(after)
