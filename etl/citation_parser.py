@@ -780,6 +780,7 @@ _EVIDENCE_CITE_RE = re.compile(
     r'|足稽'
     r'|可佐'
     r'|為證[，。；\s]'                   # 以…為證
+    r'|第\d+(?:至\d+)?頁'               # 見…第N頁 / 第N頁至M頁（卷宗頁碼引用，頁碼後無需括號）
 )
 
 # 引用收尾標記：出現在 FP pattern 之前，代表引用已合法結束，不過濾
@@ -807,7 +808,7 @@ _PARTY_SECTION_RE = re.compile(
     r'|被告則以|兩造不爭|不爭之事實|主張要旨|答辯要旨'
     r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以|聲請再審意旨略以)'
     # B. 無節次符號
-    r'|(?:本件)?(?:聲請|上訴|抗告)意旨略(?:以|謂)'
+    r'|(?:本件)?(?:聲請(?:再審)?|上訴|抗告)意旨略(?:以|謂)'
 )
 
 # 法院論斷段落起頭：「五、本院之判斷：」「四、得心證理由：」等
@@ -998,6 +999,10 @@ def extract_snippet(
     in_lb_start2 = max(0, actual_start - look_back_start - 80)
     for auth_re in (RESOLUTION_RE, ADMIN_RESOLUTION_RE, GRAND_INTERP_RE, CONFERENCE_RE):
         for m in auth_re.finditer(look_back, in_lb_start2):
+            # ★ authority cite 已在當前 snippet 窗口內（start >= actual_start）→ 跳過
+            #   此時它是段落論述的一部分，不應用來推進 actual_start
+            if look_back_start + m.start() >= actual_start:
+                continue
             end_pos = look_back_start + m.end()
             # 吸收 match 後的 trailing text（意旨、參照、解釋、研討結果 等，最多 30 字）
             tail = _AUTH_TRAIL_RE.match(text, end_pos)
