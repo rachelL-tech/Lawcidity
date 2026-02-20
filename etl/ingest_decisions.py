@@ -507,7 +507,7 @@ def main(folder_path: str):
                 if source_id_row:
                     _self_jcase = normalize_jcase(json_data.get("JCASE", ""))
                     _self_key = (
-                        court_info["unit_norm"].replace('臺', '台'),
+                        court_info["root_norm"].replace('臺', '台'),  # root_norm = court_root_norm，與 extract_citations 內 current_court 一致
                         int(json_data.get("JYEAR")),
                         _self_jcase,
                         int(json_data.get("JNO")),
@@ -681,7 +681,13 @@ def main_retry(base_dir: str):
                     })
                     row = cur.fetchone()
                 if row:
-                    n, cite_errors = ingest_citations(conn, row[0], clean_text, court_root_norm=court_info["root_norm"])
+                    _self_key_retry = (
+                        court_info["root_norm"].replace('臺', '台'),
+                        int(json_data.get("JYEAR")),
+                        normalize_jcase(json_data.get("JCASE", "")),
+                        int(json_data.get("JNO")),
+                    )
+                    n, cite_errors = ingest_citations(conn, row[0], clean_text, court_root_norm=court_info["root_norm"], source_self_key=_self_key_retry)
                     if cite_errors:
                         print(f"  D 仍有錯：{file_name} - {cite_errors[0]}")
                         continue
