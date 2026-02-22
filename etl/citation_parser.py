@@ -49,7 +49,7 @@ ANY_COURT_CITATION = re.compile(
     r'(?:(?:刑事|民事|行政)?大法庭)?'
     r'\s*(\d{2,3})\s*年\s*度?\s*'
     r'([\u4e00-\u9fff]{1,10}?)\s*字?\s*第\s*(\d+)\s*號'
-    r'(?:\s*(判決|裁定))?'  # group(5)：文書類型（選擇性）
+    r'(?:\s*(?:民事|刑事|行政)?\s*(判決|裁定|判例|裁判|理由))?'  # group(5)：文書類型（選擇性）
 )
 
 # 省略法院名的引用（承接前一個 citation 的 current_court）
@@ -59,7 +59,7 @@ ANY_COURT_CITATION = re.compile(
 # 字別改為純 CJK {1,10}?（與 ANY_COURT_CITATION 一致，防止跨引用誤吃數字）
 ABBR_CITATION = re.compile(
     r'[、，及與暨或,]\s*(\d{2,3})\s*年\s*度?\s*([\u4e00-\u9fff]{1,10}?)\s*字?\s*第\s*(\d+)\s*號'
-    r'(?:\s*(判決|裁定))?'  # group(4)：文書類型（選擇性）
+    r'(?:\s*(?:民事|刑事|行政)?\s*(判決|裁定|判例|裁判|理由))?'  # group(4)：文書類型（選擇性）
 )
 
 # 被引用法院白名單（正規化後）
@@ -266,6 +266,29 @@ def _infer_organizer(raw_match: str) -> str:
     return '高等法院'
 
 
+def _extract_target_case_type(raw_match: str, processed: str, match_start: int) -> Optional[str]:
+    """從 raw_match 或前後文推斷 target 的案件類型（民事/刑事/行政）"""
+    # 先查 raw_match 本身
+    for kw in ('民事', '刑事', '行政'):
+        if kw in raw_match:
+            return kw
+    # 查前後文（match_start 前 30 字 + 後 30 字）
+    ctx = processed[max(0, match_start - 30): match_start + len(raw_match) + 30]
+    for kw in ('民事', '刑事', '行政'):
+        if kw in ctx:
+            return kw
+    return None
+
+
+def _normalize_doc_type(raw_doc_type: Optional[str]) -> Optional[str]:
+    """將 regex 抓到的文書類型後綴正規化為 doc_type 欄位值。
+    裁判/理由 → None（無法確定具體類型）
+    """
+    if raw_doc_type in ('裁判', '理由'):
+        return None
+    return raw_doc_type  # 判決/裁定/判例 照字面存；None 維持 None
+
+
 def _make_result(
     court: str,
     raw_match: str,
@@ -278,6 +301,7 @@ def _make_result(
     fallback_end: int,
     authority_mode: bool = False,
     doc_type: str = None,
+    target_case_type: str = None,
 ) -> Dict:
     """
     建構 citation result dict。
@@ -330,7 +354,8 @@ def _make_result(
         "jyear": int(jyear_str),
         "jcase_norm": jcase_norm,
         "jno": int(jno_str),
-        "doc_type": doc_type,  # 判決 | 裁定 | None（原文未明示）
+        "doc_type": _normalize_doc_type(doc_type),  # 判決 | 裁定 | 判例 | None
+        "target_case_type": target_case_type,        # 民事 | 刑事 | 行政 | None
     }
 
 
@@ -426,6 +451,7 @@ def extract_citations(
                             fallback_end=abbr.end(),
                             authority_mode=(current_court == '憲法法庭'),
                             doc_type=abbr.group(4),
+                            target_case_type=_extract_target_case_type(a_raw, processed, abbr.start(1)),
                         ))
                 pos = abbr.end()
                 continue
@@ -484,6 +510,7 @@ def extract_citations(
                 fallback_end=full.end(),
                 authority_mode=is_const_court,
                 doc_type=full.group(5),
+                target_case_type=_extract_target_case_type(full.group(0), processed, full.start()),
             ))
         pos = full.end()
 

@@ -175,7 +175,7 @@ async function loadRankings() {
     const isAuthority = r.citation_type === 'authority';
     const caseRef = isAuthority
       ? (r.display_title || '（未知）')
-      : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號`;
+      : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號${r.case_type || '裁判'}`;
     const typeBadge = isAuthority
       ? `<span class="badge-resolution">${AUTH_BADGE_LABEL[r.auth_type] || r.auth_type}</span>`
       : '';

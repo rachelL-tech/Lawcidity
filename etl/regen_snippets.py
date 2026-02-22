@@ -31,14 +31,11 @@ def main():
     # match_start IS NULL 表示當初 PDF 折行導致反查失敗，這次也一起補救
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT DISTINCT ON (c.id)
-                   c.id, c.source_id, c.target_id, c.target_authority_id,
+            SELECT c.id, c.source_id, c.target_id, c.target_authority_id,
                    c.match_start, c.match_end, c.raw_match, d.clean_text
             FROM citations c
-            JOIN cases src ON src.id = c.source_id
-            JOIN decisions d ON d.case_id = src.id
+            JOIN decisions d ON d.id = c.source_id
             WHERE d.clean_text IS NOT NULL
-            ORDER BY c.id, d.decision_date DESC NULLS LAST
         """)
         rows = cur.fetchall()
 
