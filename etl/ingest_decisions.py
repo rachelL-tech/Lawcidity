@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 
 import psycopg
-from court_parser import parse_court_from_folder
+from court_parser import parse_court_from_folder, to_generic_root_norm
 from citation_parser import extract_citations
 from text_cleaner import clean_judgment_text
 
@@ -71,12 +71,19 @@ def upsert_court_unit(conn, court_info: Dict) -> int:
     Returns:
         court_unit_id (int)
     """
+    generic_root = to_generic_root_norm(court_info["unit_norm"], court_info["level"])
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO court_units (unit_norm, root_norm, level, county, district)
-            VALUES (%(unit_norm)s, %(root_norm)s, %(level)s, %(county)s, %(district)s)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (unit_norm) DO NOTHING
-        """, court_info)
+        """, (
+            court_info["unit_norm"],
+            generic_root,
+            court_info["level"],
+            court_info.get("county"),
+            court_info.get("district"),
+        ))
         cur.execute(
             "SELECT id FROM court_units WHERE unit_norm = %s",
             (court_info["unit_norm"],)
@@ -131,16 +138,29 @@ def parse_decision_date(jdate: str) -> Optional[str]:
 # =========================
 # 判決匯入
 # =========================
-def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: str, case_type: Optional[str], json_data: Dict) -> bool:
+def _extract_doc_type(jtitle: str) -> Optional[str]:
+    """從 JTITLE 推斷 doc_type（判決 / 裁定 / 憲判字）"""
+    if not jtitle:
+        return None
+    if '憲判字' in jtitle:
+        return '憲判字'
+    if '裁定' in jtitle:
+        return '裁定'
+    if '判決' in jtitle:
+        return '判決'
+    return None
+
+
+def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str, case_type: Optional[str], json_data: Dict) -> bool:
     """
     Upsert 單一判決到 decisions 表
 
     Args:
         conn: DB 連線
         court_unit_id: court_units.id
-        court_root_norm: 聚合層級，例如「臺灣高等法院」（顯示/篩選用）
+        root_norm: 通用7種分類（如「高等法院」），存入 decisions.root_norm
         unit_norm: 具體分院名稱，例如「臺灣高等法院臺南分院」（自然鍵）
-        case_type: 案件類型（民事/刑事/行政/憲法），或 None
+        case_type: 案件類型（民事/刑事/行政），或 None
         json_data: 判決 JSON（8 個欄位）
 
     Returns:
@@ -161,47 +181,50 @@ def ingest_decision(conn, court_unit_id: int, court_root_norm: str, unit_norm: s
         jcase_norm = normalize_jcase(jcase)
         decision_date = parse_decision_date(jdate)
         clean_text = clean_judgment_text(jfull) if jfull else None
+        doc_type = _extract_doc_type(jtitle)
 
         # Upsert（自然鍵：unit_norm + jyear + jcase_norm + jno）
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO decisions (
-                    unit_norm, court_root_norm, jyear, jcase_norm, jno,
-                    jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw,
-                    case_type
+                    unit_norm, root_norm, doc_type, case_type,
+                    jyear, jcase_norm, jno,
+                    jid, court_unit_id, decision_date, title, full_text, clean_text, pdf_url, raw
                 )
                 VALUES (
-                    %(unit_norm)s, %(court_root_norm)s, %(jyear)s, %(jcase_norm)s, %(jno)s,
-                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s,
-                    %(case_type)s
+                    %(unit_norm)s, %(root_norm)s, %(doc_type)s, %(case_type)s,
+                    %(jyear)s, %(jcase_norm)s, %(jno)s,
+                    %(jid)s, %(court_unit_id)s, %(decision_date)s, %(title)s, %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s
                 )
                 ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO UPDATE
-                    SET court_root_norm = EXCLUDED.court_root_norm,
-                        jid = EXCLUDED.jid,
+                    SET root_norm     = EXCLUDED.root_norm,
+                        doc_type      = EXCLUDED.doc_type,
+                        case_type     = EXCLUDED.case_type,
+                        jid           = EXCLUDED.jid,
                         court_unit_id = EXCLUDED.court_unit_id,
                         decision_date = EXCLUDED.decision_date,
-                        title = EXCLUDED.title,
-                        full_text = EXCLUDED.full_text,
-                        clean_text = EXCLUDED.clean_text,
-                        pdf_url = EXCLUDED.pdf_url,
-                        raw = EXCLUDED.raw,
-                        case_type = EXCLUDED.case_type,
-                        updated_at = now()
+                        title         = EXCLUDED.title,
+                        full_text     = EXCLUDED.full_text,
+                        clean_text    = EXCLUDED.clean_text,
+                        pdf_url       = EXCLUDED.pdf_url,
+                        raw           = EXCLUDED.raw,
+                        updated_at    = now()
             """, {
-                "unit_norm": unit_norm,
-                "court_root_norm": court_root_norm,
-                "jyear": jyear,
-                "jcase_norm": jcase_norm,
-                "jno": jno,
-                "jid": jid,
-                "court_unit_id": court_unit_id,
-                "decision_date": decision_date,
-                "title": jtitle,
-                "full_text": jfull,
-                "clean_text": clean_text,
-                "pdf_url": jpdf,
-                "raw": json.dumps(json_data, ensure_ascii=False),
-                "case_type": case_type,
+                "unit_norm":    unit_norm,
+                "root_norm":    root_norm,
+                "doc_type":     doc_type,
+                "case_type":    case_type,
+                "jyear":        jyear,
+                "jcase_norm":   jcase_norm,
+                "jno":          jno,
+                "jid":          jid,
+                "court_unit_id":court_unit_id,
+                "decision_date":decision_date,
+                "title":        jtitle,
+                "full_text":    jfull,
+                "clean_text":   clean_text,
+                "pdf_url":      jpdf,
+                "raw":          json.dumps(json_data, ensure_ascii=False),
             })
             conn.commit()
             return True, None
@@ -237,7 +260,7 @@ def upsert_decision(conn, court: str, jyear: int, jcase_norm: str, jno: int) -> 
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO decisions (unit_norm, court_root_norm, jyear, jcase_norm, jno)
+                INSERT INTO decisions (unit_norm, root_norm, jyear, jcase_norm, jno)
                 VALUES (%(court)s, %(court)s, %(jyear)s, %(jcase_norm)s, %(jno)s)
                 ON CONFLICT (unit_norm, jyear, jcase_norm, jno) DO NOTHING
                 RETURNING id
@@ -263,35 +286,62 @@ def upsert_decision(conn, court: str, jyear: int, jcase_norm: str, jno: int) -> 
         return None
 
 
-def upsert_authority(conn, auth_type: str, auth_key: str, display: Optional[str] = None) -> Optional[int]:
+# citation_parser 輸出的 auth_type（英文）→ authorities 表的 doc_type（中文）+ root_norm
+_AUTH_TYPE_TO_DOC_TYPE = {
+    "resolution":    "決議",
+    "grand_interp":  "釋字",
+    "conference":    "法律座談會",
+    "agency_opinion":"研審小組意見",
+}
+
+def _authority_root_norm(auth_type: str, ref_key: str) -> str:
+    """從 auth_type 和 ref_key 推斷 authorities.root_norm"""
+    if auth_type == "resolution":
+        return "最高法院"
+    if auth_type in ("grand_interp", "agency_opinion"):
+        return "司法院"
+    if auth_type == "conference":
+        # ref_key 格式：'高等法院|111|21'、'司法院|...'
+        prefix = ref_key.split("|")[0]
+        if "行政法院" in prefix:
+            return "高等行政法院"
+        if "高等法院" in prefix:
+            return "高等法院"
+        return "司法院"
+    return "司法院"
+
+
+def upsert_authority(conn, auth_type: str, ref_key: str, display: Optional[str] = None) -> Optional[int]:
     """
     在 authorities 表 upsert 非裁判性引用（會議決議、釋字、法律座談會等），回傳 authority id
 
     Args:
         conn: DB 連線
-        auth_type: 類型（'resolution' / 'grand_interp' / 'conference' / ...）
-        auth_key: 自然鍵（如 '民事庭|77|9'、'釋字|144'）
+        auth_type: citation_parser 輸出的英文類型（'resolution' / 'grand_interp' / 'conference' / 'agency_opinion'）
+        ref_key: 自然鍵（如 '民事庭|77|9'、'144'）
         display: 顯示用完整名稱（可選；已存在時不覆蓋原有值）
 
     Returns:
         authority id，失敗回傳 None
     """
+    doc_type  = _AUTH_TYPE_TO_DOC_TYPE.get(auth_type, auth_type)
+    root_norm = _authority_root_norm(auth_type, ref_key)
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO authorities (auth_type, auth_key, display)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (auth_type, auth_key) DO UPDATE
+                INSERT INTO authorities (doc_type, root_norm, ref_key, display)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (doc_type, ref_key) DO UPDATE
                   SET display = COALESCE(EXCLUDED.display, authorities.display)
                 RETURNING id
-            """, (auth_type, auth_key, display))
+            """, (doc_type, root_norm, ref_key, display))
             row = cur.fetchone()
             if row:
                 auth_id = row[0]
             else:
                 cur.execute(
-                    "SELECT id FROM authorities WHERE auth_type = %s AND auth_key = %s",
-                    (auth_type, auth_key)
+                    "SELECT id FROM authorities WHERE doc_type = %s AND ref_key = %s",
+                    (doc_type, ref_key)
                 )
                 auth_id = cur.fetchone()[0]
             conn.commit()
@@ -327,7 +377,7 @@ def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str
     for c in raw_citations:
         ctype = c.get("citation_type", "decision")
         if ctype == "authority":
-            auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
+            auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))  # auth_key = ref_key
             if auth_id is not None:
                 resolved.append((ctype, auth_id, c))
         else:  # "decision"
@@ -369,30 +419,27 @@ def ingest_citations(conn, source_id: int, clean_text: str, court_root_norm: str
                             RETURNING id
                         """, (source_id, target, c["raw_match"], c["snippet"]))
                 else:  # decision
-                    doc_type = c.get("doc_type")
                     if ms is not None:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet, doc_type)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                              (source_id, target_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, %s, %s, %s)
                             ON CONFLICT (source_id, target_id, match_start) DO UPDATE
                               SET snippet   = EXCLUDED.snippet,
                                   match_end = EXCLUDED.match_end,
-                                  raw_match = EXCLUDED.raw_match,
-                                  doc_type  = EXCLUDED.doc_type
+                                  raw_match = EXCLUDED.raw_match
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"], doc_type))
+                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"]))
                     else:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet, doc_type)
-                            VALUES (%s, %s, %s, NULL, NULL, %s, %s)
+                              (source_id, target_id, raw_match, match_start, match_end, snippet)
+                            VALUES (%s, %s, %s, NULL, NULL, %s)
                             ON CONFLICT (source_id, target_id, raw_match)
                               WHERE match_start IS NULL DO UPDATE
-                              SET snippet   = EXCLUDED.snippet,
-                                  doc_type  = EXCLUDED.doc_type
+                              SET snippet = EXCLUDED.snippet
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], c["snippet"], doc_type))
+                        """, (source_id, target, c["raw_match"], c["snippet"]))
 
                 row = cur.fetchone()
                 if row:
@@ -471,7 +518,7 @@ def main(folder_path: str):
             continue
 
         # B 類：判決匯入失敗
-        ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], court_info.get("case_type"), json_data)
+        ok, err_msg = ingest_decision(conn, court_unit_id, to_generic_root_norm(court_info["unit_norm"], court_info["level"]), court_info["unit_norm"], court_info.get("case_type"), json_data)
         if not ok:
             fail_count += 1
             log_error(conn, folder_name, json_file.name, "B", err_msg or "ingest_decision failed")
@@ -507,12 +554,12 @@ def main(folder_path: str):
                 if source_id_row:
                     _self_jcase = normalize_jcase(json_data.get("JCASE", ""))
                     _self_key = (
-                        court_info["root_norm"].replace('臺', '台'),  # root_norm = court_root_norm，與 extract_citations 內 current_court 一致
+                        court_info["court_root_norm"].replace('臺', '台'),  # root_norm = court_root_norm，與 extract_citations 內 current_court 一致
                         int(json_data.get("JYEAR")),
                         _self_jcase,
                         int(json_data.get("JNO")),
                     )
-                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text, court_root_norm=court_info["root_norm"], source_self_key=_self_key)
+                    n, cite_errors = ingest_citations(conn, source_id_row, clean_text, court_root_norm=court_info["court_root_norm"], source_self_key=_self_key)
                     if n > 0:
                         print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
                     # D 類：citation 寫入失敗
@@ -657,7 +704,7 @@ def main_retry(base_dir: str):
                 print(f"  A 仍失敗：{file_name} - {e}")
                 continue
 
-            ok, err_msg = ingest_decision(conn, court_unit_id, court_info["root_norm"], court_info["unit_norm"], court_info.get("case_type"), json_data)
+            ok, err_msg = ingest_decision(conn, court_unit_id, to_generic_root_norm(court_info["unit_norm"], court_info["level"]), court_info["unit_norm"], court_info.get("case_type"), json_data)
             if not ok:
                 print(f"  B 仍失敗：{file_name} - {err_msg}")
                 continue
@@ -682,12 +729,12 @@ def main_retry(base_dir: str):
                     row = cur.fetchone()
                 if row:
                     _self_key_retry = (
-                        court_info["root_norm"].replace('臺', '台'),
+                        court_info["court_root_norm"].replace('臺', '台'),
                         int(json_data.get("JYEAR")),
                         normalize_jcase(json_data.get("JCASE", "")),
                         int(json_data.get("JNO")),
                     )
-                    n, cite_errors = ingest_citations(conn, row[0], clean_text, court_root_norm=court_info["root_norm"], source_self_key=_self_key_retry)
+                    n, cite_errors = ingest_citations(conn, row[0], clean_text, court_root_norm=court_info["court_root_norm"], source_self_key=_self_key_retry)
                     if cite_errors:
                         print(f"  D 仍有錯：{file_name} - {cite_errors[0]}")
                         continue

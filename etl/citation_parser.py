@@ -196,7 +196,7 @@ _AGENCY_OPINION_RE = re.compile(
     r'|司法院[\u4e00-\u9fff]{0,5}廳?'       # Option B：司法院廳開頭
     r'|(?:臺灣)?高等(?:行政)?法院'           # Option C：高等法院開頭
     r')'
-    r'[\u4e00-\u9fff\d（）()第號期屆年月日、，\s]{5,80}?'  # 前段內容（允許括號）
+    r'(?:(?!研討)[\u4e00-\u9fff\d（）()第號期屆年月日、，\s]){5,80}?'  # 前段內容（不可含研討，防穿越研討號誤吃）
     r'研審小組'
     r'(?:[\u4e00-\u9fff\d（）()第號期屆年月日、，\s]{0,80}?)?'  # 後段內容（研審小組在中間時）
     r'(?:研審)?意見'
@@ -708,7 +708,61 @@ def extract_citations(
             "snippet": snippet,
         })
 
+    results = _filter_by_position(results, clean_text)
     return results
+
+
+# =========================
+# 位置型 guard（回傳前統一驗證）
+# =========================
+
+# 「理由」段落起頭（含節次號前置、「事實及理由」合併格式）
+_REASON_SECTION_RE = re.compile(
+    r'\r\n[ \t　]{0,4}'
+    r'(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+[、：,，])?'
+    r'[ \t　]{0,4}'
+    r'(?:(?:犯罪)?事實(?:及|與))?理由'
+    r'[ \t　：:\r\n]'
+)
+
+
+def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
+    """
+    位置型 false-positive 過濾（在 extract_citations 回傳前統一執行）：
+
+    Guard 1：「以上正本證明與原本無異」之後
+      書記欄 / 附表區，不含法律見解引用。
+
+    Guard 2：「理由」段起點之前（主文段）
+      主文僅宣示判決結果，不屬於法律見解引用。
+      找不到「理由」段 → reason_pos = 0（不過濾）。
+
+    match_start = None 的 citation（PDF 折行無法定位）略過位置檢查。
+    """
+    # Guard 1：書記欄起點
+    zhengben_pos = clean_text.find('以上正本證明與原本無異')
+    if zhengben_pos == -1:
+        zhengben_pos = len(clean_text)
+
+    # Guard 2：理由段起點（找第一個命中）
+    m = _REASON_SECTION_RE.search(clean_text)
+    reason_pos = m.start() if m else 0
+
+    if zhengben_pos == len(clean_text) and reason_pos == 0:
+        return results  # 兩個 guard 都沒命中，快速退出
+
+    filtered = []
+    for r in results:
+        ms = r.get('match_start')
+        if ms is None:
+            filtered.append(r)
+            continue
+        if ms >= zhengben_pos:
+            continue  # Guard 1：附表區
+        if ms < reason_pos:
+            continue  # Guard 2：主文段
+        filtered.append(r)
+    return filtered
 
 
 # =========================
@@ -732,6 +786,16 @@ _PARA_START_RE = re.compile(
     r')'                     # 關閉 lookahead
 )
 
+# 引號閉合（」）後緊接段落標記，中間無 \r\n（如 ...附件。」⑶依上規定...）
+# .end() 指向段落標記起點（⑶ 等），直接用作 actual_start
+_CLOSING_QUOTE_PARA_RE = re.compile(
+    r'」'
+    r'(?=[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩'
+    r'①②③④⑤⑥⑦⑧⑨⑩'
+    r'⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽'
+    r'⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑])'
+)
+
 # 子條款起點：「再按」「復按」「又按」「次按」「末按」「且按」「惟按」「惟查」「惟依」
 #             「再者」「所謂」「另」「按」（行首）、「惟」（行首，後不跟按/查/依）
 # 邊界允許 。 或 \r\n 作前導；前導後可有少量標點/PUA 字元（如 \uf6aa、㈠、⑴ 等）
@@ -752,7 +816,8 @@ _SUB_CLAUSE_RE = re.compile(
 # 這些引用是描述被告/原告前案結果，不作為法律見解引用
 _PRIOR_CASE_RE = re.compile(
     r'認定'                              # 認定犯罪/認定事實（程序史）
-    r'|確定'                            # 裁定/判決已確定在案（程序史）
+    r'|確定在案'                        # 裁定/判決確定在案（比裸「確定」更精確，避免「原確定裁定」誤觸）
+    r'|確定'                            # 裁定/判決已確定（程序史）
     r'|廢棄'
     r'|發回'
     r'|駁回(?:上訴|抗告)?確定'           # 駁回確定 / 駁回上訴確定 / 駁回抗告確定
@@ -760,6 +825,9 @@ _PRIOR_CASE_RE = re.compile(
     r'|判決上訴駁回'                    # 判決上訴駁回（確定）
     r'|裁判確定(?:處\d|，|。)'          # 裁判確定處N年 / 裁判確定，
     r'|(?:判決|裁定)所載'               # 引用判決/裁定的記載內容（非見解）
+    r'|(?:如)?附表(?:所示|編號)?'       # 如附表所示 / 附表編號（列表式程序史）
+    r'|審理中'                          # 案件審理中（程序性引用，非法律見解）
+    r'|事件終結前'                      # 待他案終結前裁定停止（程序性引用）
 )
 
 # 卷證附件引用：此時是把判決/文書當作卷證提出，非引用法律見解
@@ -776,8 +844,9 @@ _EVIDENCE_CITE_RE = re.compile(
     r'|起訴書'
     r'|(?:言詞辯論|準備程序)筆錄'
     r'|光碟'
-    r'|在卷(?:可[稽查])?'               # 在卷可稽
+    r'|在卷(?:可[稽查參])?'             # 在卷可稽 / 在卷可查 / 在卷可參
     r'|可稽'
+    r'|可參'
     r'|足稽'
     r'|可佐'
     r'|為證[，。；\s]'                   # 以…為證
@@ -807,7 +876,7 @@ _PARTY_SECTION_RE = re.compile(
     r'(?:原告(?:起訴|之|的)?主張|被告(?:答辯|抗辯)?|抗告意旨|上訴意旨'
     r'|主張略以|答辯略以|抗辯略以|聲請人主張|反訴主張|反請求主張'
     r'|被告則以|兩造不爭|不爭之事實|主張要旨|答辯要旨'
-    r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以|聲請再審意旨略以)'
+    r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以|聲請再審意旨略以|聲請刑事補償意旨略以)'
     # B. 無節次符號
     r'|(?:本件)?(?:聲請(?:再審)?|上訴|抗告)意旨略(?:以|謂)'
 )
@@ -827,7 +896,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
     判斷此 citation 是否為 false positive。
 
     Check 1：前案程序史 / 卷證附件引用
-      若 FP 模式在 match_end 後 40 字內命中，且命中點之前沒有引用收尾標記 → FP。
+      若 FP 模式在 match_end 後 200 字內命中，且命中點之前沒有引用收尾標記 → FP。
       收尾標記：意旨/參照/見解（裸 ）不算，避免「（下稱xxx）」觸發誤判）。
       例：
         「號民事裁定（下稱系爭裁定）駁回上訴確定在案」→ 無收尾 → 過濾 ✓
@@ -837,7 +906,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
       往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
       而非法院論斷（本院判斷/本院查等）→ FP。
     """
-    after = processed[match_end: match_end + 40]
+    after = processed[match_end: match_end + 200]
 
     for pattern in (_PRIOR_CASE_RE, _EVIDENCE_CITE_RE):
         m = pattern.search(after)
@@ -916,21 +985,23 @@ def extract_snippet(
     for m in _PARA_START_RE.finditer(look_back, sub_window_pos):
         last_para_near = m
 
-    sub_pos = look_back_start + last_sub.start(1) if last_sub is not None else None
-    para_pos = look_back_start + last_para_near.start() + 2 if last_para_near is not None else None
+    last_cq_para = None
+    for m in _CLOSING_QUOTE_PARA_RE.finditer(look_back, sub_window_pos):
+        last_cq_para = m
 
-    if sub_pos is not None and para_pos is not None:
-        if 0 <= sub_pos - para_pos <= 20:
+    sub_pos  = look_back_start + last_sub.start(1) if last_sub is not None else None
+    para_pos = look_back_start + last_para_near.start() + 2 if last_para_near is not None else None
+    cq_pos   = look_back_start + last_cq_para.end() if last_cq_para is not None else None
+
+    candidates = [p for p in (sub_pos, para_pos, cq_pos) if p is not None]
+    if candidates:
+        if sub_pos is not None and para_pos is not None and 0 <= sub_pos - para_pos <= 20:
             # 同一段落單元（如 ㈠按、⑴按）：sub 緊接在 para 之後
             # 用 para_pos（包含段落標記，如 ㈠、⑴）
             actual_start = para_pos
         else:
-            # 不同位置：取最靠近 match_start 者（max）
-            actual_start = max(sub_pos, para_pos)
-    elif sub_pos is not None:
-        actual_start = sub_pos
-    elif para_pos is not None:
-        actual_start = para_pos
+            # 取最靠近 match_start 者（max）
+            actual_start = max(candidates)
     else:
         # 完整 look_back 找最後一個編號段落起點（距離可能 > para_cap）
         last_para = None

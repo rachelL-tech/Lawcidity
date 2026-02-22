@@ -278,3 +278,190 @@ def test_court_section_citation_not_filtered():
     assert len(decision_results) == 1, (
         f"本院判斷段落應保留 1 筆 decision citation，但得到 {len(decision_results)} 筆"
     )
+
+
+# ─── Case 16：以上正本證明與原本無異之後的 citation 應被過濾 ──────────────────────
+
+def test_zhengben_area_filtered():
+    """
+    「以上正本證明與原本無異」之後為書記欄/附表區，
+    該區段出現的 citation 不應被計入。
+    理由段的 citation 應正常保留。
+    """
+    text = (
+        "理由\r\n"
+        "一、按最高法院110年度台上字第1號判決意旨參照。\r\n"
+        "以上正本證明與原本無異\r\n"
+        "【附表】\r\n"
+        "臺灣高等法院113年度聲字第1200號裁定應執行有期徒刑16年\r\n"
+    )
+    results = extract_citations(text, court_root_norm="臺灣高雄地方法院")
+    raw_matches = [r["raw_match"] for r in results]
+    # 理由段的引用應保留
+    assert any("台上字第1號" in rm for rm in raw_matches), "理由段引用應保留"
+    # 附表區的引用應被過濾
+    assert not any("聲字第1200號" in rm for rm in raw_matches), "附表區引用不應出現"
+
+
+# ─── Case 17：主文段 citation 應被過濾 ────────────────────────────────────────────
+
+def test_zhuwen_section_filtered():
+    """
+    主文段（理由段之前）出現的 citation 應被過濾；
+    理由段的 citation 應正常保留。
+    刑事格式：「犯罪事實及理由」也應作為邊界。
+    """
+    text = (
+        "主文\r\n"
+        "原告之訴駁回（依臺灣高等法院112年度上字第99號判決）。\r\n"
+        "犯罪事實及理由\r\n"
+        "一、按最高法院110年度台上字第1號判決意旨參照。\r\n"
+    )
+    results = extract_citations(text)
+    raw_matches = [r["raw_match"] for r in results]
+    # 理由段的引用應保留
+    assert any("台上字第1號" in rm for rm in raw_matches), "理由段引用應保留"
+    # 主文段的引用應被過濾
+    assert not any("上字第99號" in rm for rm in raw_matches), "主文段引用不應出現"
+
+
+# ─── Case 18：agency_opinion 不應穿越「研討第N號」誤吃到研審小組 ───────────────────
+
+def test_agency_opinion_not_cross_research_no():
+    """
+    「第N屆司法事務官消債問題研討第12號初步研討結論」後面才接
+    「司法院民事廳...研審小組意見」，_AGENCY_OPINION_RE 不應從研討號開頭
+    一路吃到研審小組意見；應只匹配司法院廳開頭那筆。
+    原始 bug：#147393 raw_match 包含研討號 + 研審小組，兩者被合併為一筆。
+    """
+    text = (
+        "（99年11月10日臺灣高等法院暨所屬法院99年法律座談會民事類提案第42號審查意見"
+        "與研討結果表決之多數說、"
+        "99年11月29日廳民二字第0990002160號第2屆司法事務官消債問題研討第12號初步研討結論、"
+        "司法院民事廳消費者債務清理條例法律問題研審小組意見同此見解）"
+    )
+    results = extract_citations(text)
+    agency_results = [r for r in results if r.get("auth_type") == "agency_opinion"]
+
+    assert len(agency_results) == 1, (
+        f"應只有 1 筆 agency_opinion，但得到 {len(agency_results)} 筆：{[r['raw_match'] for r in agency_results]}"
+    )
+    raw = agency_results[0]["raw_match"]
+    assert "司法院民事廳" in raw, "agency_opinion 應從司法院民事廳開頭"
+    assert "研討第12號" not in raw, "agency_opinion 不應包含研討號"
+
+
+# ─── Case 19：引號閉合後接段落標記（」⑶）應作為 snippet 起點 ──────────────────────
+
+def test_closing_quote_para_start():
+    """
+    「。」⑶依上規定...」格式：⑶ 緊接在 」 後，無 \r\n，
+    _CLOSING_QUOTE_PARA_RE 應將 ⑶ 辨識為段落起點。
+    原始 bug：#102122 snippet 從引號內的條文文字開頭，應從「⑶依上規定」開始。
+    """
+    text = (
+        "前項規定：「申請書1份、設立（變更）登記表2份。」"
+        "⑶依上規定，足知公司登記採準則主義，主管機關應於公司備齊相關文件後，"
+        "倘申請書件形式均符合依公司法所定方式，即應准予登記"
+        "（最高行政法院106年度判字第676號判決意旨參照）"
+    )
+    start, end = _pos(text, "最高行政法院106年度判字第676號")
+    snip = extract_snippet(text, start, end)
+    assert snip.startswith("⑶依上規定"), (
+        f"snippet 應從「⑶依上規定」開始，實際開頭：{snip[:30]!r}"
+    )
+
+
+# ─── Case 20：在卷可參 應被 _EVIDENCE_CITE_RE 過濾（#143780 類型）─────────────────
+
+def test_zaijuan_kechan_filtered():
+    """
+    「有該裁定在卷可參」緊接 citation 後方，應被 _EVIDENCE_CITE_RE 過濾。
+    原始 bug：_EVIDENCE_CITE_RE 只列 在卷可稽/在卷可查，未明示 在卷可參。
+    """
+    text = (
+        "理由\r\n"
+        "一、查最高行政法院99年度裁字第3302號裁定，為再審原告另聲請之再審，"
+        "並經該裁定駁回再審原告之聲請，有該裁定在卷可參，審之該裁定並未提及相關見解。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"在卷可參後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+    )
+
+
+# ─── Case 21：確定在案 應被 _PRIOR_CASE_RE 過濾（#102312 類型）──────────────────────
+
+def test_queding_zaian_filtered():
+    """
+    citation 後方緊接「確定在案）」，應被 _PRIOR_CASE_RE 過濾。
+    原始 bug：「確定」單字過廣，「原確定裁定」的「確定」先命中後被 _CITE_CLOSING_RE 誤放行。
+    「確定在案」需明確列入使 search 優先命中更長模式。
+    """
+    text = (
+        "理由\r\n"
+        "一、查最高行政法院111年度聲再字第616號裁定駁回再審原告就原確定裁定提起再審部分確定在案）。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"確定在案後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+    )
+
+
+# ─── Case 22：如附表所示 應被 _PRIOR_CASE_RE 過濾（#134134 類型）──────────────────
+
+def test_fubiao_suoshi_filtered():
+    """
+    citation 後方緊接「等裁定（如附表所示）」，應被 _PRIOR_CASE_RE 過濾。
+    附表引用屬程序史，非法律見解引用。
+    """
+    text = (
+        "理由\r\n"
+        "一、聲請人就最高行政法院114年度聲字第649號等裁定（如附表所示），向本院聲請再審。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"如附表所示後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+    )
+
+
+# ─── Case 23：審理中 應被 _PRIOR_CASE_RE 過濾（#144010 類型）───────────────────────
+
+def test_shenlizh_filtered():
+    """
+    citation 後方緊接「事件審理中」，應被 _PRIOR_CASE_RE 過濾。
+    審理中表示案件程序進行中，非法律見解引用。
+    """
+    text = (
+        "理由\r\n"
+        "一、查最高行政法院113年度上字第640號、第641號事件審理中。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"審理中後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+    )
+
+
+# ─── Case 24：事件終結前 應被 _PRIOR_CASE_RE 過濾（#144011 類型）──────────────────
+
+def test_shijian_jiesuqian_filtered():
+    """
+    citation 後方緊接「行政訴訟事件終結前，裁定停止本件訴訟程序」，
+    應被 _PRIOR_CASE_RE 過濾（在卷可稽出現在 citation 前，forward check 看不到；
+    after 中的「事件終結前」為實際觸發 pattern）。
+    """
+    text = (
+        "理由\r\n"
+        "一、查有各該裁判書及前案查詢表在卷可稽，並據本院調取相關卷宗查明屬實，"
+        "故本院認有於最高行政法院113年度上字第640號、113年度上字第641號"
+        "行政訴訟事件終結前，裁定停止本件訴訟程序之必要，爰依首揭條文，裁定如主文。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"事件終結前後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+    )
