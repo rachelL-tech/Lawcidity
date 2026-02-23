@@ -31,7 +31,7 @@ def rankings(limit: int = 100):
                     d.jyear,
                     d.jcase_norm,
                     d.jno,
-                    d.case_type,
+                    (ARRAY_REMOVE(ARRAY_AGG(c.target_doc_type ORDER BY c.id DESC), NULL))[1] AS doc_type,
                     NULL::TEXT           AS display_title,
                     COUNT(c.id)          AS citation_count
                 FROM decisions d
