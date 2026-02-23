@@ -420,6 +420,20 @@ def extract_citations(
     current_court: Optional[str] = None
     chain_is_ben_yuan: bool = False  # 目前 chain 是否由「本院」具名引用發起
     pos = 0
+    # 同句同法院鏈：前筆無 doc_type，等後筆回填
+    pending_doc_type_idxs: List[int] = []
+    pending_court: Optional[str] = None
+    pending_last_end = 0
+
+    def _flush_pending(doc_type: Optional[str]) -> None:
+        nonlocal pending_doc_type_idxs, pending_court
+        if not doc_type:
+            return
+        for i in pending_doc_type_idxs:
+            if results[i].get("doc_type") is None:
+                results[i]["doc_type"] = doc_type
+        pending_doc_type_idxs = []
+        pending_court = None
 
     while pos < len(processed):
         # ① 省略引用：只在 chain 進行中（current_court 存在）才嘗試
@@ -437,6 +451,12 @@ def extract_citations(
                             pos = abbr.end()
                             continue
                     if not _is_false_positive_citation(processed, abbr.end()):
+                        # 鏈斷（跨句或換法院）→ 清空 pending
+                        if pending_doc_type_idxs:
+                            between = processed[pending_last_end:abbr.start()]
+                            if (pending_court != current_court) or any(ch in between for ch in ("。", "；", "！", "？")):
+                                pending_doc_type_idxs = []
+                                pending_court = None
                         # group(0) = 「、114年度台抗字第310號」，strip 掉開頭分隔符號
                         a_raw = abbr.group(0)[1:].lstrip()
                         results.append(_make_result(
@@ -453,6 +473,11 @@ def extract_citations(
                             doc_type=abbr.group(4),
                             target_case_type=_extract_target_case_type(a_raw, processed, abbr.start(1)),
                         ))
+                        _flush_pending(results[-1].get("doc_type"))
+                        if results[-1].get("doc_type") is None:
+                            pending_doc_type_idxs.append(len(results) - 1)
+                            pending_court = current_court
+                        pending_last_end = abbr.end()
                 pos = abbr.end()
                 continue
 
@@ -498,6 +523,12 @@ def extract_citations(
             if not is_const_court and _is_false_positive_citation(processed, full.end()):
                 pos = full.end()
                 continue
+            # 鏈斷（跨句或換法院）→ 清空 pending
+            if pending_doc_type_idxs:
+                between = processed[pending_last_end:full.start()]
+                if (pending_court != current_court) or any(ch in between for ch in ("。", "；", "！", "？")):
+                    pending_doc_type_idxs = []
+                    pending_court = None
             results.append(_make_result(
                 court=current_court,
                 raw_match=full.group(0),
@@ -512,7 +543,14 @@ def extract_citations(
                 doc_type=full.group(5),
                 target_case_type=_extract_target_case_type(full.group(0), processed, full.start()),
             ))
+            _flush_pending(results[-1].get("doc_type"))
+            if results[-1].get("doc_type") is None:
+                pending_doc_type_idxs.append(len(results) - 1)
+                pending_court = current_court
+            pending_last_end = full.end()
         pos = full.end()
+
+    pending_doc_type_idxs = []
 
     # 掃描最高法院會議決議 → authority (resolution)（獨立掃描，不影響上方狀態機）
     for m in RESOLUTION_RE.finditer(processed):
