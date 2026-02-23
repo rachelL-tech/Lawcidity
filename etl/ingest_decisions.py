@@ -317,9 +317,17 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                 need_ct_upgrade = (chosen[2] is None and ct is not None)
 
         elif target_doc_type in ('判決', '裁定'):
-            null_ph = next((r for r in pool if r[1] is None), None)
+            # 新規則：判例與判決不可並存；新來判決若已有判例，直接回傳判例
+            prec_ph = next((r for r in pool if r[1] == '判例'), None)
             same_ph = next((r for r in pool if r[1] == target_doc_type), None)
-            if null_ph:
+            null_ph = next((r for r in pool if r[1] is None), None)
+            if target_doc_type == '判決' and prec_ph:
+                chosen_id = prec_ph[0]
+                need_ct_upgrade = (prec_ph[2] is None and ct is not None)
+            elif same_ph:
+                chosen_id = same_ph[0]
+                need_ct_upgrade = (same_ph[2] is None and ct is not None)
+            elif null_ph:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE decisions SET doc_type=%s, updated_at=now() WHERE id=%s",
@@ -327,26 +335,24 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                     )
                 chosen_id = null_ph[0]
                 need_ct_upgrade = (null_ph[2] is None and ct is not None)
-            elif same_ph:
-                chosen_id = same_ph[0]
-                need_ct_upgrade = (same_ph[2] is None and ct is not None)
 
         elif target_doc_type == '判例':
+            prec_ph = next((r for r in pool if r[1] == '判例'), None)
             judg_ph = next((r for r in pool if r[1] == '判決'), None)
             null_ph = next((r for r in pool if r[1] is None), None)
-            prec_ph = next((r for r in pool if r[1] == '判例'), None)
-            upgrade_src = judg_ph or null_ph
-            if upgrade_src:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE decisions SET doc_type='判例', updated_at=now() WHERE id=%s",
-                        (upgrade_src[0],)
-                    )
-                chosen_id = upgrade_src[0]
-                need_ct_upgrade = (upgrade_src[2] is None and ct is not None)
-            elif prec_ph:
+            if prec_ph:
                 chosen_id = prec_ph[0]
                 need_ct_upgrade = (prec_ph[2] is None and ct is not None)
+            else:
+                upgrade_src = judg_ph or null_ph
+                if upgrade_src:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE decisions SET doc_type='判例', updated_at=now() WHERE id=%s",
+                            (upgrade_src[0],)
+                        )
+                    chosen_id = upgrade_src[0]
+                    need_ct_upgrade = (upgrade_src[2] is None and ct is not None)
 
         else:
             # 未知 doc_type，當 None 處理
