@@ -48,9 +48,11 @@ CREATE TABLE court_units (
 );
 
 CREATE UNIQUE INDEX court_units_unit_uniq          ON court_units(unit_norm);
-CREATE INDEX        court_units_root_idx            ON court_units(root_norm);
-CREATE INDEX        court_units_county_district_idx ON court_units(county, district);
-CREATE INDEX        court_units_geo_idx             ON court_units(lat, lon);
+
+-- 可選索引（地圖 / 行政區篩選；目前 MVP 預設不建立）
+-- CREATE INDEX        court_units_root_idx            ON court_units(root_norm);
+-- CREATE INDEX        court_units_county_district_idx ON court_units(county, district);
+-- CREATE INDEX        court_units_geo_idx             ON court_units(lat, lon);
 
 
 -- =========================
@@ -108,7 +110,6 @@ CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 -- 現階段不必要的查詢索引（可日後補建）
 -- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
 -- CREATE INDEX decisions_root_year_idx  ON decisions(root_norm, jyear);
--- CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 -- CREATE INDEX decisions_date_idx       ON decisions(decision_date);
 -- CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
 -- CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
@@ -130,8 +131,9 @@ CREATE TABLE authorities (
   UNIQUE (doc_type, ref_key)
 );
 
-CREATE INDEX authorities_doctype_idx ON authorities(doc_type);
-CREATE INDEX authorities_root_idx    ON authorities(root_norm);
+-- 可選索引（authority 多維篩選；目前 MVP 預設不建立）
+-- CREATE INDEX authorities_doctype_idx ON authorities(doc_type);
+-- CREATE INDEX authorities_root_idx    ON authorities(root_norm);
 
 
 -- =========================
@@ -221,7 +223,8 @@ CREATE TABLE citation_snippet_statutes (
 );
 
 CREATE UNIQUE INDEX css_uniq            ON citation_snippet_statutes(citation_id, law, article_raw, sub_ref);
-CREATE INDEX        css_law_article_idx ON citation_snippet_statutes(law, article_raw);
+-- 可選索引（依 law/article 反查 citation 時使用；目前 MVP 預設不建立）
+-- CREATE INDEX        css_law_article_idx ON citation_snippet_statutes(law, article_raw);
 CREATE INDEX        css_citation_idx    ON citation_snippet_statutes(citation_id);
 
 
@@ -257,4 +260,5 @@ CREATE TABLE ingest_error_log (
 );
 
 CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
-CREATE INDEX ingest_error_log_resolved_idx ON ingest_error_log(resolved);
+-- 可選索引（resolved 狀態看板；目前 MVP 預設不建立）
+-- CREATE INDEX ingest_error_log_resolved_idx ON ingest_error_log(resolved);
