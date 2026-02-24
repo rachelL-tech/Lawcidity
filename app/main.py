@@ -1,9 +1,18 @@
 import os
-from fastapi import FastAPI, HTTPException
+from typing import Literal
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import psycopg
 from psycopg.rows import dict_row
+from app.search_service import (
+    tokenize_query,
+    parse_case_types,
+    build_statute_filters,
+    search_source_ids_opensearch,
+    search_source_ids_baseline_pg,
+    fetch_rankings_by_source_ids,
+)
 
 DB_URL = os.environ.get(
     "DATABASE_URL",
@@ -15,6 +24,65 @@ app = FastAPI(title="Citation Rankings")
 
 def get_conn():
     return psycopg.connect(DB_URL, row_factory=dict_row)
+
+
+@app.get("/api/search")
+def search_rankings(
+    q: str = Query(..., min_length=1, description="關鍵字（空白分詞，AND）"),
+    case_type: str | None = Query(None, description="逗號分隔：民事,刑事,行政,憲法"),
+    law: list[str] | None = Query(None, description="可重複參數；需與 article 一一對應"),
+    article: list[str] | None = Query(None, description="可重複參數；需與 law 一一對應"),
+    sub_ref: list[str] | None = Query(None, description="可重複參數；可省略；若提供需與 law/article list 長度一致，才能知道哪個 sub_ref 對應哪個 law/article"),
+    backend: Literal["opensearch", "pg"] = Query("opensearch"),
+    source_limit: int = Query(3000, ge=1, le=10000),
+    limit: int = Query(100, ge=1, le=500),
+):
+    try:
+        terms = tokenize_query(q)
+        case_types = parse_case_types(case_type)
+        statute_filters = build_statute_filters(
+            laws=law or [],
+            articles=article or [],
+            sub_refs=sub_ref or [],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    with get_conn() as conn:
+        try:
+            if backend == "opensearch":
+                source_ids = search_source_ids_opensearch(
+                    query_terms=terms,
+                    case_types=case_types,
+                    statute_filters=statute_filters,
+                    source_limit=source_limit,
+                )
+            else:
+                source_ids = search_source_ids_baseline_pg(
+                    conn=conn,
+                    query_terms=terms,
+                    case_types=case_types,
+                    statute_filters=statute_filters,
+                    source_limit=source_limit,
+                )
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{e}")
+
+        targets = fetch_rankings_by_source_ids(
+            conn=conn,
+            source_ids=source_ids,
+            query_text=q.strip(),
+            limit=limit,
+        )
+
+    return {
+        "backend": backend,
+        "query_terms": terms,
+        "source_count": len(source_ids),
+        "targets": targets,
+    }
 
 
 @app.get("/api/rankings")
