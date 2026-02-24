@@ -1,3 +1,5 @@
+# 用途：本機 MVP 服務（PostgreSQL + OpenSearch）。
+# 說明：OpenSearch 目前以 security+password 模式啟動；中文分詞（IK）安裝會在 Dockerfile 處理。
 services:
   db:
     image: postgres:15-alpine
@@ -18,5 +20,26 @@ services:
       timeout: 5s
       retries: 5
 
+  opensearch:
+    build:
+      context: .
+      dockerfile: docker/opensearch/Dockerfile
+    image: casemap-opensearch:2.18.0-ik
+    container_name: casemap-opensearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_INITIAL_ADMIN_PASSWORD}"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+
 volumes:
   pgdata:
+  osdata:
