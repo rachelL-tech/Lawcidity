@@ -29,10 +29,12 @@ CREATE TABLE court_units (
   id         BIGSERIAL PRIMARY KEY,
 
   unit_norm  TEXT NOT NULL,  -- 精確名稱：臺灣新北地方法院三重簡易庭
-  root_norm  TEXT NOT NULL,  -- 7 種聚合層級（見下）：
+  root_norm  TEXT NOT NULL,  -- 9 種聚合層級（見下）：
                              --   最高法院 / 最高行政法院
-                             --   高等法院 / 高等行政法院 / 高等行政法院地方庭
-                             --   地方法院 / 地方法院簡易庭
+                             --   高等法院 / 高等行政法院
+                             --   智財商業法院 / 少家法院
+                             --   地方法院 / 高等行政法院地方庭
+                             --   地方法院簡易庭
 
   level      SMALLINT,       -- 1=最高  2=高院  3=地院/地方庭  4=簡易庭
   county     TEXT,           -- 縣市（例：新北市）
@@ -65,7 +67,7 @@ CREATE TABLE decisions (
 
   -- ★ 識別欄位（合併原 cases 表）
   unit_norm     TEXT NOT NULL,
-  root_norm     TEXT NOT NULL,     -- 7 種聚合層級（同 court_units.root_norm）
+  root_norm     TEXT NOT NULL,     -- 9 種聚合層級（同 court_units.root_norm）
   case_type     TEXT,              -- 民事/刑事/行政/憲法；NULL = placeholder（案件類型未知）
   jyear         SMALLINT NOT NULL,
   jcase_norm    TEXT NOT NULL,     -- JCASE 正規化（臺→台）
@@ -86,10 +88,8 @@ CREATE TABLE decisions (
   doc_type      TEXT,              -- 判決 / 裁定 / 判例 / 憲判字 / 宣判筆錄
   decision_date DATE,
   title         TEXT,
-  full_text     TEXT,              -- JFULL（原始全文）
   clean_text    TEXT,              -- clean_judgment_text() 處理後（citation/snippet 用）
   pdf_url       TEXT,
-  raw           JSONB,             -- 原始 JSON
 
   created_at    TIMESTAMPTZ DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now()
@@ -103,13 +103,15 @@ CREATE UNIQUE INDEX decisions_placeholder_uniq
   ON decisions(unit_norm, jyear, jcase_norm, jno, COALESCE(case_type, ''), COALESCE(doc_type, ''))
   WHERE jid IS NULL;
 
-CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
-CREATE INDEX decisions_root_year_idx  ON decisions(root_norm, jyear);
 CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
-CREATE INDEX decisions_date_idx       ON decisions(decision_date);
-CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
-CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
 
+-- 現階段不必要的查詢索引（可日後補建）
+-- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
+-- CREATE INDEX decisions_root_year_idx  ON decisions(root_norm, jyear);
+-- CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
+-- CREATE INDEX decisions_date_idx       ON decisions(decision_date);
+-- CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
+-- CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
 
 -- =========================
 -- 3) 裁判外權威資料（會議決議、釋字、法律座談會等）

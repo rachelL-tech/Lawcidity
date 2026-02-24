@@ -116,4 +116,4 @@ docker compose exec db psql -U postgres -d citations
 
 ## 下一步
 
-完成判決匯入後，開始寫 `etl/extract_citations.py`（從 `full_text` 抽取引用）。
+完成判決匯入後，開始寫 `etl/extract_citations.py`（從 `clean_text` 抽取引用）。

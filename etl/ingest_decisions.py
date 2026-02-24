@@ -12,7 +12,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from datetime import datetime
 from typing import Optional, Dict, List
 import re
 
@@ -146,7 +145,6 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
         decision_date = parse_decision_date(jdate)
         clean_text = clean_judgment_text(jfull) if jfull else None
         doc_type = _extract_doc_type(jfull)
-        raw_json = json.dumps(json_data, ensure_ascii=False)
 
         with conn.cursor() as cur:
             # 先找可升級的 placeholder
@@ -176,13 +174,13 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                 cur.execute("""
                     UPDATE decisions
                     SET jid=%s, doc_type=%s, case_type=%s, court_unit_id=%s,
-                        decision_date=%s, title=%s, full_text=%s, clean_text=%s,
-                        pdf_url=%s, raw=%s, updated_at=now()
+                        decision_date=%s, title=%s, clean_text=%s,
+                        pdf_url=%s, updated_at=now()
                     WHERE id=%s
                     RETURNING id
                 """, (jid, doc_type, new_case_type, court_unit_id,
-                      decision_date, jtitle, jfull, clean_text,
-                      jpdf, raw_json, ph_id))
+                      decision_date, jtitle, clean_text,
+                      jpdf, ph_id))
                 row = cur.fetchone()
             conn.commit()
             return True, row[0]
@@ -193,13 +191,13 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                     INSERT INTO decisions (
                         unit_norm, root_norm, case_type, jyear, jcase_norm, jno,
                         court_unit_id, jid, doc_type, decision_date, title,
-                        full_text, clean_text, pdf_url, raw
+                        clean_text, pdf_url
                     )
                     VALUES (
                         %(unit_norm)s, %(root_norm)s, %(case_type)s, %(jyear)s,
                         %(jcase_norm)s, %(jno)s, %(court_unit_id)s, %(jid)s,
                         %(doc_type)s, %(decision_date)s, %(title)s,
-                        %(full_text)s, %(clean_text)s, %(pdf_url)s, %(raw)s
+                        %(clean_text)s, %(pdf_url)s
                     )
                     ON CONFLICT (jid) WHERE jid IS NOT NULL DO UPDATE
                         SET doc_type      = EXCLUDED.doc_type,
@@ -207,10 +205,8 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                             court_unit_id = EXCLUDED.court_unit_id,
                             decision_date = EXCLUDED.decision_date,
                             title         = EXCLUDED.title,
-                            full_text     = EXCLUDED.full_text,
                             clean_text    = EXCLUDED.clean_text,
                             pdf_url       = EXCLUDED.pdf_url,
-                            raw           = EXCLUDED.raw,
                             updated_at    = now()
                     RETURNING id
                 """, {
@@ -225,10 +221,8 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                     "doc_type":      doc_type,
                     "decision_date": decision_date,
                     "title":         jtitle,
-                    "full_text":     jfull,
                     "clean_text":    clean_text,
                     "pdf_url":       jpdf,
-                    "raw":           raw_json,
                 })
                 row = cur.fetchone()
             conn.commit()
