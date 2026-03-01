@@ -252,9 +252,11 @@ def search_source_ids_baseline_pg(
 
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        return [int(row[0]) for row in cur.fetchall()]
+        return [int(row["id"]) for row in cur.fetchall()]
 
-# 把 OpenSearch/PG 找到的 source_ids 當集合，從 citations 找 target 並計分（snippet 命中加分 + 法條匹配加分），JOIN decisions + court_units 補 target_root_norm/level，依 score/citation_count 排序回傳
+# 把 OpenSearch/PG 找到的 source_ids 當集合，從 citations 找 target 並計分（snippet 命中加分 + 法條匹配加分）。
+# target 包含 decisions（target_id）與 authorities（target_authority_id）兩種，UNION ALL 合併後統一排序。
+# 回傳欄位：citation_type（'decision'|'authority'）+ 各自識別欄位；score/citation_count 共用。
 def fetch_rankings_by_source_ids(
     conn: psycopg.Connection,
     source_ids: list[int],
@@ -310,15 +312,29 @@ def fetch_rankings_by_source_ids(
             SELECT UNNEST(%(source_ids)s::bigint[]) AS source_id
         ),
         base AS (
-            SELECT c.id, c.target_id, c.snippet, c.target_doc_type
+            SELECT c.id,
+                   c.target_id,
+                   NULL::bigint  AS target_authority_id,
+                   c.snippet,
+                   c.target_doc_type
             FROM citations c
             JOIN src s ON s.source_id = c.source_id
             WHERE c.target_id IS NOT NULL
+            UNION ALL
+            SELECT c.id,
+                   NULL::bigint  AS target_id,
+                   c.target_authority_id,
+                   c.snippet,
+                   NULL::text    AS target_doc_type
+            FROM citations c
+            JOIN src s ON s.source_id = c.source_id
+            WHERE c.target_authority_id IS NOT NULL
         ),
         scored AS (
             SELECT
                 b.id,
                 b.target_id,
+                b.target_authority_id,
                 b.target_doc_type,
                 (
                     {snippet_score_sql} +
@@ -330,36 +346,51 @@ def fetch_rankings_by_source_ids(
             SELECT
                 s.id,
                 s.target_id,
+                s.target_authority_id,
                 s.target_doc_type,
                 s.citation_score,
-                d.root_norm AS target_root_norm,
-                cu.level AS target_level,
+                COALESCE(d.root_norm, a.root_norm) AS target_root_norm,
+                cu.level       AS target_level,
                 d.jyear,
                 d.jcase_norm,
-                d.jno
+                d.jno,
+                a.doc_type     AS auth_type,
+                a.display      AS display_title
             FROM scored s
-            JOIN decisions d ON d.id = s.target_id
+            LEFT JOIN decisions d    ON d.id = s.target_id
             LEFT JOIN court_units cu ON cu.id = d.court_unit_id
+            LEFT JOIN authorities a  ON a.id = s.target_authority_id
         )
         SELECT
+            CASE WHEN e.target_id IS NOT NULL THEN 'decision' ELSE 'authority' END
+                                  AS citation_type,
             e.target_id,
+            e.target_authority_id,
             e.target_root_norm,
             e.target_level,
             e.jyear,
             e.jcase_norm,
             e.jno,
-            (ARRAY_REMOVE(ARRAY_AGG(e.target_doc_type ORDER BY e.id DESC), NULL))[1] AS doc_type,
-            COUNT(*) AS citation_count,
+            (ARRAY_REMOVE(ARRAY_AGG(e.target_doc_type ORDER BY e.id DESC), NULL))[1]
+                                  AS doc_type,
+            e.auth_type,
+            e.display_title,
+            COUNT(*)              AS citation_count,
             SUM(e.citation_score) AS score
         FROM enriched e
         GROUP BY
             e.target_id,
+            e.target_authority_id,
             e.target_root_norm,
             e.target_level,
             e.jyear,
             e.jcase_norm,
-            e.jno
-        ORDER BY score DESC, citation_count DESC, e.target_id DESC
+            e.jno,
+            e.auth_type,
+            e.display_title
+        ORDER BY score DESC, citation_count DESC,
+                 e.target_id DESC NULLS LAST,
+                 e.target_authority_id DESC NULLS LAST
         LIMIT %(limit)s
     """
 
