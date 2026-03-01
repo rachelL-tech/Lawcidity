@@ -277,10 +277,10 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
     pool = 同字號且 case_type == ct 的既有 placeholder（精確匹配）
 
     doc_type 升級邏輯（在 pool 內）：
-      None  → pool[0]（不升級 doc_type）；找不到 → INSERT
       判決  → pool 有判例 → 回傳判例；有判決 → 回傳；有 NULL doc_type → 升級為判決
       裁定  → pool 有裁定 → 回傳；有 NULL doc_type → 升級為裁定
       判例  → 有判例 → 回傳；升級判決/NULL → 判例
+      None/其他 → pool 有明確 doc_type → 掛引用數最多的；只有 NULL doc_type → 掛 NULL；找不到 → INSERT
       找不到可用的 → INSERT new placeholder（case_type=ct）
 
     ct=None（來源資料夾無後綴）時印警告；pool 找 case_type IS NULL 的既有 placeholder。
@@ -302,15 +302,11 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
         ct = target_case_type or source_case_type  # source fallback
         if ct is None:
             print(f"  警告：無法確定 case_type（court={court}, {jyear}年{jcase_norm}字{jno}號）")
-        pool = [r for r in all_ph if r[2] == ct]  # exact case_type match（含 ct=None 時找 NULL）
+        pool = [r for r in all_ph if r[2] == ct]  # exact case_type match（含 ct=None 時找 case_type IS NULL 的既有 placeholder）
 
         chosen_id = None
 
-        if target_doc_type is None:
-            if pool:
-                chosen_id = pool[0][0]
-
-        elif target_doc_type in ('判決', '裁定'):
+        if target_doc_type in ('判決', '裁定'):
             # 判例與判決不可並存；新來判決若已有判例，直接回傳判例
             prec_ph = next((r for r in pool if r[1] == '判例'), None)
             same_ph = next((r for r in pool if r[1] == target_doc_type), None)
@@ -344,9 +340,27 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                     chosen_id = upgrade_src[0]
 
         else:
-            # 未知 doc_type，當 None 處理
-            if pool:
-                chosen_id = pool[0][0]
+            # target_doc_type is None 或其他未知值
+            # 有明確 doc_type 的 placeholder → 掛引用數最多的（避免掛到不相關節點）
+            # 只有 NULL doc_type 的 placeholder → 掛 NULL（語意一致：都不知道 doc_type）
+            explicit_phs = [r for r in pool if r[1] is not None]
+            if explicit_phs:
+                explicit_ids = [r[0] for r in explicit_phs]
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT target_id, COUNT(*) AS cnt
+                        FROM citations
+                        WHERE target_id = ANY(%s)
+                        GROUP BY target_id
+                        ORDER BY cnt DESC
+                        LIMIT 1
+                    """, (explicit_ids,))
+                    row = cur.fetchone()
+                chosen_id = row[0] if row else explicit_phs[0][0]
+            else:
+                null_ph = next((r for r in pool if r[1] is None), None)
+                if null_ph:
+                    chosen_id = null_ph[0]
 
         if chosen_id is not None:
             conn.commit()
