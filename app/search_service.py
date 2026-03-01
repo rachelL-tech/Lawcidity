@@ -42,12 +42,11 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
             out.append(v)
     return out
 
-# 把 q 切成 term，空值就報錯
-def tokenize_query(q: str) -> list[str]:
-    terms = [t.strip() for t in re.split(r"\s+", q or "") if t.strip()]
-    if not terms:
-        raise ValueError("q 不可為空")
-    return terms
+# 把 q 切成 term；q 為 None 或空字串時回傳 []
+def tokenize_query(q: str | None) -> list[str]:
+    if not q or not q.strip():
+        return []
+    return [t.strip() for t in re.split(r"\s+", q.strip()) if t.strip()]
 
 # 解析 case_type=民事,刑事 類型字串並驗證
 def parse_case_types(case_type_csv: str | None) -> list[str]:
@@ -336,10 +335,8 @@ def fetch_rankings_by_source_ids(
                 b.target_id,
                 b.target_authority_id,
                 b.target_doc_type,
-                (
-                    {snippet_score_sql} +
-                    {statute_score_sql}
-                ) AS citation_score
+                {snippet_score_sql} AS keyword_score,
+                {statute_score_sql} AS statute_score
             FROM base b
         ),
         enriched AS (
@@ -348,7 +345,8 @@ def fetch_rankings_by_source_ids(
                 s.target_id,
                 s.target_authority_id,
                 s.target_doc_type,
-                s.citation_score,
+                s.keyword_score,
+                s.statute_score,
                 COALESCE(d.root_norm, a.root_norm) AS target_root_norm,
                 cu.level       AS target_level,
                 d.jyear,
@@ -376,7 +374,9 @@ def fetch_rankings_by_source_ids(
             e.auth_type,
             e.display_title,
             COUNT(*)              AS citation_count,
-            SUM(e.citation_score) AS score
+            SUM(e.keyword_score) AS keyword_score_sum,
+            SUM(e.statute_score) AS statute_score_sum,
+            SUM(e.keyword_score) + SUM(e.statute_score) AS score
         FROM enriched e
         GROUP BY
             e.target_id,

@@ -28,7 +28,7 @@ def get_conn():
 
 @app.get("/api/search")
 def search_rankings(
-    q: str = Query(..., min_length=1, description="關鍵字（空白分詞，AND）"),
+    q: str | None = Query(None, description="關鍵字（空白分詞，AND）；與法條至少一項必填"),
     case_type: str | None = Query(None, description="逗號分隔：民事,刑事,行政,憲法"),
     law: list[str] | None = Query(None, description="可重複參數；需與 article 一一對應"),
     article: list[str] | None = Query(None, description="可重複參數；需與 law 一一對應"),
@@ -37,9 +37,8 @@ def search_rankings(
     source_limit: int = Query(3000, ge=1, le=10000),
     limit: int = Query(100, ge=1, le=500),
 ):
-    raw_query = q.strip()
     try:
-        terms = tokenize_query(raw_query)
+        terms = tokenize_query(q)
         case_types = parse_case_types(case_type)
         statute_filters = build_statute_filters(
             laws=law or [],
@@ -48,6 +47,9 @@ def search_rankings(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    if not terms and not statute_filters:
+        raise HTTPException(status_code=400, detail="q 與法條（law+article）至少提供一項")
 
     query_terms = terms
 
