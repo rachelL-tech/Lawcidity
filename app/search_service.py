@@ -24,13 +24,11 @@ from psycopg.rows import dict_row
 
 VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
 
-SNIPPET_MATCH_SCORE = 1
 STATUTE_MATCH_SCORE = 3
 
-# 排序模式備忘（目前採保守版，其他版僅供記錄）
-# - 保守版：snippet 命中加 +1、法條匹配加 +3（命中作為加分，不作過濾）
-# - 中等版：snippet 命中加 +3、法條匹配加 +3（同上）
-# - 語意優先：snippet 命中加 +6、法條匹配加 +3（同上）
+# score = citation_count + keyword_score_sum + statute_score_sum
+# keyword_score：每個查詢詞各自計分（命中+1），多詞查詢可得部分分數
+# statute_score：每組 law+article 命中 citation snippet +3
 
 # 去重但保留原順序
 def _dedupe_keep_order(values: list[str]) -> list[str]:
@@ -270,12 +268,13 @@ def fetch_rankings_by_source_ids(
     params: dict[str, Any] = {"source_ids": source_ids, "limit": limit}
 
     if clean_terms:
-        params["kw_patterns"] = [f"%{t}%" for t in clean_terms]
-        params["snippet_score"] = SNIPPET_MATCH_SCORE
-        snippet_score_sql = (
-            "CASE WHEN b.snippet ILIKE ANY (%(kw_patterns)s) "
-            "THEN %(snippet_score)s ELSE 0 END"
-        )
+        # 每個查詢詞各自計分：命中 +1，多詞查詢可得部分分數
+        term_parts: list[str] = []
+        for idx, term in enumerate(clean_terms):
+            key = f"kw_{idx}"
+            params[key] = f"%{term}%"
+            term_parts.append(f"(b.snippet ILIKE %({key})s)::int")
+        snippet_score_sql = " + ".join(term_parts)
     else:
         snippet_score_sql = "0"
 
@@ -376,7 +375,7 @@ def fetch_rankings_by_source_ids(
             COUNT(*)              AS citation_count,
             SUM(e.keyword_score) AS keyword_score_sum,
             SUM(e.statute_score) AS statute_score_sum,
-            SUM(e.keyword_score) + SUM(e.statute_score) AS score
+            COUNT(*) + SUM(e.keyword_score) + SUM(e.statute_score) AS score
         FROM enriched e
         GROUP BY
             e.target_id,
