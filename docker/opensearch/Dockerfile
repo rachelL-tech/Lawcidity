@@ -4,3 +4,6 @@ FROM opensearchproject/opensearch:2.18.0
 
 RUN /usr/share/opensearch/bin/opensearch-plugin install --batch \
     https://get.infini.cloud/opensearch/analysis-ik/2.18.0
+
+COPY docker/opensearch/IKAnalyzer.cfg.xml /usr/share/opensearch/config/analysis-ik/IKAnalyzer.cfg.xml
+COPY docker/opensearch/custom_legal_dict.txt /usr/share/opensearch/config/analysis-ik/custom_legal_dict.txt
