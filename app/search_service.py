@@ -61,7 +61,7 @@ def build_statute_filters(
     laws: list[str],
     articles: list[str],
     sub_refs: list[str],
-) -> list[tuple[str, str, str | None]]:
+) -> list[tuple[str, str | None, str | None]]:
     clean_laws = [x.strip() for x in laws if x and x.strip()]
     clean_articles = [x.strip() for x in articles if x and x.strip()]
     clean_sub_refs = [x.strip() for x in sub_refs if x is not None]
@@ -69,14 +69,16 @@ def build_statute_filters(
     if not clean_laws and not clean_articles and not clean_sub_refs:
         return []
 
-    if len(clean_laws) != len(clean_articles):
-        raise ValueError("law 與 article 參數數量必須一致")
+    # article 若有值，必須與 law 一一對應
+    if clean_articles and len(clean_articles) != len(clean_laws):
+        raise ValueError("article 數量必須與 law 一致")
 
     if clean_sub_refs and len(clean_sub_refs) != len(clean_laws):
-        raise ValueError("sub_ref 參數數量必須與 law/article 一致")
+        raise ValueError("sub_ref 數量必須與 law 一致")
 
-    out: list[tuple[str, str, str | None]] = []
-    for idx, (law, article) in enumerate(zip(clean_laws, clean_articles)):
+    out: list[tuple[str, str | None, str | None]] = []
+    for idx, law in enumerate(clean_laws):
+        article: str | None = clean_articles[idx] if clean_articles else None
         sub_ref: str | None = None
         if clean_sub_refs:
             sub = clean_sub_refs[idx]
@@ -102,12 +104,11 @@ def build_opensearch_query(
     if case_types:
         filters.append({"terms": {"case_type": case_types}})
 
-    # statutes 全 AND：每一組 law+article(+sub_ref) 都必須命中
+    # statutes 全 AND：每一組 law(+article)(+sub_ref) 都必須命中
     for law, article, sub_ref in statute_filters:
-        nested_must: list[dict[str, Any]] = [
-            {"term": {"statutes.law": law}},
-            {"term": {"statutes.article_raw": article}},
-        ]
+        nested_must: list[dict[str, Any]] = [{"term": {"statutes.law": law}}]
+        if article is not None:
+            nested_must.append({"term": {"statutes.article_raw": article}})
         if sub_ref is not None:
             nested_must.append({"term": {"statutes.sub_ref": sub_ref}})
 
@@ -126,10 +127,9 @@ def build_opensearch_query(
         for term in exclude_terms
     ]
     for law, article, sub_ref in exclude_statute_filters:
-        excl_must: list[dict[str, Any]] = [
-            {"term": {"statutes.law": law}},
-            {"term": {"statutes.article_raw": article}},
-        ]
+        excl_must: list[dict[str, Any]] = [{"term": {"statutes.law": law}}]
+        if article is not None:
+            excl_must.append({"term": {"statutes.article_raw": article}})
         if sub_ref is not None:
             excl_must.append({"term": {"statutes.sub_ref": sub_ref}})
         must_not.append(
@@ -248,24 +248,25 @@ def search_source_ids_baseline_pg(
         where_parts.append("d.case_type = ANY(%(case_types)s)")
         params["case_types"] = case_types
 
-    # 法條全 AND：每一組 law+article(+sub_ref) 都必須存在
+    # 法條全 AND：每一組 law(+article)(+sub_ref) 都必須存在
     for idx, (law, article, sub_ref) in enumerate(statute_filters):
         law_key = f"law_{idx}"
-        article_key = f"article_{idx}"
-        sub_key = f"sub_ref_{idx}"
-
         clause = f"""
             EXISTS (
                 SELECT 1
                 FROM decision_reason_statutes drs
                 WHERE drs.decision_id = d.id
                   AND drs.law = %({law_key})s
-                  AND drs.article_raw = %({article_key})s
             """
         params[law_key] = law
-        params[article_key] = article
+
+        if article is not None:
+            article_key = f"article_{idx}"
+            clause += f"\n                  AND drs.article_raw = %({article_key})s"
+            params[article_key] = article
 
         if sub_ref is not None:
+            sub_key = f"sub_ref_{idx}"
             clause += f"\n                  AND drs.sub_ref = %({sub_key})s"
             params[sub_key] = sub_ref
 
@@ -281,21 +282,22 @@ def search_source_ids_baseline_pg(
     # 排除法條：NOT EXISTS
     for idx, (law, article, sub_ref) in enumerate(exclude_statute_filters):
         law_key = f"excl_law_{idx}"
-        article_key = f"excl_article_{idx}"
-        sub_key = f"excl_sub_ref_{idx}"
-
         clause = f"""
             NOT EXISTS (
                 SELECT 1
                 FROM decision_reason_statutes drs
                 WHERE drs.decision_id = d.id
                   AND drs.law = %({law_key})s
-                  AND drs.article_raw = %({article_key})s
             """
         params[law_key] = law
-        params[article_key] = article
+
+        if article is not None:
+            article_key = f"excl_article_{idx}"
+            clause += f"\n                  AND drs.article_raw = %({article_key})s"
+            params[article_key] = article
 
         if sub_ref is not None:
+            sub_key = f"excl_sub_ref_{idx}"
             clause += f"\n                  AND drs.sub_ref = %({sub_key})s"
             params[sub_key] = sub_ref
 
@@ -345,10 +347,12 @@ def fetch_rankings_by_source_ids(
         statute_clauses: list[str] = []
         for idx, (law, article, sub_ref) in enumerate(statute_filters):
             law_key = f"law_{idx}"
-            article_key = f"article_{idx}"
-            clause = f"(css.law = %({law_key})s AND css.article_raw = %({article_key})s"
+            clause = f"(css.law = %({law_key})s"
             params[law_key] = law
-            params[article_key] = article
+            if article is not None:
+                article_key = f"article_{idx}"
+                clause += f" AND css.article_raw = %({article_key})s"
+                params[article_key] = article
             if sub_ref is not None:
                 sub_key = f"sub_ref_{idx}"
                 clause += f" AND css.sub_ref = %({sub_key})s"
