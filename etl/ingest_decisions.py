@@ -166,6 +166,15 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
 
         if placeholder:
             ph_id, ph_doc_type, ph_case_type = placeholder
+
+            # jid 已存在時（例如重複匯入同一資料夾），直接回傳現有 row
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM decisions WHERE jid = %s", (jid,))
+                existing = cur.fetchone()
+            if existing:
+                conn.commit()
+                return True, existing[0]
+
             # conservative case_type upgrade
             new_case_type = case_type
             if case_type is None:
@@ -290,6 +299,26 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
         return None
 
     try:
+        ct = target_case_type or source_case_type  # source fallback
+
+        # 先查是否已有完整 decisions row（jid IS NOT NULL）
+        # 須同時比對 case_type 與 doc_type，避免判決/裁定並存時回傳錯誤目標
+        # target_doc_type=None 時接受任意 doc_type（OR %s IS NULL = TRUE）
+        if ct is not None:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id FROM decisions
+                    WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                      AND jid IS NOT NULL AND case_type = %s
+                      AND (doc_type = %s OR %s IS NULL)
+                    LIMIT 1
+                """, (court, jyear, jcase_norm, jno, ct,
+                      target_doc_type, target_doc_type))
+                full_row = cur.fetchone()
+            if full_row:
+                conn.commit()
+                return full_row[0]
+
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, doc_type, case_type FROM decisions
@@ -298,8 +327,6 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                 ORDER BY id
             """, (court, jyear, jcase_norm, jno))
             all_ph = cur.fetchall()  # [(id, doc_type, case_type), ...]
-
-        ct = target_case_type or source_case_type  # source fallback
         if ct is None:
             print(f"  警告：無法確定 case_type（court={court}, {jyear}年{jcase_norm}字{jno}號）")
         pool = [r for r in all_ph if r[2] == ct]  # exact case_type match（含 ct=None 時找 case_type IS NULL 的既有 placeholder）
