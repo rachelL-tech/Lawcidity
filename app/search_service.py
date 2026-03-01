@@ -89,6 +89,8 @@ def build_opensearch_query(
     query_terms: list[str],
     case_types: list[str],
     statute_filters: list[tuple[str, str, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str, str | None]],
     size: int,
 ) -> dict[str, Any]:
     must = [
@@ -118,10 +120,35 @@ def build_opensearch_query(
             }
         )
 
+    # 排除條件
+    must_not: list[dict[str, Any]] = [
+        {"match_phrase": {"clean_text": term}}
+        for term in exclude_terms
+    ]
+    for law, article, sub_ref in exclude_statute_filters:
+        excl_must: list[dict[str, Any]] = [
+            {"term": {"statutes.law": law}},
+            {"term": {"statutes.article_raw": article}},
+        ]
+        if sub_ref is not None:
+            excl_must.append({"term": {"statutes.sub_ref": sub_ref}})
+        must_not.append(
+            {
+                "nested": {
+                    "path": "statutes",
+                    "query": {"bool": {"must": excl_must}},
+                }
+            }
+        )
+
+    bool_query: dict[str, Any] = {"must": must, "filter": filters}
+    if must_not:
+        bool_query["must_not"] = must_not
+
     return {
         "size": size,
         "_source": ["source_id"],
-        "query": {"bool": {"must": must, "filter": filters}},
+        "query": {"bool": bool_query},
     }
 
 # 讀環境變數
@@ -165,6 +192,8 @@ def search_source_ids_opensearch(
     query_terms: list[str],
     case_types: list[str],
     statute_filters: list[tuple[str, str, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str, str | None]],
     source_limit: int,
 ) -> list[int]:
     query_terms = _dedupe_keep_order([t for t in query_terms if t])
@@ -174,6 +203,8 @@ def search_source_ids_opensearch(
         query_terms=query_terms,
         case_types=case_types,
         statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
         size=source_limit,
     )
 
@@ -200,6 +231,8 @@ def search_source_ids_baseline_pg(
     query_terms: list[str],
     case_types: list[str],
     statute_filters: list[tuple[str, str, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str, str | None]],
     source_limit: int,
 ) -> list[int]:
     params: dict[str, Any] = {"source_limit": source_limit}
@@ -223,6 +256,36 @@ def search_source_ids_baseline_pg(
 
         clause = f"""
             EXISTS (
+                SELECT 1
+                FROM decision_reason_statutes drs
+                WHERE drs.decision_id = d.id
+                  AND drs.law = %({law_key})s
+                  AND drs.article_raw = %({article_key})s
+            """
+        params[law_key] = law
+        params[article_key] = article
+
+        if sub_ref is not None:
+            clause += f"\n                  AND drs.sub_ref = %({sub_key})s"
+            params[sub_key] = sub_ref
+
+        clause += "\n            )"
+        where_parts.append(clause)
+
+    # 排除關鍵字：NOT ILIKE
+    for idx, term in enumerate(exclude_terms):
+        key = f"excl_kw_{idx}"
+        where_parts.append(f"d.clean_text NOT ILIKE %({key})s")
+        params[key] = f"%{term}%"
+
+    # 排除法條：NOT EXISTS
+    for idx, (law, article, sub_ref) in enumerate(exclude_statute_filters):
+        law_key = f"excl_law_{idx}"
+        article_key = f"excl_article_{idx}"
+        sub_key = f"excl_sub_ref_{idx}"
+
+        clause = f"""
+            NOT EXISTS (
                 SELECT 1
                 FROM decision_reason_statutes drs
                 WHERE drs.decision_id = d.id

@@ -33,6 +33,10 @@ def search_rankings(
     law: list[str] | None = Query(None, description="可重複參數；需與 article 一一對應"),
     article: list[str] | None = Query(None, description="可重複參數；需與 law 一一對應"),
     sub_ref: list[str] | None = Query(None, description="可重複參數；可省略；若提供需與 law/article list 長度一致，才能知道哪個 sub_ref 對應哪個 law/article"),
+    exclude_q: str | None = Query(None, description="排除關鍵字（空白分詞，各詞獨立排除）"),
+    exclude_law: list[str] | None = Query(None, description="排除法條 law；需與 exclude_article 一一對應"),
+    exclude_article: list[str] | None = Query(None, description="排除法條 article；需與 exclude_law 一一對應"),
+    exclude_sub_ref: list[str] | None = Query(None, description="排除法條 sub_ref；可省略；若提供需與 exclude_law/article 長度一致"),
     backend: Literal["opensearch", "pg"] = Query("opensearch"),
     source_limit: int = Query(3000, ge=1, le=10000),
     limit: int = Query(100, ge=1, le=500),
@@ -44,6 +48,12 @@ def search_rankings(
             laws=law or [],
             articles=article or [],
             sub_refs=sub_ref or [],
+        )
+        exclude_terms = tokenize_query(exclude_q)
+        exclude_statute_filters = build_statute_filters(
+            laws=exclude_law or [],
+            articles=exclude_article or [],
+            sub_refs=exclude_sub_ref or [],
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -60,6 +70,8 @@ def search_rankings(
                     query_terms=query_terms,
                     case_types=case_types,
                     statute_filters=statute_filters,
+                    exclude_terms=exclude_terms,
+                    exclude_statute_filters=exclude_statute_filters,
                     source_limit=source_limit,
                 )
             else:
@@ -68,6 +80,8 @@ def search_rankings(
                     query_terms=query_terms,
                     case_types=case_types,
                     statute_filters=statute_filters,
+                    exclude_terms=exclude_terms,
+                    exclude_statute_filters=exclude_statute_filters,
                     source_limit=source_limit,
                 )
         except RuntimeError as e:
