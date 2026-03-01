@@ -153,12 +153,15 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                 WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
                   AND jid IS NULL
                 ORDER BY
+                  CASE WHEN case_type = %s THEN 0
+                       WHEN case_type IS NULL THEN 1
+                       ELSE 2 END,
                   CASE WHEN doc_type = %s THEN 0
                        WHEN doc_type IS NULL THEN 1
                        ELSE 2 END,
                   id
                 LIMIT 1
-            """, (unit_norm, jyear, jcase_norm, jno, doc_type))
+            """, (unit_norm, jyear, jcase_norm, jno, case_type, doc_type))
             placeholder = cur.fetchone()
 
         if placeholder:
@@ -265,9 +268,13 @@ def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
 
 def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
                                target_doc_type: Optional[str] = None,
-                               target_case_type: Optional[str] = None) -> Optional[int]:
+                               target_case_type: Optional[str] = None,
+                               source_case_type: Optional[str] = None) -> Optional[int]:
     """
     在 decisions 表 upsert target placeholder（jid IS NULL），回傳 decision_id
+
+    effective_ct = target_case_type or source_case_type
+    （target_case_type 從引用文字抽取，source_case_type 從來源判決資料夾繼承作為 fallback）
 
     doc_type 升級邏輯（同案號同 case_type）：
       None  → 回傳任何既有（不升級）；找不到 → INSERT None
@@ -292,12 +299,13 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
             all_ph = cur.fetchall()  # [(id, doc_type, case_type), ...]
 
         # 按 case_type 篩選可操作的 placeholder 池
-        ct = target_case_type
+        ct = target_case_type or source_case_type  # source fallback
         if ct is not None:
             exact   = [r for r in all_ph if r[2] == ct]
             null_ct = [r for r in all_ph if r[2] is None]
         else:
-            exact   = [r for r in all_ph if r[2] is None]
+            # target_case_type=None：接受任何既有 placeholder（避免重複建 NULL 行）
+            exact   = all_ph
             null_ct = []
         pool = exact or null_ct  # 優先精確，次之 NULL
 
@@ -436,7 +444,8 @@ def upsert_authority(conn, auth_type: str, ref_key: str, display: Optional[str] 
 
 def ingest_citations(conn, source_id: int, clean_text: str,
                      court_root_norm: str = None,
-                     source_self_key: Optional[tuple] = None) -> tuple:
+                     source_self_key: Optional[tuple] = None,
+                     source_case_type: Optional[str] = None) -> tuple:
     """
     從 clean_text 抽取所有引用，寫入 citations 表。
 
@@ -465,6 +474,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
                 c["court"], c["jyear"], c["jcase_norm"], c["jno"],
                 target_doc_type=c.get("doc_type"),
                 target_case_type=c.get("target_case_type"),
+                source_case_type=source_case_type,
             )
             if target_id is not None:
                 resolved.append((ctype, target_id, c))
@@ -628,7 +638,8 @@ def main(folder_path: str):
                 n, cite_errors = ingest_citations(
                     conn, decision_id, clean_text,
                     court_root_norm=court_info["court_root_norm"],
-                    source_self_key=_self_key
+                    source_self_key=_self_key,
+                    source_case_type=court_info.get("case_type"),
                 )
                 if n > 0:
                     print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
