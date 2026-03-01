@@ -13,7 +13,7 @@
 import re
 from typing import List, Tuple, Optional
 
-from law_names import LAW_NAMES, PSEUDO_LAWS
+from law_names import LAW_NAMES, PSEUDO_LAWS, normalize_law_name
 
 # =========================
 # Regex 建構
@@ -55,10 +55,26 @@ _ABBR_ITEM_RE  = re.compile(r'[、，及與暨或,]\s*第\s*(\d+)\s*([項款目]
 # 縮略多號：「、第X、Y項」
 _ABBR_MULTI_RE = re.compile(r'[、，及與暨或,]\s*第\s*(\d+)\s*[、，]\s*(\d+)\s*([項款目])')
 
+# 文內簡稱：例如「勞動基準法（下稱勞基法）」「民事訴訟法（簡稱民訴法）」
+ABBR_ALIAS_RE = re.compile(
+    r'(' + '|'.join(re.escape(n) for n in sorted(set(LAW_NAMES), key=len, reverse=True)) + r')'
+    r'\s*（(?:下稱|簡稱)\s*「?([^」）]{1,20})」?）'
+)
 
-# 臺→台 正規化
-def _normalize(law: str) -> str:
-    return law.replace('臺', '台')
+
+def _extract_inline_law_aliases(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in ABBR_ALIAS_RE.finditer(text):
+        canonical = normalize_law_name(m.group(1))
+        alias = normalize_law_name(m.group(2))
+        if not alias or alias in PSEUDO_LAWS or alias == canonical:
+            continue
+        out[alias] = canonical
+    return out
+
+
+def _normalize(law: str, inline_aliases: dict[str, str] | None = None) -> str:
+    return normalize_law_name(law, aliases=inline_aliases)
 
 
 def _parse_qualifier(text: str, pos: int) -> Tuple[List[str], int]:
@@ -150,6 +166,8 @@ def extract_statutes(text: str) -> List[Tuple[str, str, str, str]]:
     if not text:
         return []
 
+    inline_aliases = _extract_inline_law_aliases(text)
+
     results: List[Tuple[str, str, str, str]] = []
     seen: set = set()
     current_law: Optional[str] = None
@@ -202,7 +220,7 @@ def extract_statutes(text: str) -> List[Tuple[str, str, str, str]]:
             break
 
         law_raw = full.group(1)
-        law = _normalize(law_raw)
+        law = _normalize(law_raw, inline_aliases)
         suf = f'之{full.group(3)}' if full.group(3) else ''
         article = full.group(2) + suf
 

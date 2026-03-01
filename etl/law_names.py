@@ -1053,3 +1053,43 @@ PSEUDO_LAWS: set[str] = {
     "系爭規則",
     "系爭法",
 }
+
+# =========================
+# 法條別名（可逐步擴充）
+# =========================
+LAW_ALIASES: dict[str, str] = {
+    "勞基法": "勞動基準法",
+    "勞退條例": "勞工退休金條例",
+    "民訴法": "民事訴訟法",
+    "刑訴法": "刑事訴訟法",
+    "行訴法": "行政訴訟法",
+}
+
+
+def _normalize_text(text: str) -> str:
+    return text.replace("臺", "台").strip()
+
+
+_LAW_ALIASES_NORMALIZED: dict[str, str] = {
+    _normalize_text(k): _normalize_text(v)
+    for k, v in LAW_ALIASES.items()
+}
+
+
+def normalize_law_name(law: str, aliases: dict[str, str] | None = None) -> str:
+    """
+    法條名稱正規化：
+    1) 臺 -> 台
+    2) 先套用文內別名（若有）
+    3) 再套用全域 LAW_ALIASES
+    """
+    name = _normalize_text(law)
+    if not name:
+        return name
+
+    if aliases:
+        mapped = aliases.get(name)
+        if mapped:
+            return _normalize_text(mapped)
+
+    return _LAW_ALIASES_NORMALIZED.get(name, name)

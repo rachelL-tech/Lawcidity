@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 import psycopg
 from psycopg.rows import dict_row
+from etl.law_names import normalize_law_name
 
 
 VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
@@ -62,7 +63,7 @@ def build_statute_filters(
     articles: list[str],
     sub_refs: list[str],
 ) -> list[tuple[str, str | None, str | None]]:
-    clean_laws = [x.strip() for x in laws if x and x.strip()]
+    clean_laws = [normalize_law_name(x) for x in laws if x and x.strip()]
     clean_articles = [x.strip() for x in articles if x and x.strip()]
     clean_sub_refs = [x.strip() for x in sub_refs if x is not None]
 
