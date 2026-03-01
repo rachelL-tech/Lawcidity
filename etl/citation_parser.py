@@ -267,10 +267,11 @@ def _infer_organizer(raw_match: str) -> str:
 
 
 def _extract_target_case_type(raw_match: str) -> Optional[str]:
-    """從 raw_match 本身推斷 target 的案件類型（民事/刑事/行政）。
+    """從 raw_match 本身推斷 target 的案件類型（民事/刑事/行政/憲法）。
     不查前後文：前後文容易誤抓「刑事庭」、「行政訴訟」等無關字眼。
+    憲法法庭的 raw_match 以「憲法法庭」開頭，直接命中「憲法」。
     """
-    for kw in ('民事', '刑事', '行政'):
+    for kw in ('民事', '刑事', '行政', '憲法'):
         if kw in raw_match:
             return kw
     return None
