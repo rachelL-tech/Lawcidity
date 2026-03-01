@@ -208,7 +208,7 @@ _AGENCY_OPINION_RE = re.compile(
 # =========================
 def preprocess_text(text: str) -> str:
     """移除換行與多餘空白，讓 regex 更穩定。
-    注意：只用來做 regex 抽取，snippet 要從原始 full_text 取。
+    注意：只用來做 regex 抽取，snippet 要從 clean_text 取。
     """
     text = text.replace('\r\n', '').replace('\n', '').replace('\r', '')
     text = re.sub(r'\s+', ' ', text)
@@ -266,16 +266,12 @@ def _infer_organizer(raw_match: str) -> str:
     return '高等法院'
 
 
-def _extract_target_case_type(raw_match: str, processed: str, match_start: int) -> Optional[str]:
-    """從 raw_match 或前後文推斷 target 的案件類型（民事/刑事/行政）"""
-    # 先查 raw_match 本身
+def _extract_target_case_type(raw_match: str) -> Optional[str]:
+    """從 raw_match 本身推斷 target 的案件類型（民事/刑事/行政）。
+    不查前後文：前後文容易誤抓「刑事庭」、「行政訴訟」等無關字眼。
+    """
     for kw in ('民事', '刑事', '行政'):
         if kw in raw_match:
-            return kw
-    # 查前後文（match_start 前 30 字 + 後 30 字）
-    ctx = processed[max(0, match_start - 30): match_start + len(raw_match) + 30]
-    for kw in ('民事', '刑事', '行政'):
-        if kw in ctx:
             return kw
     return None
 
@@ -420,11 +416,12 @@ def extract_citations(
     current_court: Optional[str] = None
     chain_is_ben_yuan: bool = False  # 目前 chain 是否由「本院」具名引用發起
     pos = 0
+
     # 同句同法院鏈：前筆無 doc_type，等後筆回填
     pending_doc_type_idxs: List[int] = []
     pending_court: Optional[str] = None
     pending_last_end = 0
-
+    
     def _flush_pending(doc_type: Optional[str]) -> None:
         nonlocal pending_doc_type_idxs, pending_court
         if not doc_type:
@@ -471,7 +468,7 @@ def extract_citations(
                             fallback_end=abbr.end(),
                             authority_mode=(current_court == '憲法法庭'),
                             doc_type=abbr.group(4),
-                            target_case_type=_extract_target_case_type(a_raw, processed, abbr.start(1)),
+                            target_case_type=_extract_target_case_type(a_raw),
                         ))
                         _flush_pending(results[-1].get("doc_type"))
                         if results[-1].get("doc_type") is None:
@@ -541,7 +538,7 @@ def extract_citations(
                 fallback_end=full.end(),
                 authority_mode=is_const_court,
                 doc_type=full.group(5),
-                target_case_type=_extract_target_case_type(full.group(0), processed, full.start()),
+                target_case_type=_extract_target_case_type(full.group(0)),
             ))
             _flush_pending(results[-1].get("doc_type"))
             if results[-1].get("doc_type") is None:

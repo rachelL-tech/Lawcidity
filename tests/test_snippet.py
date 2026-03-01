@@ -465,3 +465,28 @@ def test_shijian_jiesuqian_filtered():
     assert len(decision_results) == 0, (
         f"事件終結前後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
     )
+
+
+# ─── Case 25：citation 後接「刑事庭」不應誤判 target_case_type='刑事' ──────────────────
+
+def test_after_context_shiting_not_extracted():
+    """
+    citation 收尾後緊接「業經本院刑事庭以...刑事判決判處被告罪刑在案」，
+    _extract_target_case_type 不應從前後文抓到「刑事」。
+    原始 bug：context window 向後延伸 +30 字，下一句的「刑事庭」被誤判為 target_case_type='刑事'。
+    修法：只查 raw_match 本身，完全不查前後文。
+    """
+    text = (
+        "加害人於共同侵害權利之目的範圍內，各自分擔實行行為之一部，"
+        "而互相利用他人之行為，以達其目的者，仍不失為共同侵權行為人，"
+        "而應對於全部所發生之結果，連帶負損害賠償責任"
+        "（最高法院78年度台上字第2479號判決意旨參照）。"
+        "㈡原告主張之前揭事實，業經本院刑事庭以113年度金易字第109號刑事判決判處被告罪刑在案。"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1, f"應有 1 筆 decision citation，得到 {len(decision_results)} 筆"
+    ct = decision_results[0].get("target_case_type")
+    assert ct is None, (
+        f"citation 後接刑事庭不應誤判 target_case_type，實際值：{ct!r}"
+    )
