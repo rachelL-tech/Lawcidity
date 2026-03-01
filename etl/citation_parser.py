@@ -789,9 +789,32 @@ _REASON_SECTION_RE = re.compile(
 )
 
 
+def _is_party_claim_snippet(snippet: str, raw_match: str) -> bool:
+    """
+    判斷 snippet 是否為當事人主張語境（云云 FP 過濾）。
+
+    Rule A（保守）：snippet 結尾為「云云。」
+      → 引用出現在當事人主張摘要的結尾，法院僅轉述主張而非援引。
+
+    Rule B（位置型）：snippet 含「云云」且 raw_match 首次出現位置在「云云」之前
+      → 引用夾在當事人主張文字中，後方的「云云」是法院對該主張的否定收尾。
+      反例（不過濾）：「...主張云云，自非可採（最高法院XXX參照）」
+        此時 raw_match 在 云云 之後，是法院自己引用判決來駁斥，屬有效引用。
+    """
+    # Rule A
+    if snippet.rstrip().endswith('云云。'):
+        return True
+    # Rule B
+    if '云云' in snippet:
+        mp = snippet.find(raw_match)
+        if mp != -1 and mp < snippet.index('云云'):
+            return True
+    return False
+
+
 def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
     """
-    位置型 false-positive 過濾（在 extract_citations 回傳前統一執行）：
+    False-positive 過濾（在 extract_citations 回傳前統一執行）：
 
     Guard 1：「以上正本證明與原本無異」之後
       書記欄 / 附表區，不含法律見解引用。
@@ -800,7 +823,11 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
       主文僅宣示判決結果，不屬於法律見解引用。
       找不到「理由」段 → reason_pos = 0（不過濾）。
 
-    match_start = None 的 citation（PDF 折行無法定位）略過位置檢查。
+    Guard 3：云云 FP（_is_party_claim_snippet）
+      snippet 結尾為「云云。」，或 raw_match 出現在「云云」之前。
+      match_start = None 的 citation 同樣套用此 guard。
+
+    match_start = None 的 citation（PDF 折行無法定位）略過 Guard 1/2 位置檢查。
     """
     # Guard 1：書記欄起點
     zhengben_pos = clean_text.find('以上正本證明與原本無異')
@@ -811,12 +838,16 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
     m = _REASON_SECTION_RE.search(clean_text)
     reason_pos = m.start() if m else 0
 
-    if zhengben_pos == len(clean_text) and reason_pos == 0:
-        return results  # 兩個 guard 都沒命中，快速退出
-
     filtered = []
     for r in results:
         ms = r.get('match_start')
+        snippet  = r.get('snippet', '')
+        raw_match = r.get('raw_match', '')
+
+        # Guard 3：云云 FP（不依賴位置，match_start=None 也套用）
+        if _is_party_claim_snippet(snippet, raw_match):
+            continue
+
         if ms is None:
             filtered.append(r)
             continue
