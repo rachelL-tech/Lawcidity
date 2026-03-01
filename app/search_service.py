@@ -308,6 +308,7 @@ def search_source_ids_baseline_pg(
         SELECT d.id
         FROM decisions d
         WHERE {" AND ".join(where_parts)}
+          AND EXISTS (SELECT 1 FROM citations c WHERE c.source_id = d.id)
         ORDER BY d.id DESC
         LIMIT %(source_limit)s
     """
