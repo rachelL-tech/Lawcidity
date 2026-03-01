@@ -379,6 +379,7 @@ def fetch_rankings_by_source_ids(
         ),
         base AS (
             SELECT c.id,
+                   c.source_id,
                    c.target_id,
                    NULL::bigint  AS target_authority_id,
                    c.snippet,
@@ -388,6 +389,7 @@ def fetch_rankings_by_source_ids(
             WHERE c.target_id IS NOT NULL
             UNION ALL
             SELECT c.id,
+                   c.source_id,
                    NULL::bigint  AS target_id,
                    c.target_authority_id,
                    c.snippet,
@@ -399,12 +401,29 @@ def fetch_rankings_by_source_ids(
         scored AS (
             SELECT
                 b.id,
+                b.source_id,
                 b.target_id,
                 b.target_authority_id,
                 b.target_doc_type,
                 {snippet_score_sql} AS keyword_score,
                 {statute_score_sql} AS statute_score
             FROM base b
+        ),
+        deduped AS (
+            SELECT DISTINCT ON (source_id, target_id, target_authority_id)
+                id,
+                source_id,
+                target_id,
+                target_authority_id,
+                target_doc_type,
+                keyword_score,
+                statute_score
+            FROM scored
+            ORDER BY source_id,
+                     target_id NULLS LAST,
+                     target_authority_id NULLS LAST,
+                     (keyword_score + statute_score) DESC,
+                     id DESC
         ),
         enriched AS (
             SELECT
@@ -421,7 +440,7 @@ def fetch_rankings_by_source_ids(
                 d.jno,
                 a.doc_type     AS auth_type,
                 a.display      AS display_title
-            FROM scored s
+            FROM deduped s
             LEFT JOIN decisions d    ON d.id = s.target_id
             LEFT JOIN court_units cu ON cu.id = d.court_unit_id
             LEFT JOIN authorities a  ON a.id = s.target_authority_id
