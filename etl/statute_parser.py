@@ -26,7 +26,7 @@ _ALL_NAMES = sorted(set(LAW_NAMES) | PSEUDO_LAWS, key=len, reverse=True)
 # group(1) = 法律名稱, group(2) = 條號, group(3) = 之N 附號（可能為 None）
 # 台灣法律條號格式：第29條（無附號）或 第29條之1（附號在「條」之後）
 LAW_ARTICLE_RE = re.compile(
-    r'(' + '|'.join(re.escape(n) for n in _ALL_NAMES) + r')\s*第\s*(\d+)\s*條(?:之\s*(\d+))?'
+    r'(' + '|'.join(re.escape(n) for n in _ALL_NAMES) + r')\s*(?:（[^）]*）\s*)?第\s*(\d+)\s*條(?:之\s*(\d+))?'
 )
 
 # 省略法名的連續條號（含前置項款修飾詞 & 條之N 附號）
@@ -246,6 +246,7 @@ if __name__ == '__main__':
         ('但書',        '民事訴訟法第249條第1項但書、第444條第1項但書亦有'),
         ('空白',        '民法第474 條第1 項'),
         ('多項+之1',    '銀行法第29條第1項、第2項、第29條之1定有明文'),
+        ('括號簡稱',    '依勞動基準法（下稱勞基法）第59條、第13條及勞工請假規則第6條'),
     ]
 
     for label, text in cases:
