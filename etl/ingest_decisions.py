@@ -120,10 +120,11 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
     Upsert 單一判決到 decisions 表（v4：decisions 同時承擔識別 + 文書內容）
 
     邏輯：
-    1. 先找可升級的 placeholder（jid IS NULL，同 unit_norm/jyear/jcase_norm/jno）
-       → 優先挑同 doc_type，其次 NULL doc_type，最後任意
-    2. 找到 → UPDATE 填入 jid + 文書內容 + 升級 case_type
-    3. 找不到 → INSERT，ON CONFLICT(jid) DO UPDATE
+    1. jid 已存在 → 直接回傳（冪等，重複 ingest 防護）
+    2. 找可升級的 placeholder（jid IS NULL，同 unit_norm/jyear/jcase_norm/jno）
+       → 優先挑同 case_type，其次 NULL；case_type 相同後再優先同 doc_type，其次 NULL
+    3. 找到 → UPDATE 填入 jid + 文書內容 + 升級 case_type
+    4. 找不到 → INSERT，ON CONFLICT(jid) DO UPDATE
 
     Returns:
         (True, decision_id) 成功，(False, error_msg) 失敗
@@ -146,8 +147,16 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
         clean_text = clean_judgment_text(jfull) if jfull else None
         doc_type = _extract_doc_type(jfull)
 
+        # jid 已存在時直接回傳（冪等）；後續 UPDATE/INSERT 均假設 jid 尚未存在
         with conn.cursor() as cur:
-            # 先找可升級的 placeholder
+            cur.execute("SELECT id FROM decisions WHERE jid = %s", (jid,))
+            existing = cur.fetchone()
+        if existing:
+            conn.commit()
+            return True, existing[0]
+
+        with conn.cursor() as cur:
+            # 找可升級的 placeholder
             cur.execute("""
                 SELECT id, doc_type, case_type FROM decisions
                 WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
@@ -165,15 +174,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
             placeholder = cur.fetchone()
 
         if placeholder:
-            ph_id, ph_doc_type, ph_case_type = placeholder
-
-            # jid 已存在時（例如重複匯入同一資料夾），直接回傳現有 row
-            with conn.cursor() as cur:
-                cur.execute("SELECT id FROM decisions WHERE jid = %s", (jid,))
-                existing = cur.fetchone()
-            if existing:
-                conn.commit()
-                return True, existing[0]
+            ph_id, _, ph_case_type = placeholder
 
             # conservative case_type upgrade
             new_case_type = case_type
@@ -211,15 +212,6 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                         %(doc_type)s, %(decision_date)s, %(title)s,
                         %(clean_text)s, %(pdf_url)s
                     )
-                    ON CONFLICT (jid) WHERE jid IS NOT NULL DO UPDATE
-                        SET doc_type      = EXCLUDED.doc_type,
-                            case_type     = EXCLUDED.case_type,
-                            court_unit_id = EXCLUDED.court_unit_id,
-                            decision_date = EXCLUDED.decision_date,
-                            title         = EXCLUDED.title,
-                            clean_text    = EXCLUDED.clean_text,
-                            pdf_url       = EXCLUDED.pdf_url,
-                            updated_at    = now()
                     RETURNING id
                 """, {
                     "unit_norm":     unit_norm,
