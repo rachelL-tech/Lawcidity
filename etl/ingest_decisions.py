@@ -377,10 +377,10 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
             conn.commit()
             return chosen_id
 
-        # 沒有可升級的 → INSERT new placeholder
+        # 沒有可升級的 → INSERT new placeholder（用 ct = effective_ct，含 source fallback）
         conn.commit()
         return _insert_placeholder(conn, court, jyear, jcase_norm, jno,
-                                   target_doc_type, target_case_type)
+                                   target_doc_type, ct)
 
     except Exception as e:
         print(f"錯誤：upsert_target_placeholder 失敗 - {e}")
