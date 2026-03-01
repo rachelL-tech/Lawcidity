@@ -273,16 +273,17 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
     """
     在 decisions 表 upsert target placeholder（jid IS NULL），回傳 decision_id
 
-    effective_ct = target_case_type or source_case_type
-    （target_case_type 從引用文字抽取，source_case_type 從來源判決資料夾繼承作為 fallback）
+    ct = target_case_type or source_case_type（source fallback）
+    pool = 同字號且 case_type == ct 的既有 placeholder（精確匹配）
 
-    doc_type 升級邏輯（同案號同 case_type）：
-      None  → 回傳任何既有（不升級）；找不到 → INSERT None
-      判決  → NULL placeholder → 升級為判決；找不到可升級 → INSERT 判決
-      裁定  → NULL placeholder → 升級為裁定；找不到可升級 → INSERT 裁定
-      判例  → 判決 > NULL → 升級為判例（不動裁定）；找不到可升級 → INSERT 判例
+    doc_type 升級邏輯（在 pool 內）：
+      None  → pool[0]（不升級 doc_type）；找不到 → INSERT
+      判決  → pool 有判例 → 回傳判例；有判決 → 回傳；有 NULL doc_type → 升級為判決
+      裁定  → pool 有裁定 → 回傳；有 NULL doc_type → 升級為裁定
+      判例  → 有判例 → 回傳；升級判決/NULL → 判例
+      找不到可用的 → INSERT new placeholder（case_type=ct）
 
-    case_type conservative upgrade：既有 IS NULL 且有新值 → 更新；有衝突 → 不覆蓋並 print
+    ct=None（來源資料夾無後綴）時印警告；pool 找 case_type IS NULL 的既有 placeholder。
     """
     if len(jcase_norm) > 50:
         print(f"  跳過：jcase_norm 過長（{len(jcase_norm)} 字）：{jcase_norm[:60]!r}")
@@ -298,37 +299,26 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
             """, (court, jyear, jcase_norm, jno))
             all_ph = cur.fetchall()  # [(id, doc_type, case_type), ...]
 
-        # 按 case_type 篩選可操作的 placeholder 池
         ct = target_case_type or source_case_type  # source fallback
-        if ct is not None:
-            exact   = [r for r in all_ph if r[2] == ct]
-            null_ct = [r for r in all_ph if r[2] is None]
-        else:
-            # target_case_type=None：接受任何既有 placeholder（避免重複建 NULL 行）
-            exact   = all_ph
-            null_ct = []
-        pool = exact or null_ct  # 優先精確，次之 NULL
+        if ct is None:
+            print(f"  警告：無法確定 case_type（court={court}, {jyear}年{jcase_norm}字{jno}號）")
+        pool = [r for r in all_ph if r[2] == ct]  # exact case_type match（含 ct=None 時找 NULL）
 
         chosen_id = None
-        need_ct_upgrade = False  # 是否需要 case_type 升級
 
         if target_doc_type is None:
             if pool:
-                chosen = pool[0]
-                chosen_id = chosen[0]
-                need_ct_upgrade = (chosen[2] is None and ct is not None)
+                chosen_id = pool[0][0]
 
         elif target_doc_type in ('判決', '裁定'):
-            # 新規則：判例與判決不可並存；新來判決若已有判例，直接回傳判例
+            # 判例與判決不可並存；新來判決若已有判例，直接回傳判例
             prec_ph = next((r for r in pool if r[1] == '判例'), None)
             same_ph = next((r for r in pool if r[1] == target_doc_type), None)
             null_ph = next((r for r in pool if r[1] is None), None)
             if target_doc_type == '判決' and prec_ph:
                 chosen_id = prec_ph[0]
-                need_ct_upgrade = (prec_ph[2] is None and ct is not None)
             elif same_ph:
                 chosen_id = same_ph[0]
-                need_ct_upgrade = (same_ph[2] is None and ct is not None)
             elif null_ph:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -336,7 +326,6 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                         (target_doc_type, null_ph[0])
                     )
                 chosen_id = null_ph[0]
-                need_ct_upgrade = (null_ph[2] is None and ct is not None)
 
         elif target_doc_type == '判例':
             prec_ph = next((r for r in pool if r[1] == '判例'), None)
@@ -344,7 +333,6 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
             null_ph = next((r for r in pool if r[1] is None), None)
             if prec_ph:
                 chosen_id = prec_ph[0]
-                need_ct_upgrade = (prec_ph[2] is None and ct is not None)
             else:
                 upgrade_src = judg_ph or null_ph
                 if upgrade_src:
@@ -354,30 +342,17 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                             (upgrade_src[0],)
                         )
                     chosen_id = upgrade_src[0]
-                    need_ct_upgrade = (upgrade_src[2] is None and ct is not None)
 
         else:
             # 未知 doc_type，當 None 處理
             if pool:
                 chosen_id = pool[0][0]
-                need_ct_upgrade = (pool[0][2] is None and ct is not None)
 
-        # conservative case_type upgrade
         if chosen_id is not None:
-            if need_ct_upgrade:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE decisions SET case_type=%s WHERE id=%s",
-                        (ct, chosen_id)
-                    )
-            # 衝突 check（chosen 有值但與 ct 不同）
-            chosen_row = next((r for r in all_ph if r[0] == chosen_id), None)
-            if chosen_row and chosen_row[2] is not None and ct is not None and chosen_row[2] != ct:
-                print(f"  衝突：decisions.id={chosen_id} case_type={chosen_row[2]!r} vs {ct!r}，不覆蓋")
             conn.commit()
             return chosen_id
 
-        # 沒有可升級的 → INSERT new placeholder（用 ct = effective_ct，含 source fallback）
+        # 沒有可用的 → INSERT new placeholder（用 ct = effective_ct，含 source fallback）
         conn.commit()
         return _insert_placeholder(conn, court, jyear, jcase_norm, jno,
                                    target_doc_type, ct)
