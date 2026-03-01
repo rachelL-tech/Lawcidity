@@ -37,8 +37,9 @@ def search_rankings(
     source_limit: int = Query(3000, ge=1, le=10000),
     limit: int = Query(100, ge=1, le=500),
 ):
+    raw_query = q.strip()
     try:
-        terms = tokenize_query(q)
+        terms = tokenize_query(raw_query)
         case_types = parse_case_types(case_type)
         statute_filters = build_statute_filters(
             laws=law or [],
@@ -48,11 +49,13 @@ def search_rankings(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    query_terms = terms
+
     with get_conn() as conn:
         try:
             if backend == "opensearch":
                 source_ids = search_source_ids_opensearch(
-                    query_terms=terms,
+                    query_terms=query_terms,
                     case_types=case_types,
                     statute_filters=statute_filters,
                     source_limit=source_limit,
@@ -60,7 +63,7 @@ def search_rankings(
             else:
                 source_ids = search_source_ids_baseline_pg(
                     conn=conn,
-                    query_terms=terms,
+                    query_terms=query_terms,
                     case_types=case_types,
                     statute_filters=statute_filters,
                     source_limit=source_limit,
@@ -73,13 +76,14 @@ def search_rankings(
         targets = fetch_rankings_by_source_ids(
             conn=conn,
             source_ids=source_ids,
-            query_text=q.strip(),
+            query_terms=query_terms,
+            statute_filters=statute_filters,
             limit=limit,
         )
 
     return {
         "backend": backend,
-        "query_terms": terms,
+        "query_terms": query_terms,
         "source_count": len(source_ids),
         "targets": targets,
     }

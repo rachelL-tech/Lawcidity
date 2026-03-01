@@ -7,9 +7,10 @@
 3. 提供 PostgreSQL baseline 搜尋（ILIKE）
 4. 依 source_ids 回 PostgreSQL 聚合目標排行與分數（回傳 target_level/target_root_norm）
 
-OpenSearch analyzer 決策（記錄）：
-- 目前（MVP）：clean_text 使用 ik_smart + ik_smart（index/search）
-- 未來可升級：clean_text 改為 ik_max_word + ik_smart（提升召回）
+OpenSearch 查詢策略（記錄）：
+- clean_text 使用 ik_smart（index/search）
+- 每個空白分詞的 term 用 match_phrase（字元連續，等同 ILIKE，無 false positive）
+- 不使用 analyze_query_terms 預處理（IK 會把複合詞切成字元，破壞 match_phrase 片語語意）
 """
 
 import os
@@ -23,20 +24,13 @@ from psycopg.rows import dict_row
 
 VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
 
-LEVEL_CASE_SQL = """
-CASE d.root_norm
-  WHEN '最高法院' THEN 1
-  WHEN '最高行政法院' THEN 1
-  WHEN '高等法院' THEN 2
-  WHEN '高等行政法院' THEN 2
-  WHEN '智財商業法院' THEN 2
-  WHEN '地方法院' THEN 3
-  WHEN '少家法院' THEN 3
-  WHEN '高等行政法院地方庭' THEN 3
-  WHEN '地方法院簡易庭' THEN 4
-  ELSE NULL
-END
-"""
+SNIPPET_MATCH_SCORE = 1
+STATUTE_MATCH_SCORE = 3
+
+# 排序模式備忘（目前採保守版，其他版僅供記錄）
+# - 保守版：snippet 命中加 +1、法條匹配加 +3（命中作為加分，不作過濾）
+# - 中等版：snippet 命中加 +3、法條匹配加 +3（同上）
+# - 語意優先：snippet 命中加 +6、法條匹配加 +3（同上）
 
 # 去重但保留原順序
 def _dedupe_keep_order(values: list[str]) -> list[str]:
@@ -101,7 +95,7 @@ def build_opensearch_query(
     size: int,
 ) -> dict[str, Any]:
     must = [
-        {"match": {"clean_text": {"query": term, "operator": "and"}}}
+        {"match_phrase": {"clean_text": term}}
         for term in query_terms
     ]
 
@@ -147,10 +141,10 @@ def _get_opensearch_client():
     except Exception as exc:
         raise RuntimeError("缺少 opensearch-py 套件") from exc
 
-    url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200")
+    url = os.environ.get("OPENSEARCH_URL", "https://localhost:9200").strip()
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
-    port = parsed.port or (443 if parsed.scheme == "https" else 9200)
+    port = parsed.port or 9200
     use_ssl = parsed.scheme == "https"
     verify_certs = _env_bool("OPENSEARCH_VERIFY_CERTS", False)
 
@@ -158,12 +152,16 @@ def _get_opensearch_client():
     password = os.environ.get("OPENSEARCH_PASSWORD", "").strip()
     auth = (username, password) if username else None
 
-    return OpenSearch(
-        hosts=[{"host": host, "port": port}],
-        http_auth=auth,
-        use_ssl=use_ssl,
-        verify_certs=verify_certs,
-    )
+    kwargs: dict[str, Any] = {
+        "hosts": [{"host": host, "port": port}],
+        "http_auth": auth,
+        "use_ssl": use_ssl,
+        "verify_certs": verify_certs,
+    }
+    if use_ssl and not verify_certs:
+        kwargs["ssl_assert_hostname"] = False
+    return OpenSearch(**kwargs)
+
 
 # 送查詢到 OpenSearch，回傳 source_id 列表
 def search_source_ids_opensearch(
@@ -172,6 +170,7 @@ def search_source_ids_opensearch(
     statute_filters: list[tuple[str, str, str | None]],
     source_limit: int,
 ) -> list[int]:
+    query_terms = _dedupe_keep_order([t for t in query_terms if t])
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v1")
     body = build_opensearch_query(
@@ -255,15 +254,56 @@ def search_source_ids_baseline_pg(
         cur.execute(sql, params)
         return [int(row[0]) for row in cur.fetchall()]
 
-# 把 OpenSearch/PG 找到的 source_ids 當集合，從 citations 找 target 並計分（snippet 命中 q + snippet 有法條加分），OIN decisions + court_units 補 target_root_norm/level，依 score/citation_count 排序回傳
+# 把 OpenSearch/PG 找到的 source_ids 當集合，從 citations 找 target 並計分（snippet 命中加分 + 法條匹配加分），JOIN decisions + court_units 補 target_root_norm/level，依 score/citation_count 排序回傳
 def fetch_rankings_by_source_ids(
     conn: psycopg.Connection,
     source_ids: list[int],
-    query_text: str,
+    query_terms: list[str],
+    statute_filters: list[tuple[str, str, str | None]],
     limit: int,
 ) -> list[dict[str, Any]]:
     if not source_ids:
         return []
+
+    clean_terms = _dedupe_keep_order([t.strip() for t in query_terms if t and t.strip()])
+    params: dict[str, Any] = {"source_ids": source_ids, "limit": limit}
+
+    if clean_terms:
+        params["kw_patterns"] = [f"%{t}%" for t in clean_terms]
+        params["snippet_score"] = SNIPPET_MATCH_SCORE
+        snippet_score_sql = (
+            "CASE WHEN b.snippet ILIKE ANY (%(kw_patterns)s) "
+            "THEN %(snippet_score)s ELSE 0 END"
+        )
+    else:
+        snippet_score_sql = "0"
+
+    if statute_filters:
+        statute_clauses: list[str] = []
+        for idx, (law, article, sub_ref) in enumerate(statute_filters):
+            law_key = f"law_{idx}"
+            article_key = f"article_{idx}"
+            clause = f"(css.law = %({law_key})s AND css.article_raw = %({article_key})s"
+            params[law_key] = law
+            params[article_key] = article
+            if sub_ref is not None:
+                sub_key = f"sub_ref_{idx}"
+                clause += f" AND css.sub_ref = %({sub_key})s"
+                params[sub_key] = sub_ref
+            clause += ")"
+            statute_clauses.append(clause)
+
+        params["statute_score"] = STATUTE_MATCH_SCORE
+        statute_score_sql = f"""
+            CASE WHEN EXISTS (
+                SELECT 1
+                FROM citation_snippet_statutes css
+                WHERE css.citation_id = b.id
+                  AND ({" OR ".join(statute_clauses)})
+            ) THEN %(statute_score)s ELSE 0 END
+        """
+    else:
+        statute_score_sql = "0"
 
     sql = f"""
         WITH src AS (
@@ -281,12 +321,8 @@ def fetch_rankings_by_source_ids(
                 b.target_id,
                 b.target_doc_type,
                 (
-                    CASE WHEN b.snippet ILIKE %(kw_like)s THEN 3 ELSE 1 END +
-                    CASE WHEN EXISTS (
-                        SELECT 1
-                        FROM citation_snippet_statutes css
-                        WHERE css.citation_id = b.id
-                    ) THEN 3 ELSE 0 END
+                    {snippet_score_sql} +
+                    {statute_score_sql}
                 ) AS citation_score
             FROM base b
         ),
@@ -297,7 +333,7 @@ def fetch_rankings_by_source_ids(
                 s.target_doc_type,
                 s.citation_score,
                 d.root_norm AS target_root_norm,
-                COALESCE(cu.level, {LEVEL_CASE_SQL}) AS target_level,
+                cu.level AS target_level,
                 d.jyear,
                 d.jcase_norm,
                 d.jno
@@ -331,9 +367,7 @@ def fetch_rankings_by_source_ids(
         cur.execute(
             sql,
             {
-                "source_ids": source_ids,
-                "kw_like": f"%{query_text}%",
-                "limit": limit,
+                **params,
             },
         )
         return cur.fetchall()
