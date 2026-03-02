@@ -26,6 +26,87 @@ def get_conn():
     return psycopg.connect(DB_URL, row_factory=dict_row)
 
 
+def _citation_rows(
+    conn,
+    target_col: str,
+    target_val: int,
+    query_terms: list[str],
+    statute_filters: list[tuple],
+) -> list[dict]:
+    """共用：查詢 citation rows，當有搜尋條件時附帶 is_matched flag。"""
+    params: dict = {"target_val": target_val}
+
+    if query_terms or statute_filters:
+        conds: list[str] = []
+        for idx, term in enumerate(query_terms):
+            k = f"m_kw_{idx}"
+            conds.append(f"d2.clean_text ILIKE %({k})s")
+            params[k] = f"%{term}%"
+        for idx, (law, article, _sub_ref) in enumerate(statute_filters):
+            lk = f"m_law_{idx}"
+            inner = f"drs.law = %({lk})s"
+            params[lk] = law
+            if article:
+                ak = f"m_art_{idx}"
+                inner += f" AND drs.article_raw = %({ak})s"
+                params[ak] = article
+            conds.append(
+                f"EXISTS (SELECT 1 FROM decision_reason_statutes drs"
+                f" WHERE drs.decision_id = d2.id AND {inner})"
+            )
+        match_inner = " AND ".join(conds)
+        is_matched_sql = (
+            f"EXISTS (SELECT 1 FROM decisions d2"
+            f" WHERE d2.id = c.source_id AND {match_inner})"
+        )
+    else:
+        is_matched_sql = "TRUE"
+
+    sql = f"""
+        SELECT
+            c.id                 AS citation_id,
+            c.source_id,
+            src.unit_norm        AS source_court,
+            src.jyear,
+            src.jcase_norm,
+            src.jno,
+            src.decision_date,
+            c.snippet,
+            c.raw_match,
+            COALESCE(
+                json_agg(
+                    json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
+                    ORDER BY css.law, css.article_raw, css.sub_ref
+                ) FILTER (WHERE css.id IS NOT NULL),
+                '[]'::json
+            ) AS statutes,
+            ({is_matched_sql}) AS is_matched
+        FROM citations c
+        JOIN decisions src ON c.source_id = src.id
+        LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
+        WHERE {target_col} = %(target_val)s
+        GROUP BY c.id, c.source_id, src.unit_norm, src.jyear, src.jcase_norm,
+                 src.jno, src.decision_date
+        ORDER BY is_matched DESC NULLS LAST, src.decision_date DESC NULLS LAST
+    """
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+
+def _split_search_response(target, rows, terms, statute_filters):
+    return {
+        "target": target,
+        "matched_sources": [r for r in rows if r["is_matched"]],
+        "other_sources":   [r for r in rows if not r["is_matched"]],
+        "search_context": {
+            "query_terms": terms,
+            "laws": [f[0] for f in statute_filters],
+        },
+    }
+
+
 @app.get("/api/search")
 def search_rankings(
     q: str | None = Query(None, description="關鍵字（空白分詞，AND）；與法條至少一項必填"),
@@ -152,7 +233,21 @@ def rankings(limit: int = 100):
 
 
 @app.get("/api/decisions/{target_id}/citations")
-def citations(target_id: int):
+def citations(
+    target_id: int,
+    q: str | None = Query(None),
+    law: list[str] | None = Query(None),
+    article: list[str] | None = Query(None),
+    sub_ref: list[str] | None = Query(None),
+):
+    terms = tokenize_query(q)
+    try:
+        statute_filters = build_statute_filters(
+            laws=law or [], articles=article or [], sub_refs=sub_ref or []
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -163,36 +258,29 @@ def citations(target_id: int):
             if not target:
                 raise HTTPException(status_code=404, detail="Not found")
 
-            cur.execute("""
-                SELECT
-                    c.id                 AS citation_id,
-                    src.unit_norm        AS source_court,
-                    src.jyear,
-                    src.jcase_norm,
-                    src.jno,
-                    src.decision_date,
-                    c.snippet,
-                    c.raw_match,
-                    COALESCE(
-                        json_agg(
-                            json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
-                            ORDER BY css.law, css.article_raw, css.sub_ref
-                        ) FILTER (WHERE css.id IS NOT NULL),
-                        '[]'::json
-                    ) AS statutes
-                FROM citations c
-                JOIN decisions src ON c.source_id = src.id
-                LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-                WHERE c.target_id = %s
-                GROUP BY c.id, src.unit_norm, src.jyear, src.jcase_norm,
-                         src.jno, src.decision_date
-                ORDER BY src.decision_date DESC NULLS LAST
-            """, (target_id,))
-            return {"target": target, "sources": cur.fetchall()}
+        rows = _citation_rows(conn, "c.target_id", target_id, terms, statute_filters)
+
+    if terms or statute_filters:
+        return _split_search_response(target, rows, terms, statute_filters)
+    return {"target": target, "sources": rows}
 
 
 @app.get("/api/authorities/{authority_id}/citations")
-def authority_citations(authority_id: int):
+def authority_citations(
+    authority_id: int,
+    q: str | None = Query(None),
+    law: list[str] | None = Query(None),
+    article: list[str] | None = Query(None),
+    sub_ref: list[str] | None = Query(None),
+):
+    terms = tokenize_query(q)
+    try:
+        statute_filters = build_statute_filters(
+            laws=law or [], articles=article or [], sub_refs=sub_ref or []
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -203,32 +291,11 @@ def authority_citations(authority_id: int):
             if not target:
                 raise HTTPException(status_code=404, detail="Not found")
 
-            cur.execute("""
-                SELECT
-                    c.id                 AS citation_id,
-                    src.unit_norm        AS source_court,
-                    src.jyear,
-                    src.jcase_norm,
-                    src.jno,
-                    src.decision_date,
-                    c.snippet,
-                    c.raw_match,
-                    COALESCE(
-                        json_agg(
-                            json_build_object('law', css.law, 'article', css.article_raw, 'sub', css.sub_ref)
-                            ORDER BY css.law, css.article_raw, css.sub_ref
-                        ) FILTER (WHERE css.id IS NOT NULL),
-                        '[]'::json
-                    ) AS statutes
-                FROM citations c
-                JOIN decisions src ON c.source_id = src.id
-                LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-                WHERE c.target_authority_id = %s
-                GROUP BY c.id, src.unit_norm, src.jyear, src.jcase_norm,
-                         src.jno, src.decision_date
-                ORDER BY src.decision_date DESC NULLS LAST
-            """, (authority_id,))
-            return {"target": target, "sources": cur.fetchall()}
+        rows = _citation_rows(conn, "c.target_authority_id", authority_id, terms, statute_filters)
+
+    if terms or statute_filters:
+        return _split_search_response(target, rows, terms, statute_filters)
+    return {"target": target, "sources": rows}
 
 
 # 靜態檔案（index.html 等）

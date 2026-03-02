@@ -463,7 +463,14 @@ def fetch_rankings_by_source_ids(
             COUNT(*)              AS citation_count,
             SUM(e.keyword_score) AS keyword_score_sum,
             SUM(e.statute_score) AS statute_score_sum,
-            COUNT(*) + SUM(e.keyword_score) + SUM(e.statute_score) AS score
+            COUNT(*) + SUM(e.keyword_score) + SUM(e.statute_score) AS score,
+            -- 全域引用數（跨所有 source，不受關鍵字/法條 filter 限制）
+            (
+                SELECT COUNT(DISTINCT c2.source_id)
+                FROM citations c2
+                WHERE (e.target_id IS NOT NULL AND c2.target_id = e.target_id)
+                   OR (e.target_authority_id IS NOT NULL AND c2.target_authority_id = e.target_authority_id)
+            ) AS total_citation_count
         FROM enriched e
         GROUP BY
             e.target_id,

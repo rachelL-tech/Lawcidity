@@ -127,6 +127,10 @@
 
     .toggle-icon { float: right; color: #6366f1; font-size: 16px; }
 
+    .section-group  { margin-bottom: 12px; }
+    .section-header { font-size: 12px; font-weight: 600; color: #444; padding: 4px 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 8px; }
+    .section-hint   { font-weight: normal; color: #888; margin-left: 6px; }
+
     .badge-resolution {
       display: inline-block;
       background: #fef3c7;
@@ -149,6 +153,13 @@
 </header>
 
 <main>
+  <div id="searchBar" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <input id="qInput" type="text" placeholder="關鍵字（空白分詞）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:140px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+    <input id="lawInput" type="text" placeholder="法律名稱（如 勞動基準法）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:140px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+    <button onclick="doSearch()" style="padding:6px 14px;background:#6366f1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;">搜尋</button>
+    <button onclick="clearSearch()" style="padding:6px 14px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;font-size:13px;">清除</button>
+  </div>
+  <div id="searchInfo" style="font-size:12px;color:#666;margin-bottom:8px;"></div>
   <table id="tbl">
     <thead>
       <tr>
@@ -164,172 +175,186 @@
 
 <script>
 const tbody = document.getElementById('tbody');
+let currentSearchCtx = null;
 
-async function loadRankings() {
-  const res  = await fetch('/api/rankings?limit=500');
-  const rows = await res.json();
+// ── 共用：把 article_raw 轉顯示字串 ──────────────────────────────────────────
+function renderSnippetCard(s) {
+  const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
+  const snip = (s.snippet || '').trim()
+    .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
+  const statutes = s.statutes || [];
+  const tagsHtml = statutes.length
+    ? `<div class="statute-tags">${statutes.map(t => {
+        const m = String(t.article).match(/^(\d+)(?:之(\d+))?$/);
+        const art = m && m[2] ? `第${m[1]}條之${m[2]}` : `第${t.article}條`;
+        return `<span class="statute-tag">${escHtml(t.law)}${art}${escHtml(t.sub || '')}</span>`;
+      }).join('')}</div>`
+    : '';
+  return `
+    <div class="snippet-card">
+      <div class="snippet-meta">
+        <strong>${escHtml(s.source_court || '')}</strong> ${escHtml(srcRef)}
+        &nbsp;·&nbsp;
+        <span class="raw-match">${escHtml(s.raw_match || '')}</span>
+        &nbsp;·&nbsp;
+        <span style="color:#aaa">citation #${s.citation_id}</span>
+      </div>
+      ${tagsHtml}
+      <div class="snippet-text">${escHtml(snip)}</div>
+    </div>`;
+}
 
-  const AUTH_BADGE_LABEL = { resolution: '決議', grand_interp: '釋字', conference: '座談會' };
+// ── 搜尋模式兩區塊 ────────────────────────────────────────────────────────────
+function renderSearchSections(data) {
+  const sc = data.search_context || {};
+  const labelParts = [...(sc.query_terms || []), ...(sc.laws || [])];
+  const labelStr = labelParts.length ? `含「${escHtml(labelParts.join(' / '))}」` : '';
+  const matched = data.matched_sources || [];
+  const others  = data.other_sources  || [];
+  if (!matched.length && !others.length) return '（無 snippet）';
+  const parts = [];
+  if (matched.length) {
+    parts.push(`<div class="section-group">
+      <div class="section-header">與你的搜尋相關（${matched.length} 筆）<span class="section-hint">${labelStr}</span></div>
+      ${matched.map(renderSnippetCard).join('')}
+    </div>`);
+  }
+  if (others.length) {
+    parts.push(`<div class="section-group">
+      <div class="section-header">其他引用本判決的案件（${others.length} 筆）</div>
+      ${others.map(renderSnippetCard).join('')}
+    </div>`);
+  }
+  return parts.join('');
+}
 
+// ── 通用 toggle 邏輯 ──────────────────────────────────────────────────────────
+async function _doToggle(tr, trS, apiUrl, searchCtx) {
+  if (tr.classList.contains('open')) {
+    tr.classList.remove('open');
+    trS.classList.remove('open');
+    tr.querySelector('.toggle-icon').textContent = '▶';
+    return;
+  }
+  tr.classList.add('open');
+  trS.classList.add('open');
+  tr.querySelector('.toggle-icon').textContent = '▼';
+  if (trS.dataset.loaded) return;
+  trS.dataset.loaded = '1';
+
+  const res  = await fetch(apiUrl);
+  const data = await res.json();
+  const wrap = trS.querySelector('.snippets-wrap');
+  wrap.classList.remove('loading');
+
+  if (searchCtx && data.matched_sources !== undefined) {
+    wrap.innerHTML = renderSearchSections(data);
+  } else {
+    const sources = data.sources || [];
+    wrap.innerHTML = sources.length ? sources.map(renderSnippetCard).join('') : '（無 snippet）';
+  }
+}
+
+function toggle(tr, trS, targetId, caseRef, searchCtx) {
+  let url = `/api/decisions/${targetId}/citations`;
+  if (searchCtx) {
+    const p = new URLSearchParams();
+    if (searchCtx.q) p.append('q', searchCtx.q);
+    (searchCtx.laws || []).forEach(l => p.append('law', l));
+    url += '?' + p.toString();
+  }
+  _doToggle(tr, trS, url, searchCtx);
+}
+
+function toggleAuthority(tr, trS, authorityId, caseRef, searchCtx) {
+  let url = `/api/authorities/${authorityId}/citations`;
+  if (searchCtx) {
+    const p = new URLSearchParams();
+    if (searchCtx.q) p.append('q', searchCtx.q);
+    (searchCtx.laws || []).forEach(l => p.append('law', l));
+    url += '?' + p.toString();
+  }
+  _doToggle(tr, trS, url, searchCtx);
+}
+
+// ── 渲染排行列 ────────────────────────────────────────────────────────────────
+const AUTH_BADGE_LABEL = { '決議': '決議', '釋字': '釋字', '法律座談會': '座談會', '研審小組意見': '研審' };
+
+function renderRows(rows, searchCtx) {
+  tbody.innerHTML = '';
   rows.forEach((r, i) => {
     const isAuthority = r.citation_type === 'authority';
-    const caseRef = isAuthority
+    const authorityId = r.authority_id || r.target_authority_id;
+    const court       = r.target_court || r.target_root_norm || '';
+    const caseRef     = isAuthority
       ? (r.display_title || '（未知）')
-      : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號${r.case_type || '裁判'}`;
+      : `${r.jyear}年度${r.jcase_norm}字第${r.jno}號${r.doc_type || '裁判'}`;
     const typeBadge = isAuthority
-      ? `<span class="badge-resolution">${AUTH_BADGE_LABEL[r.auth_type] || r.auth_type}</span>`
+      ? `<span class="badge-resolution">${AUTH_BADGE_LABEL[r.auth_type] || r.auth_type || ''}</span>`
       : '';
+    // 搜尋模式顯示全域 total，主頁模式顯示 citation_count
+    const displayCount = (searchCtx && r.total_citation_count != null)
+      ? r.total_citation_count : r.citation_count;
 
-    // 排行列
     const tr = document.createElement('tr');
     tr.className = 'row-target';
-    tr.dataset.type = r.citation_type;
     tr.innerHTML = `
       <td class="rank-num">${i + 1}</td>
-      <td>
-        <span class="case-ref">${escHtml(caseRef)}</span>${typeBadge}
-        <span class="toggle-icon">▶</span>
-      </td>
-      <td><span class="court">${escHtml(r.target_court || '')}</span></td>
-      <td style="text-align:center"><span class="badge">${r.citation_count}</span></td>
+      <td><span class="case-ref">${escHtml(caseRef)}</span>${typeBadge}<span class="toggle-icon">▶</span></td>
+      <td><span class="court">${escHtml(court)}</span></td>
+      <td style="text-align:center"><span class="badge">${displayCount}</span></td>
     `;
-
-    // snippet 展開列
     const trS = document.createElement('tr');
     trS.className = 'row-snippets';
     trS.innerHTML = `<td colspan="4"><div class="snippets-wrap loading">載入中…</div></td>`;
 
     if (isAuthority) {
-      tr.addEventListener('click', () => toggleAuthority(tr, trS, r.authority_id, caseRef));
+      tr.addEventListener('click', () => toggleAuthority(tr, trS, authorityId, caseRef, searchCtx));
     } else {
-      tr.addEventListener('click', () => toggle(tr, trS, r.target_id, caseRef));
+      tr.addEventListener('click', () => toggle(tr, trS, r.target_id, caseRef, searchCtx));
     }
     tbody.appendChild(tr);
     tbody.appendChild(trS);
   });
 }
 
-async function toggle(tr, trS, targetId, caseRef) {
-  const isOpen = tr.classList.contains('open');
-
-  // 關閉
-  if (isOpen) {
-    tr.classList.remove('open');
-    trS.classList.remove('open');
-    tr.querySelector('.toggle-icon').textContent = '▶';
-    return;
-  }
-
-  // 開啟
-  tr.classList.add('open');
-  trS.classList.add('open');
-  tr.querySelector('.toggle-icon').textContent = '▼';
-
-  // 已載入過則略過
-  if (trS.dataset.loaded) return;
-  trS.dataset.loaded = '1';
-
-  const res  = await fetch(`/api/decisions/${targetId}/citations`);
-  const data = await res.json();
-  const wrap = trS.querySelector('.snippets-wrap');
-
-  if (!data.sources.length) {
-    wrap.textContent = '（無 snippet）';
-    wrap.classList.remove('loading');
-    return;
-  }
-
-  wrap.classList.remove('loading');
-  wrap.innerHTML = data.sources.map(s => {
-    const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
-    const snip   = (s.snippet || '').trim()
-      .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
-    const statutes = (s.statutes || []);
-    const tagsHtml = statutes.length
-      ? `<div class="statute-tags">${statutes.map(t => {
-          // article_raw: "29" → 第29條, "29之1" → 第29條之1
-          const m = String(t.article).match(/^(\d+)(?:之(\d+))?$/);
-          const art = m && m[2] ? `第${m[1]}條之${m[2]}` : `第${t.article}條`;
-          const sub = t.sub || '';
-          return `<span class="statute-tag">${escHtml(t.law)}${art}${escHtml(sub)}</span>`;
-        }).join('')}</div>`
-      : '';
-    return `
-      <div class="snippet-card">
-        <div class="snippet-meta">
-          <strong>${s.source_court}</strong> ${srcRef}
-          &nbsp;·&nbsp;
-          <span class="raw-match">${escHtml(s.raw_match)}</span>
-          &nbsp;·&nbsp;
-          <span style="color:#aaa">citation #${s.citation_id}</span>
-        </div>
-        ${tagsHtml}
-        <div class="snippet-text">${escHtml(snip)}</div>
-      </div>`;
-  }).join('');
+// ── 主頁排行 ──────────────────────────────────────────────────────────────────
+async function loadRankings() {
+  currentSearchCtx = null;
+  const res  = await fetch('/api/rankings?limit=500');
+  const rows = await res.json();
+  renderRows(rows, null);
 }
 
-async function toggleAuthority(tr, trS, authorityId, caseRef) {
-  const isOpen = tr.classList.contains('open');
+// ── 搜尋 ──────────────────────────────────────────────────────────────────────
+async function doSearch() {
+  const q   = document.getElementById('qInput').value.trim();
+  const law = document.getElementById('lawInput').value.trim();
+  if (!q && !law) { clearSearch(); return; }
 
-  if (isOpen) {
-    tr.classList.remove('open');
-    trS.classList.remove('open');
-    tr.querySelector('.toggle-icon').textContent = '▶';
-    return;
-  }
+  const p = new URLSearchParams();
+  if (q)   p.append('q', q);
+  if (law) p.append('law', law);
 
-  tr.classList.add('open');
-  trS.classList.add('open');
-  tr.querySelector('.toggle-icon').textContent = '▼';
-
-  if (trS.dataset.loaded) return;
-  trS.dataset.loaded = '1';
-
-  const res  = await fetch(`/api/authorities/${authorityId}/citations`);
+  const res  = await fetch(`/api/search?${p}`);
   const data = await res.json();
-  const wrap = trS.querySelector('.snippets-wrap');
 
-  if (!data.sources.length) {
-    wrap.textContent = '（無 snippet）';
-    wrap.classList.remove('loading');
-    return;
-  }
+  currentSearchCtx = { q, laws: law ? [law] : [], query_terms: data.query_terms || [] };
+  document.getElementById('searchInfo').textContent =
+    `搜尋：${data.source_count} 篇來源判決 → ${data.targets.length} 個被引用目標`;
+  renderRows(data.targets, currentSearchCtx);
+}
 
-  wrap.classList.remove('loading');
-  wrap.innerHTML = data.sources.map(s => {
-    const srcRef = `${s.jyear}年度${s.jcase_norm}字第${s.jno}號`;
-    const snip   = (s.snippet || '').trim()
-      .replace(/\r?\n(?![一二三四五六七八九十壹貳參肆伍陸柒捌玖㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑（])/g, '');
-    const statutes = (s.statutes || []);
-    const tagsHtml = statutes.length
-      ? `<div class="statute-tags">${statutes.map(t => {
-          const m = String(t.article).match(/^(\d+)(?:之(\d+))?$/);
-          const art = m && m[2] ? `第${m[1]}條之${m[2]}` : `第${t.article}條`;
-          const sub = t.sub || '';
-          return `<span class="statute-tag">${escHtml(t.law)}${art}${escHtml(sub)}</span>`;
-        }).join('')}</div>`
-      : '';
-    return `
-      <div class="snippet-card">
-        <div class="snippet-meta">
-          <strong>${escHtml(s.source_court)}</strong> ${escHtml(srcRef)}
-          &nbsp;·&nbsp;
-          <span class="raw-match">${escHtml(s.raw_match)}</span>
-          &nbsp;·&nbsp;
-          <span style="color:#aaa">citation #${s.citation_id}</span>
-        </div>
-        ${tagsHtml}
-        <div class="snippet-text">${escHtml(snip)}</div>
-      </div>`;
-  }).join('');
+function clearSearch() {
+  currentSearchCtx = null;
+  document.getElementById('qInput').value   = '';
+  document.getElementById('lawInput').value = '';
+  document.getElementById('searchInfo').textContent = '';
+  loadRankings();
 }
 
 function escHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 loadRankings();
