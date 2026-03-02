@@ -131,6 +131,13 @@
     .section-header { font-size: 12px; font-weight: 600; color: #444; padding: 4px 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 8px; }
     .section-hint   { font-weight: normal; color: #888; margin-left: 6px; }
 
+    .search-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px; align-items:center; }
+    .search-row input { padding:6px 10px; border:1px solid #ccc; border-radius:4px; font-size:13px; }
+    .exclude-row input { border-color:#f9a8a8; }
+    .exclude-row input::placeholder { color:#b45252; }
+    .input-label { font-size:11px; color:#888; align-self:center; white-space:nowrap; }
+    .input-label.excl { color:#b45252; }
+
     .badge-resolution {
       display: inline-block;
       background: #fef3c7;
@@ -153,11 +160,23 @@
 </header>
 
 <main>
-  <div id="searchBar" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    <input id="qInput" type="text" placeholder="關鍵字（空白分詞）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:140px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-    <input id="lawInput" type="text" placeholder="法律名稱（如 勞動基準法）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:140px;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-    <button onclick="doSearch()" style="padding:6px 14px;background:#6366f1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;">搜尋</button>
-    <button onclick="clearSearch()" style="padding:6px 14px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;font-size:13px;">清除</button>
+  <div id="searchBar" style="margin-bottom:12px;">
+    <div class="search-row">
+      <input id="qInput" type="text" placeholder="關鍵字（空白分詞）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:2;min-width:160px;">
+      <span class="input-label">法條</span>
+      <input id="lawInput" type="text" placeholder="法律名稱（如 勞動基準法）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:2;min-width:140px;">
+      <input id="articleInput" type="text" placeholder="條號（如 11、29之1）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:100px;">
+      <input id="subRefInput" type="text" placeholder="項款（如 第1項）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:100px;">
+    </div>
+    <div class="search-row exclude-row">
+      <span class="input-label excl">排除</span>
+      <input id="excludeQInput" type="text" placeholder="排除關鍵字" onkeydown="if(event.key==='Enter')doSearch()" style="flex:2;min-width:160px;">
+      <span class="input-label excl">排除法條</span>
+      <input id="excludeLawInput" type="text" placeholder="法律名稱" onkeydown="if(event.key==='Enter')doSearch()" style="flex:2;min-width:140px;">
+      <input id="excludeArticleInput" type="text" placeholder="條號（選填）" onkeydown="if(event.key==='Enter')doSearch()" style="flex:1;min-width:100px;">
+      <button onclick="doSearch()" style="padding:6px 14px;background:#6366f1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;">搜尋</button>
+      <button onclick="clearSearch()" style="padding:6px 14px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;font-size:13px;">清除</button>
+    </div>
   </div>
   <div id="searchInfo" style="font-size:12px;color:#666;margin-bottom:8px;"></div>
   <table id="tbl">
@@ -207,7 +226,16 @@ function renderSnippetCard(s) {
 // ── 搜尋模式兩區塊 ────────────────────────────────────────────────────────────
 function renderSearchSections(data) {
   const sc = data.search_context || {};
-  const labelParts = [...(sc.query_terms || []), ...(sc.laws || [])];
+  const statuteLabels = (sc.statutes || []).map(s => {
+    let label = s.law || '';
+    if (s.article) {
+      const m = String(s.article).match(/^(\d+)(?:之(\d+))?$/);
+      label += m && m[2] ? `第${m[1]}條之${m[2]}` : `第${s.article}條`;
+    }
+    if (s.sub_ref) label += s.sub_ref;
+    return label;
+  }).filter(Boolean);
+  const labelParts = [...(sc.query_terms || []), ...statuteLabels];
   const labelStr = labelParts.length ? `含「${escHtml(labelParts.join(' / '))}」` : '';
   const matched = data.matched_sources || [];
   const others  = data.other_sources  || [];
@@ -255,26 +283,23 @@ async function _doToggle(tr, trS, apiUrl, searchCtx) {
   }
 }
 
+function _buildCitationUrl(base, searchCtx) {
+  if (!searchCtx) return base;
+  const p = new URLSearchParams();
+  if (searchCtx.q) p.append('q', searchCtx.q);
+  (searchCtx.laws     || []).forEach(l => p.append('law',     l));
+  (searchCtx.articles || []).forEach(a => p.append('article', a));
+  (searchCtx.sub_refs || []).forEach(s => p.append('sub_ref', s));
+  const qs = p.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 function toggle(tr, trS, targetId, caseRef, searchCtx) {
-  let url = `/api/decisions/${targetId}/citations`;
-  if (searchCtx) {
-    const p = new URLSearchParams();
-    if (searchCtx.q) p.append('q', searchCtx.q);
-    (searchCtx.laws || []).forEach(l => p.append('law', l));
-    url += '?' + p.toString();
-  }
-  _doToggle(tr, trS, url, searchCtx);
+  _doToggle(tr, trS, _buildCitationUrl(`/api/decisions/${targetId}/citations`, searchCtx), searchCtx);
 }
 
 function toggleAuthority(tr, trS, authorityId, caseRef, searchCtx) {
-  let url = `/api/authorities/${authorityId}/citations`;
-  if (searchCtx) {
-    const p = new URLSearchParams();
-    if (searchCtx.q) p.append('q', searchCtx.q);
-    (searchCtx.laws || []).forEach(l => p.append('law', l));
-    url += '?' + p.toString();
-  }
-  _doToggle(tr, trS, url, searchCtx);
+  _doToggle(tr, trS, _buildCitationUrl(`/api/authorities/${authorityId}/citations`, searchCtx), searchCtx);
 }
 
 // ── 渲染排行列 ────────────────────────────────────────────────────────────────
@@ -328,18 +353,35 @@ async function loadRankings() {
 
 // ── 搜尋 ──────────────────────────────────────────────────────────────────────
 async function doSearch() {
-  const q   = document.getElementById('qInput').value.trim();
-  const law = document.getElementById('lawInput').value.trim();
-  if (!q && !law) { clearSearch(); return; }
+  const q          = document.getElementById('qInput').value.trim();
+  const law        = document.getElementById('lawInput').value.trim();
+  const article    = document.getElementById('articleInput').value.trim();
+  const subRef     = document.getElementById('subRefInput').value.trim();
+  const excludeQ   = document.getElementById('excludeQInput').value.trim();
+  const excludeLaw = document.getElementById('excludeLawInput').value.trim();
+  const excludeArt = document.getElementById('excludeArticleInput').value.trim();
+
+  if (!q && !law && !excludeQ && !excludeLaw) { clearSearch(); return; }
 
   const p = new URLSearchParams();
-  if (q)   p.append('q', q);
-  if (law) p.append('law', law);
+  if (q)          p.append('q', q);
+  if (law)        p.append('law', law);
+  if (article)    p.append('article', article);
+  if (subRef)     p.append('sub_ref', subRef);
+  if (excludeQ)   p.append('exclude_q', excludeQ);
+  if (excludeLaw) p.append('exclude_law', excludeLaw);
+  if (excludeArt) p.append('exclude_article', excludeArt);
 
   const res  = await fetch(`/api/search?${p}`);
   const data = await res.json();
 
-  currentSearchCtx = { q, laws: law ? [law] : [], query_terms: data.query_terms || [] };
+  currentSearchCtx = {
+    q,
+    laws:     law     ? [law]     : [],
+    articles: article ? [article] : [],
+    sub_refs: subRef  ? [subRef]  : [],
+    query_terms: data.query_terms || [],
+  };
   document.getElementById('searchInfo').textContent =
     `搜尋：${data.source_count} 篇來源判決 → ${data.targets.length} 個被引用目標`;
   renderRows(data.targets, currentSearchCtx);
@@ -347,8 +389,10 @@ async function doSearch() {
 
 function clearSearch() {
   currentSearchCtx = null;
-  document.getElementById('qInput').value   = '';
-  document.getElementById('lawInput').value = '';
+  ['qInput','lawInput','articleInput','subRefInput',
+   'excludeQInput','excludeLawInput','excludeArticleInput'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
   document.getElementById('searchInfo').textContent = '';
   loadRankings();
 }

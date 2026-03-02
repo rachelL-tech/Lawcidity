@@ -42,7 +42,7 @@ def _citation_rows(
             k = f"m_kw_{idx}"
             conds.append(f"d2.clean_text ILIKE %({k})s")
             params[k] = f"%{term}%"
-        for idx, (law, article, _sub_ref) in enumerate(statute_filters):
+        for idx, (law, article, sub_ref) in enumerate(statute_filters):
             lk = f"m_law_{idx}"
             inner = f"drs.law = %({lk})s"
             params[lk] = law
@@ -50,6 +50,10 @@ def _citation_rows(
                 ak = f"m_art_{idx}"
                 inner += f" AND drs.article_raw = %({ak})s"
                 params[ak] = article
+            if sub_ref:
+                sk = f"m_sub_{idx}"
+                inner += f" AND drs.sub_ref = %({sk})s"
+                params[sk] = sub_ref
             conds.append(
                 f"EXISTS (SELECT 1 FROM decision_reason_statutes drs"
                 f" WHERE drs.decision_id = d2.id AND {inner})"
@@ -103,6 +107,10 @@ def _split_search_response(target, rows, terms, statute_filters):
         "search_context": {
             "query_terms": terms,
             "laws": [f[0] for f in statute_filters],
+            "statutes": [
+                {"law": f[0], "article": f[1], "sub_ref": f[2]}
+                for f in statute_filters
+            ],
         },
     }
 

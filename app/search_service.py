@@ -25,11 +25,12 @@ from etl.law_names import normalize_law_name
 
 VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
 
-STATUTE_MATCH_SCORE = 3
+STATUTE_MATCH_SCORE = 2
 
-# score = citation_count + keyword_score_sum + statute_score_sum
+# score = keyword_score_sum + statute_score_sum（不含 citation_count）
 # keyword_score：每個查詢詞各自計分（命中+1），多詞查詢可得部分分數
-# statute_score：每組 law+article 命中 citation snippet +3
+# statute_score：每組 law(+article)(+sub_ref) 各自 EXISTS 判斷，命中則 +2
+#   law-only filter：EXISTS 確保同一法律只計一次，即使 CSS 多列也不重複
 
 # 去重但保留原順序
 def _dedupe_keep_order(values: list[str]) -> list[str]:
@@ -346,31 +347,27 @@ def fetch_rankings_by_source_ids(
         snippet_score_sql = "0"
 
     if statute_filters:
-        statute_clauses: list[str] = []
+        per_filter: list[str] = []
+        params["statute_score"] = STATUTE_MATCH_SCORE
         for idx, (law, article, sub_ref) in enumerate(statute_filters):
             law_key = f"law_{idx}"
-            clause = f"(css.law = %({law_key})s"
             params[law_key] = law
+            inner = f"css.law = %({law_key})s"
             if article is not None:
                 article_key = f"article_{idx}"
-                clause += f" AND css.article_raw = %({article_key})s"
+                inner += f" AND css.article_raw = %({article_key})s"
                 params[article_key] = article
             if sub_ref is not None:
                 sub_key = f"sub_ref_{idx}"
-                clause += f" AND css.sub_ref = %({sub_key})s"
+                inner += f" AND css.sub_ref = %({sub_key})s"
                 params[sub_key] = sub_ref
-            clause += ")"
-            statute_clauses.append(clause)
-
-        params["statute_score"] = STATUTE_MATCH_SCORE
-        statute_score_sql = f"""
-            CASE WHEN EXISTS (
-                SELECT 1
-                FROM citation_snippet_statutes css
-                WHERE css.citation_id = b.id
-                  AND ({" OR ".join(statute_clauses)})
-            ) THEN %(statute_score)s ELSE 0 END
-        """
+            per_filter.append(
+                f"(CASE WHEN EXISTS ("
+                f"SELECT 1 FROM citation_snippet_statutes css"
+                f" WHERE css.citation_id = b.id AND {inner}"
+                f") THEN %(statute_score)s ELSE 0 END)"
+            )
+        statute_score_sql = " + ".join(per_filter)
     else:
         statute_score_sql = "0"
 
@@ -463,7 +460,7 @@ def fetch_rankings_by_source_ids(
             COUNT(*)              AS citation_count,
             SUM(e.keyword_score) AS keyword_score_sum,
             SUM(e.statute_score) AS statute_score_sum,
-            COUNT(*) + SUM(e.keyword_score) + SUM(e.statute_score) AS score,
+            SUM(e.keyword_score) + SUM(e.statute_score) AS score,
             -- 全域引用數（跨所有 source，不受關鍵字/法條 filter 限制）
             (
                 SELECT COUNT(DISTINCT c2.source_id)
