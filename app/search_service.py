@@ -42,6 +42,25 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
             out.append(v)
     return out
 
+
+def dedupe_query_terms(values: list[str]) -> list[str]:
+    """統一 query term 去重：去空白、去空字串、保留原順序。"""
+    return _dedupe_keep_order([v.strip() for v in values if v and v.strip()])
+
+
+def dedupe_statute_filters(
+    values: list[tuple[str, str | None, str | None]]
+) -> list[tuple[str, str | None, str | None]]:
+    """統一法條條件去重：以 (law, article, sub_ref) 為唯一鍵。"""
+    seen: set[tuple[str, str | None, str | None]] = set()
+    out: list[tuple[str, str | None, str | None]] = []
+    for law, article, sub_ref in values:
+        key = (law, article, sub_ref)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
 # 把 q 切成 term；q 為 None 或空字串時回傳 []
 def tokenize_query(q: str | None) -> list[str]:
     if not q or not q.strip():
@@ -198,7 +217,6 @@ def search_source_ids_opensearch(
     exclude_statute_filters: list[tuple[str, str, str | None]],
     source_limit: int,
 ) -> list[int]:
-    query_terms = _dedupe_keep_order([t for t in query_terms if t])
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v1")
     body = build_opensearch_query(
@@ -332,7 +350,7 @@ def fetch_rankings_by_source_ids(
     if not source_ids:
         return []
 
-    clean_terms = _dedupe_keep_order([t.strip() for t in query_terms if t and t.strip()])
+    clean_terms = query_terms
     params: dict[str, Any] = {"source_ids": source_ids, "limit": limit}
 
     if clean_terms:

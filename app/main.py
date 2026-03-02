@@ -7,6 +7,8 @@ import psycopg
 from psycopg.rows import dict_row
 from app.search_service import (
     tokenize_query,
+    dedupe_query_terms,
+    dedupe_statute_filters,
     parse_case_types,
     build_statute_filters,
     search_source_ids_opensearch,
@@ -147,10 +149,13 @@ def search_rankings(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not terms and not statute_filters:
-        raise HTTPException(status_code=400, detail="q 與法條（law+article）至少提供一項")
+    query_terms = dedupe_query_terms(terms)
+    statute_filters = dedupe_statute_filters(statute_filters)
+    exclude_terms = dedupe_query_terms(exclude_terms)
+    exclude_statute_filters = dedupe_statute_filters(exclude_statute_filters)
 
-    query_terms = terms
+    if not query_terms and not statute_filters:
+        raise HTTPException(status_code=400, detail="q 與法條（law+article）至少提供一項")
 
     with get_conn() as conn:
         try:
