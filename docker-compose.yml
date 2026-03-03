@@ -1,9 +1,9 @@
 # 用途：本機 MVP 服務（PostgreSQL + OpenSearch）。
-# 說明：OpenSearch 目前以 security+password 模式啟動；中文分詞（IK）安裝會在 Dockerfile 處理。
+# 說明：OpenSearch 以 security+password 模式啟動；搜尋 analyzer 由 index settings 定義（ngram）。
 services:
   db:
     image: postgres:15-alpine
-    container_name: casemap-db
+    container_name: lawcidity-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: citations
@@ -21,11 +21,8 @@ services:
       retries: 5
 
   opensearch:
-    build:
-      context: .
-      dockerfile: docker/opensearch/Dockerfile
-    image: casemap-opensearch:2.18.0-ik
-    container_name: casemap-opensearch
+    image: opensearchproject/opensearch:2.18.0
+    container_name: lawcidity-opensearch
     restart: unless-stopped
     environment:
       discovery.type: single-node
@@ -39,6 +36,20 @@ services:
       - "9200:9200"
     volumes:
       - osdata:/usr/share/opensearch/data
+
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:2.18.0
+    container_name: lawcidity-dashboards
+    restart: unless-stopped
+    depends_on:
+      - opensearch
+    environment:
+      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
+      OPENSEARCH_USERNAME: "admin"
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_INITIAL_ADMIN_PASSWORD}"
+      OPENSEARCH_SSL_VERIFICATIONMODE: "none"
+    ports:
+      - "5601:5601"
 
 volumes:
   pgdata:

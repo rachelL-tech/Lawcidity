@@ -129,7 +129,11 @@ def search_rankings(
     exclude_article: list[str] | None = Query(None, description="排除法條 article；需與 exclude_law 一一對應"),
     exclude_sub_ref: list[str] | None = Query(None, description="排除法條 sub_ref；可省略；若提供需與 exclude_law/article 長度一致"),
     backend: Literal["opensearch", "pg"] = Query("opensearch"),
-    source_limit: int = Query(3000, ge=1, le=10000),
+    source_limit: int | None = Query(
+        None,
+        ge=1,
+        description="純召回模式預設不限制；可選擇性上限保護（僅在 source_limit 有值時生效）",
+    ),
     limit: int = Query(100, ge=1, le=500),
 ):
     try:

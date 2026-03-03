@@ -1,29 +1,41 @@
 #!/usr/bin/env bash
-# 用途：初始化 OpenSearch 索引（若不存在才建立），供本機/EC2 部署後重建使用。
-#
-# Analyzer 決策（2026-03）：
-#   目前：OPENSEARCH_ANALYZER=ik_smart（index + search 相同）
-#   原因：IK 內建詞典未收錄法律複合詞（損害賠償、侵權行為等），ik_smart/ik_max_word 輸出
-#         相同（字元級 token），改 analyzer 目前零效益且須重新 sync。
-#   未來（加自訂法律詞典時）：改為 index=ik_max_word + search=ik_smart，同步時一次重建。
-#   搜尋策略：使用 match_phrase（字元連續等同 ILIKE），不使用 match+operator:and。
+# 初始化 OpenSearch ngram 索引（若不存在才建立）。
+# 預設建立 decisions_v2，並使用 bigram（min_gram=max_gram=2）。
 set -euo pipefail
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-https://localhost:9200}"
 OPENSEARCH_URL="${OPENSEARCH_URL%/}"
-OPENSEARCH_INDEX="${OPENSEARCH_INDEX:-decisions_v1}"
+OPENSEARCH_INDEX="${OPENSEARCH_INDEX:-decisions_v2}"
 OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-admin}"
 OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
 OPENSEARCH_VERIFY_CERTS="${OPENSEARCH_VERIFY_CERTS:-false}"
-OPENSEARCH_ANALYZER="${OPENSEARCH_ANALYZER:-ik_smart}"
-OPENSEARCH_SEARCH_ANALYZER="${OPENSEARCH_SEARCH_ANALYZER:-ik_smart}"
+
+OPENSEARCH_NGRAM_MIN_GRAM="${OPENSEARCH_NGRAM_MIN_GRAM:-2}"
+OPENSEARCH_NGRAM_MAX_GRAM="${OPENSEARCH_NGRAM_MAX_GRAM:-2}"
 
 if [[ -z "${OPENSEARCH_PASSWORD}" ]] && command -v docker >/dev/null 2>&1; then
-  OPENSEARCH_PASSWORD="$(docker compose exec -T opensearch printenv OPENSEARCH_INITIAL_ADMIN_PASSWORD 2>/dev/null || true)"
+  OPENSEARCH_PASSWORD="$(
+    docker compose exec -T opensearch printenv OPENSEARCH_INITIAL_ADMIN_PASSWORD 2>/dev/null || true
+  )"
 fi
 
 if [[ -z "${OPENSEARCH_PASSWORD}" ]]; then
   echo "ERROR: 請設定 OPENSEARCH_PASSWORD（或先啟動 opensearch 容器供自動讀取密碼）" >&2
+  exit 1
+fi
+
+if ! [[ "${OPENSEARCH_NGRAM_MIN_GRAM}" =~ ^[0-9]+$ && "${OPENSEARCH_NGRAM_MAX_GRAM}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須為正整數" >&2
+  exit 1
+fi
+
+if (( OPENSEARCH_NGRAM_MIN_GRAM < 1 || OPENSEARCH_NGRAM_MAX_GRAM < 1 )); then
+  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須 >= 1" >&2
+  exit 1
+fi
+
+if (( OPENSEARCH_NGRAM_MIN_GRAM > OPENSEARCH_NGRAM_MAX_GRAM )); then
+  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM 不可大於 OPENSEARCH_NGRAM_MAX_GRAM" >&2
   exit 1
 fi
 
@@ -33,8 +45,10 @@ if [[ "${OPENSEARCH_VERIFY_CERTS}" != "true" ]]; then
 fi
 
 AUTH=(-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}")
-HEAD_CODE="$(curl "${CURL_EXTRA[@]}" -sS -o /dev/null -w "%{http_code}" "${AUTH[@]}" \
-  "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}")"
+HEAD_CODE="$(
+  curl "${CURL_EXTRA[@]}" -sS -o /dev/null -w "%{http_code}" "${AUTH[@]}" \
+    "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}"
+)"
 
 if [[ "${HEAD_CODE}" == "200" ]]; then
   echo "Index already exists: ${OPENSEARCH_INDEX}"
@@ -48,26 +62,40 @@ fi
 
 INDEX_BODY="$(cat <<JSON
 {
-    "settings": {
-      "number_of_shards": 1,
-      "number_of_replicas": 0
-    },
-    "mappings": {
-      "properties": {
-        "source_id": { "type": "long" },
-        "case_type": { "type": "keyword" },
-        "clean_text": {
-          "type": "text",
-          "analyzer": "${OPENSEARCH_ANALYZER}",
-          "search_analyzer": "${OPENSEARCH_SEARCH_ANALYZER}"
-        },
-        "statutes": {
-          "type": "nested",
-          "properties": {
-            "law": { "type": "keyword" },
-            "article_raw": { "type": "keyword" },
-            "sub_ref": { "type": "keyword" }
-          }
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "analysis": { 
+      "tokenizer": {
+        "zh_ngram_tokenizer": {
+          "type": "ngram",
+          "min_gram": ${OPENSEARCH_NGRAM_MIN_GRAM},
+          "max_gram": ${OPENSEARCH_NGRAM_MAX_GRAM},
+          "token_chars": ["letter", "digit"]
+        }
+      },
+      "analyzer": {
+        "zh_ngram": {
+          "type": "custom",
+          "tokenizer": "zh_ngram_tokenizer"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "source_id": { "type": "long" },
+      "case_type": { "type": "keyword" },
+      "clean_text": {
+        "type": "text",
+        "analyzer": "zh_ngram"
+      },
+      "statutes": {
+        "type": "nested",
+        "properties": {
+          "law": { "type": "keyword" },
+          "article_raw": { "type": "keyword" },
+          "sub_ref": { "type": "keyword" }
         }
       }
     }
@@ -80,4 +108,4 @@ curl "${CURL_EXTRA[@]}" -sS "${AUTH[@]}" -X PUT "${OPENSEARCH_URL}/${OPENSEARCH_
   -H "Content-Type: application/json" \
   -d "${INDEX_BODY}"
 echo
-echo "Index created: ${OPENSEARCH_INDEX}"
+echo "Index created: ${OPENSEARCH_INDEX} (ngram ${OPENSEARCH_NGRAM_MIN_GRAM}-${OPENSEARCH_NGRAM_MAX_GRAM})"

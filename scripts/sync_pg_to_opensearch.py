@@ -279,7 +279,7 @@ def main() -> int:
         "DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/citations",
     )
-    index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v1")
+    index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v2")
     client = _build_opensearch_client()
     only_cited = not args.include_uncited
     analyzer_env = os.environ.get("OPENSEARCH_ANALYZER", "").strip()

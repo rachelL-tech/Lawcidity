@@ -111,8 +111,8 @@ CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 -- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
 -- CREATE INDEX decisions_root_year_idx  ON decisions(root_norm, jyear);
 -- CREATE INDEX decisions_date_idx       ON decisions(decision_date);
--- CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
 -- CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
+-- CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
 
 -- =========================
 -- 3) 裁判外權威資料（會議決議、釋字、法律座談會等）

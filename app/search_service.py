@@ -3,14 +3,14 @@
 
 用途：
 1. 解析與驗證搜尋參數（q/case_type/law+article+sub_ref）
-2. 組裝 OpenSearch bool+nested 查詢（q 為 AND、法條組合為全 AND）
-3. 提供 PostgreSQL baseline 搜尋（ILIKE）
+2. 組裝 OpenSearch bool+nested 查詢（q 為 AND、法條組合為全 AND，純召回）
+3. 提供 PostgreSQL baseline 搜尋（ILIKE，純召回）
 4. 依 source_ids 回 PostgreSQL 聚合目標排行與分數（回傳 target_level/target_root_norm）
 
 OpenSearch 查詢策略（記錄）：
-- clean_text 使用 ik_smart（index/search）
-- 每個空白分詞的 term 用 match_phrase（字元連續，等同 ILIKE，無 false positive）
-- 不使用 analyze_query_terms 預處理（IK 會把複合詞切成字元，破壞 match_phrase 片語語意）
+- clean_text 使用 ngram analyzer（預設 2-gram）
+- 每個空白分詞的 term 用 match_phrase（字元連續，等同 ILIKE）
+- source_id 以 composite aggregation 分頁收集（純召回，不走 _score 排序）
 """
 
 import os
@@ -114,7 +114,6 @@ def build_opensearch_query(
     statute_filters: list[tuple[str, str, str | None]],
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str, str | None]],
-    size: int,
 ) -> dict[str, Any]:
     must = [
         {"match_phrase": {"clean_text": term}}
@@ -166,11 +165,7 @@ def build_opensearch_query(
     if must_not:
         bool_query["must_not"] = must_not
 
-    return {
-        "size": size,
-        "_source": ["source_id"],
-        "query": {"bool": bool_query},
-    }
+    return {"bool": bool_query}
 
 # 讀環境變數
 def _env_bool(name: str, default: bool) -> bool:
@@ -215,33 +210,62 @@ def search_source_ids_opensearch(
     statute_filters: list[tuple[str, str, str | None]],
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str, str | None]],
-    source_limit: int,
+    source_limit: int | None,
 ) -> list[int]:
     client = _get_opensearch_client()
-    index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v1")
-    body = build_opensearch_query(
+    index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v2")
+    bool_query = build_opensearch_query(
         query_terms=query_terms,
         case_types=case_types,
         statute_filters=statute_filters,
         exclude_terms=exclude_terms,
         exclude_statute_filters=exclude_statute_filters,
-        size=source_limit,
     )
 
-    response = client.search(index=index_name, body=body)
-    hits = response.get("hits", {}).get("hits", [])
+    raw_page_size = (os.environ.get("OPENSEARCH_COMPOSITE_PAGE_SIZE", "1000") or "").strip()
+    try:
+        page_size = max(1, int(raw_page_size))
+    except Exception:
+        page_size = 1000
 
     source_ids: list[int] = []
     seen: set[int] = set()
-    for hit in hits:
-        raw_id = (hit.get("_source") or {}).get("source_id", hit.get("_id"))
-        try:
-            source_id = int(raw_id)
-        except Exception:
-            continue
-        if source_id not in seen:
+    after_key: dict[str, Any] | None = None
+    while True:
+        composite: dict[str, Any] = {
+            "size": page_size,
+            "sources": [
+                {"source_id": {"terms": {"field": "source_id"}}}
+            ],
+        }
+        if after_key is not None:
+            composite["after"] = after_key
+
+        body = {
+            "size": 0,
+            "query": bool_query,
+            "aggs": {"source_ids": {"composite": composite}},
+        }
+        response = client.search(index=index_name, body=body)
+        agg = (response.get("aggregations") or {}).get("source_ids") or {}
+        buckets = agg.get("buckets") or []
+
+        for bucket in buckets:
+            raw_id = (bucket.get("key") or {}).get("source_id")
+            try:
+                source_id = int(raw_id)
+            except Exception:
+                continue
+            if source_id in seen:
+                continue
             seen.add(source_id)
             source_ids.append(source_id)
+            if source_limit is not None and len(source_ids) >= source_limit:
+                return source_ids
+
+        after_key = agg.get("after_key")
+        if not after_key:
+            break
 
     return source_ids
 
@@ -253,9 +277,9 @@ def search_source_ids_baseline_pg(
     statute_filters: list[tuple[str, str, str | None]],
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str, str | None]],
-    source_limit: int,
+    source_limit: int | None,
 ) -> list[int]:
-    params: dict[str, Any] = {"source_limit": source_limit}
+    params: dict[str, Any] = {}
     where_parts: list[str] = []
 
     # q=AND：每個 term 都要命中 clean_text
@@ -329,13 +353,14 @@ def search_source_ids_baseline_pg(
         FROM decisions d
         WHERE {" AND ".join(where_parts)}
           AND EXISTS (SELECT 1 FROM citations c WHERE c.source_id = d.id)
-        ORDER BY d.id DESC
-        LIMIT %(source_limit)s
     """
 
     with conn.cursor() as cur:
         cur.execute(sql, params)
-        return [int(row["id"]) for row in cur.fetchall()]
+        ids = [int(row["id"]) for row in cur.fetchall()]
+        if source_limit is not None:
+            return ids[:source_limit]
+        return ids
 
 # 把 OpenSearch/PG 找到的 source_ids 當集合，從 citations 找 target 並計分（snippet 命中加分 + 法條匹配加分）。
 # target 包含 decisions（target_id）與 authorities（target_authority_id）兩種，UNION ALL 合併後統一排序。

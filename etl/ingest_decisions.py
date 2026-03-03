@@ -295,17 +295,23 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
 
         # 先查是否已有完整 decisions row（jid IS NOT NULL）
         # 須同時比對 case_type 與 doc_type，避免判決/裁定並存時回傳錯誤目標
-        # target_doc_type=None 時接受任意 doc_type（OR %s IS NULL = TRUE）
+        # target_doc_type=None 時不限 doc_type（接受任意值）
         if ct is not None:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT id FROM decisions
-                    WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
-                      AND jid IS NOT NULL AND case_type = %s
-                      AND (doc_type = %s OR %s IS NULL)
-                    LIMIT 1
-                """, (court, jyear, jcase_norm, jno, ct,
-                      target_doc_type, target_doc_type))
+                if target_doc_type is not None:
+                    cur.execute("""
+                        SELECT id FROM decisions
+                        WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                          AND jid IS NOT NULL AND case_type = %s AND doc_type = %s
+                        LIMIT 1
+                    """, (court, jyear, jcase_norm, jno, ct, target_doc_type))
+                else:
+                    cur.execute("""
+                        SELECT id FROM decisions
+                        WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                          AND jid IS NOT NULL AND case_type = %s
+                        LIMIT 1
+                    """, (court, jyear, jcase_norm, jno, ct))
                 full_row = cur.fetchone()
             if full_row:
                 conn.commit()
