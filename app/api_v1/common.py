@@ -4,8 +4,6 @@ from etl.law_names import LAW_NAMES
 
 router = APIRouter()
 
-VALID_CASE_TYPES = ["民事", "刑事", "行政", "憲法"]
-
 
 @router.get("/laws")
 def get_laws(q: str = ""):
@@ -15,11 +13,6 @@ def get_laws(q: str = ""):
         return {"laws": LAW_NAMES[:50]}
     matched = [name for name in LAW_NAMES if q in name]
     return {"laws": matched[:20]}
-
-
-@router.get("/case-types")
-def get_case_types():
-    return {"case_types": VALID_CASE_TYPES}
 
 
 @router.get("/health")

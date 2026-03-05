@@ -52,6 +52,21 @@ class SearchContext(BaseModel):
     exclude_statutes: list[StatuteFilter]
 
 
+class MatchedCitationSource(BaseModel):
+    """搜尋結果中每個 target 的 matched citation 明細。"""
+    citation_id: int
+    source_id: int
+    source_court: str
+    source_court_level: int | None
+    case_ref: str
+    doc_type: str | None
+    decision_date: str | None
+    snippet: str | None
+    raw_match: str
+    statutes: list[dict]
+    score: float
+
+
 class SearchResponse(BaseModel):
     total: int
     page: int
@@ -59,6 +74,7 @@ class SearchResponse(BaseModel):
     source_count: int
     results: list[SearchResultItem]
     search_context: SearchContext
+    matched_citations: dict[str, list[MatchedCitationSource]]
 
 
 # ── GET /decisions/{id}/citations ──────────────────────────────────────────────
