@@ -1,3 +1,16 @@
+"""
+展開單一 target 的 citation 列表。
+
+職責：
+- GET /decisions/{id}/citations/matched  — 符合全部搜尋條件的引用來源
+- GET /decisions/{id}/citations/others   — 至少一個條件不符合的引用來源
+- GET /authorities/{id}/citations/matched
+- GET /authorities/{id}/citations/others
+- GET /decisions/{id}                    — 判決詳情（全文、法條、引用總數）
+
+使用 search_service 的 score SQL builders 計算 snippet 命中分數，
+用於 matched / others 內部的法院層級 + 分數排序。
+"""
 from fastapi import APIRouter, HTTPException, Query
 from psycopg.rows import dict_row
 from app.db import get_conn

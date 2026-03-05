@@ -1,3 +1,16 @@
+"""
+搜尋排行榜 endpoint。
+
+職責：
+- POST /search — 接收搜尋條件，回傳被引用 target 的排行列表
+
+流程：
+1. 打 OpenSearch 拿符合搜尋條件的 source_ids（引用方判決）
+2. 依 source_ids 查 target 排行（fetch_target_rankings）
+3. 回傳分頁排行，含 matched_citation_count、total_citation_count、score
+
+不包含 citation 明細，前端展開 target 時另打 citations.py 的 endpoint。
+"""
 from fastapi import APIRouter, HTTPException
 from app.db import get_conn
 from app.search_service import (

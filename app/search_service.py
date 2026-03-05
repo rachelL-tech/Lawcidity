@@ -1,15 +1,17 @@
 """
-搜尋服務層（OpenSearch + PostgreSQL）。
+搜尋業務邏輯層（不知道 HTTP，不依賴 FastAPI）。
 
-用途：
-1. 解析與驗證搜尋參數（q/case_type/law+article+sub_ref）
-2. 組裝 OpenSearch bool+nested 查詢（q 為 AND、法條組合為全 AND，純召回）
-3. 提供 PostgreSQL baseline 搜尋（ILIKE，純召回）
-4. 依 source_ids 取 per-citation rows 並在 Python 聚合目標排行
+職責：
+- 參數解析與正規化：dedupe_query_terms、dedupe_statute_filters、build_statute_filters
+- OpenSearch 召回：search_source_ids_opensearch（composite agg 分頁收集 source_ids）
+- PostgreSQL baseline 召回：search_source_ids_baseline_pg（ILIKE，供比對用）
+- Target 排行：fetch_target_rankings（SQL 聚合，單次查詢）
+- Score SQL builders：build_keyword_score_sql、build_statute_score_sql
+  供 search.py（target 排行）與 citations.py（展開排序）共用
 
-OpenSearch 查詢策略（記錄）：
-- clean_text 使用 ngram analyzer（預設 2-gram）
-- 每個空白分詞的 term 用 match_phrase（字元連續，等同 ILIKE）
+OpenSearch 查詢策略：
+- clean_text 使用 ngram analyzer（2-gram）
+- 每個 term 用 match_phrase（字元連續，等同 ILIKE）
 - source_id 以 composite aggregation 分頁收集（純召回，不走 _score 排序）
 """
 
