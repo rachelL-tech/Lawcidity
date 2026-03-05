@@ -1,7 +1,6 @@
 import os
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 import psycopg
 from psycopg.rows import dict_row
 from app.search_service import (
@@ -22,13 +21,6 @@ DB_URL = os.environ.get(
 )
 
 app = FastAPI(title="Lawcidity API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # v1 API
 app.include_router(v1_router)
