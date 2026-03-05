@@ -121,7 +121,7 @@ CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 -- =========================
 CREATE TABLE authorities (
   id         BIGSERIAL PRIMARY KEY,
-  doc_type   TEXT NOT NULL,    -- 決議 / 釋字 / 法律座談會 / 研審小組意見
+  doc_type   TEXT NOT NULL,    -- 決議 / 釋字 / 法律座談會 / 研審小組意見 / 行政法院月份聯席會議決議
   root_norm  TEXT NOT NULL,    -- 來源機關聚合（如：最高法院、司法院、高等法院）
   ref_key    TEXT NOT NULL,    -- 自然鍵
   display    TEXT,             -- 顯示用完整名稱
