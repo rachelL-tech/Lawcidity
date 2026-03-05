@@ -80,8 +80,10 @@ class CitationSource(BaseModel):
 
 class CitationTargetInfo(BaseModel):
     id: int
-    court: str
-    case_ref: str
+    target_type: str        # "decision" | "authority"
+    court: str              # root_norm
+    case_ref: str           # 案號 or authority display
+    doc_type: str | None
 
 
 class CitationsResponse(BaseModel):

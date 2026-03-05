@@ -29,9 +29,7 @@ def _simplify_court(unit_norm: str) -> str:
     if not unit_norm:
         return unit_norm
     if "簡易庭" in unit_norm:
-        # e.g. 臺灣板橋地方法院板橋簡易庭 → 臺灣板橋地方法院
         idx = unit_norm.find("簡易庭")
-        # Find the last occurrence of "法院" before 簡易庭
         prefix = unit_norm[:idx]
         court_idx = prefix.rfind("法院")
         if court_idx != -1:
@@ -46,15 +44,22 @@ def _citation_rows_v1(
     query_terms: list[str],
     statute_filters: list[tuple],
 ) -> list[dict]:
-    """查詢 citation rows，帶 court_level、is_matched、score。"""
+    """查詢 citation rows，帶 court_level、is_matched、score。
+
+    target_col: "c.target_id" (decision) 或 "c.target_authority_id" (authority)
+    score = keyword_score_sum + statute_score_sum
+    """
     params: dict = {"target_val": target_val}
 
-    # is_matched 條件
+    # ── is_matched 條件（全用 EXISTS subquery 避免 GROUP BY 問題）──
     if query_terms or statute_filters:
         conds: list[str] = []
         for idx, term in enumerate(query_terms):
             k = f"m_kw_{idx}"
-            conds.append(f"src.clean_text ILIKE %({k})s")
+            conds.append(
+                f"EXISTS (SELECT 1 FROM decisions d2"
+                f" WHERE d2.id = c.source_id AND d2.clean_text ILIKE %({k})s)"
+            )
             params[k] = f"%{term}%"
         for idx, (law, article, sub_ref) in enumerate(statute_filters):
             lk = f"m_law_{idx}"
@@ -70,14 +75,14 @@ def _citation_rows_v1(
                 params[sk] = sub_ref
             conds.append(
                 f"EXISTS (SELECT 1 FROM decision_reason_statutes drs"
-                f" WHERE drs.decision_id = src.id AND {inner})"
+                f" WHERE drs.decision_id = c.source_id AND {inner})"
             )
         match_cond = " AND ".join(conds)
         is_matched_sql = f"({match_cond})"
     else:
         is_matched_sql = "TRUE"
 
-    # score：keyword snippets + statute
+    # ── keyword_score_sum：每個 query_term 在 snippet 命中 +1 ──
     if query_terms:
         kw_parts = []
         for idx, term in enumerate(query_terms):
@@ -87,6 +92,32 @@ def _citation_rows_v1(
         keyword_score_sql = " + ".join(kw_parts)
     else:
         keyword_score_sql = "0"
+
+    # ── statute_score_sum：每個 statute filter 在 css 命中 +1 ──
+    #    filter(law) → 只查 law，多筆不同條仍只 +1
+    #    filter(law, article) → 查 law+article，多筆不同款仍只 +1
+    #    filter(law, article, sub_ref) → 全部 AND 才命中
+    if statute_filters:
+        st_parts = []
+        for idx, (law, article, sub_ref) in enumerate(statute_filters):
+            slk = f"sc_law_{idx}"
+            inner = f"css2.law = %({slk})s"
+            params[slk] = law
+            if article:
+                sak = f"sc_art_{idx}"
+                inner += f" AND css2.article_raw = %({sak})s"
+                params[sak] = article
+            if sub_ref:
+                ssk = f"sc_sub_{idx}"
+                inner += f" AND css2.sub_ref = %({ssk})s"
+                params[ssk] = sub_ref
+            st_parts.append(
+                f"(EXISTS (SELECT 1 FROM citation_snippet_statutes css2"
+                f" WHERE css2.citation_id = c.id AND {inner}))::int"
+            )
+        statute_score_sql = " + ".join(st_parts)
+    else:
+        statute_score_sql = "0"
 
     sql = f"""
         SELECT
@@ -109,7 +140,7 @@ def _citation_rows_v1(
                 '[]'::json
             )                               AS statutes,
             ({is_matched_sql})              AS is_matched,
-            {keyword_score_sql}             AS score
+            ({keyword_score_sql}) + ({statute_score_sql}) AS score
         FROM citations c
         JOIN decisions src ON c.source_id = src.id
         LEFT JOIN court_units cu ON cu.id = src.court_unit_id
@@ -125,14 +156,8 @@ def _citation_rows_v1(
         return cur.fetchall()
 
 
-@router.get("/decisions/{target_id}/citations", response_model=CitationsResponse)
-def get_citations(
-    target_id: int,
-    keywords: str | None = Query(None, description="逗號分隔"),
-    statutes: str | None = Query(None, description="JSON array string"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
-):
+def _parse_citation_params(keywords, statutes):
+    """解析 citations endpoint 共用的 keywords/statutes 參數。"""
     import json as _json
 
     query_terms = dedupe_query_terms(
@@ -149,20 +174,18 @@ def get_citations(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"statutes 格式錯誤：{e}")
 
-    with get_conn() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """SELECT d.unit_norm, d.root_norm, d.jyear, d.jcase_norm, d.jno
-                   FROM decisions d WHERE d.id = %s""",
-                (target_id,),
-            )
-            target_row = cur.fetchone()
-        if not target_row:
-            raise HTTPException(status_code=404, detail="判決不存在")
+    return query_terms, statute_list
 
-        rows = _citation_rows_v1(conn, "c.target_id", target_id, query_terms, statute_list)
 
-    # Sort: matched first (court_level ASC, score DESC), then others
+def _build_citations_response(
+    rows: list[dict],
+    target_info: CitationTargetInfo,
+    query_terms: list[str],
+    statute_filters: list[tuple],
+    page: int,
+    page_size: int,
+) -> CitationsResponse:
+    """排序 + 分頁，回傳 CitationsResponse。"""
     matched = [r for r in rows if r["is_matched"]]
     others = [r for r in rows if not r["is_matched"]]
 
@@ -198,18 +221,86 @@ def get_citations(
     ]
 
     return CitationsResponse(
-        target=CitationTargetInfo(
-            id=target_id,
-            court=target_row["root_norm"],
-            case_ref=_fmt_case_ref(
-                target_row["jyear"], target_row["jcase_norm"], target_row["jno"]
-            ),
-        ),
+        target=target_info,
         total=total,
         matched_total=matched_total,
         sources=sources,
     )
 
+
+# ── Decision citations ────────────────────────────────────────────────────────
+
+@router.get("/decisions/{target_id}/citations", response_model=CitationsResponse)
+def get_decision_citations(
+    target_id: int,
+    keywords: str | None = Query(None, description="逗號分隔"),
+    statutes: str | None = Query(None, description="JSON array string"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+):
+    query_terms, statute_list = _parse_citation_params(keywords, statutes)
+
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """SELECT d.root_norm, d.jyear, d.jcase_norm, d.jno, d.doc_type
+                   FROM decisions d WHERE d.id = %s""",
+                (target_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="判決不存在")
+
+        target_info = CitationTargetInfo(
+            id=target_id,
+            target_type="decision",
+            court=row["root_norm"],
+            case_ref=_fmt_case_ref(row["jyear"], row["jcase_norm"], row["jno"]),
+            doc_type=row["doc_type"],
+        )
+
+        rows = _citation_rows_v1(conn, "c.target_id", target_id, query_terms, statute_list)
+
+    return _build_citations_response(rows, target_info, query_terms, statute_list, page, page_size)
+
+
+# ── Authority citations ───────────────────────────────────────────────────────
+
+@router.get("/authorities/{authority_id}/citations", response_model=CitationsResponse)
+def get_authority_citations(
+    authority_id: int,
+    keywords: str | None = Query(None, description="逗號分隔"),
+    statutes: str | None = Query(None, description="JSON array string"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+):
+    query_terms, statute_list = _parse_citation_params(keywords, statutes)
+
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """SELECT a.root_norm, a.doc_type, a.display
+                   FROM authorities a WHERE a.id = %s""",
+                (authority_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="權威資料不存在")
+
+        target_info = CitationTargetInfo(
+            id=authority_id,
+            target_type="authority",
+            court=row["root_norm"],
+            case_ref=row["display"] or "",
+            doc_type=row["doc_type"],
+        )
+
+        rows = _citation_rows_v1(conn, "c.target_authority_id", authority_id, query_terms, statute_list)
+
+    return _build_citations_response(rows, target_info, query_terms, statute_list, page, page_size)
+
+
+# ── Decision detail ───────────────────────────────────────────────────────────
 
 @router.get("/decisions/{id}", response_model=DecisionDetail)
 def get_decision(id: int):
