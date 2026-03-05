@@ -39,28 +39,29 @@ def _simplify_court(unit_norm: str) -> str:
 
 # ── Citation 查詢 ─────────────────────────────────────────────────────
 #
-# matched citations 已在搜尋結果帶回，此 endpoint 只回傳 NOT is_matched。
+# 回傳特定 target 的所有 citations（matched + others），含 is_matched 與 score。
 # keywords/statutes 擇一必填，未帶搜尋條件回 400。
+# matched/others 的排序由 _build_citations_response 處理。
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _citation_rows_others(
+def _citation_rows(
     conn,
     target_col: str,
     target_val: int,
     query_terms: list[str],
     statute_filters: list[tuple],
 ) -> list[dict]:
-    """有搜尋條件：只回傳 NOT is_matched 的 citations，用共用 builder 計分。
+    """回傳 target 的所有 citations，計算 is_matched 與 score。
 
-    is_matched = 所有條件都符合（AND）：
+    is_matched = 所有搜尋條件都符合（AND）：
       - 每個 keyword 在 source decision 的 clean_text 命中
       - 每組 statute filter 在 source decision 的 reason_statutes 命中
-    score 用於 others 排序（部分命中仍有分數）。
+    score 計算 snippet 命中分數，用於 matched/others 內部排序。
     """
     params: dict = {"target_val": target_val}
 
-    # is_matched 條件（AND）
+    # is_matched 條件（AND，檢查 source decision 全文與法條）
     match_conds: list[str] = []
     for idx, term in enumerate(query_terms):
         k = f"m_kw_{idx}"
@@ -86,7 +87,7 @@ def _citation_rows_others(
             f" WHERE drs.decision_id = c.source_id AND {inner})"
         )
 
-    not_matched_sql = f"NOT ({' AND '.join(match_conds)})"
+    is_matched_sql = f"({' AND '.join(match_conds)})"
 
     # score（共用 builder，param key 不同前綴不衝突）
     keyword_score_sql = build_keyword_score_sql(query_terms, params, "c.snippet")
@@ -108,14 +109,13 @@ def _citation_rows_others(
                 ) FILTER (WHERE css.id IS NOT NULL),
                 '[]'::json
             )                               AS statutes,
-            FALSE                           AS is_matched,
+            ({is_matched_sql})              AS is_matched,
             ({keyword_score_sql}) + ({statute_score_sql}) AS score
         FROM citations c
         JOIN decisions src ON c.source_id = src.id
         LEFT JOIN court_units cu ON cu.id = src.court_unit_id
         LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
         WHERE {target_col} = %(target_val)s
-          AND {not_matched_sql}
         GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
                  src.jyear, src.jcase_norm, src.jno,
                  src.doc_type, src.decision_date
@@ -188,7 +188,7 @@ def _build_citations_response(
     return CitationsResponse(
         target=target_info,
         total=total,
-        matched_total=0,
+        matched_total=sum(1 for r in rows if r["is_matched"]),
         sources=sources,
     )
 
@@ -203,6 +203,7 @@ def get_decision_citations(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ):
+    # GET endpoint，query string 只能是字串，keywords=慰撫金,精神損害 和 statutes=[{"law":"民法"}] ，需要手動 split 和 json.loads
     query_terms, statute_list = _parse_citation_params(keywords, statutes)
 
     with get_conn() as conn:
@@ -226,7 +227,7 @@ def get_decision_citations(
 
         if not query_terms and not statute_list:
             raise HTTPException(status_code=400, detail="keywords 和 statutes 至少填一個")
-        rows = _citation_rows_others(conn, "c.target_id", target_id, query_terms, statute_list)
+        rows = _citation_rows(conn, "c.target_id", target_id, query_terms, statute_list)
 
     return _build_citations_response(rows, target_info, page, page_size)
 
@@ -264,7 +265,7 @@ def get_authority_citations(
 
         if not query_terms and not statute_list:
             raise HTTPException(status_code=400, detail="keywords 和 statutes 至少填一個")
-        rows = _citation_rows_others(conn, "c.target_authority_id", authority_id, query_terms, statute_list)
+        rows = _citation_rows(conn, "c.target_authority_id", authority_id, query_terms, statute_list)
 
     return _build_citations_response(rows, target_info, page, page_size)
 

@@ -40,8 +40,8 @@ class SearchResultItem(BaseModel):
     jno: int | None
     case_ref: str
     doc_type: str | None
-    total_citation_count: int
-    matched_citation_count: int
+    total_citation_count: int # 不受搜尋條件限制，歷史上被引用的總次數
+    matched_citation_count: int # 符合搜尋條件的 source 數
     score: float
 
 
@@ -52,21 +52,6 @@ class SearchContext(BaseModel):
     exclude_statutes: list[StatuteFilter]
 
 
-class MatchedCitationSource(BaseModel):
-    """搜尋結果中每個 target 的 matched citation 明細。"""
-    citation_id: int
-    source_id: int
-    source_court: str
-    source_court_level: int | None
-    case_ref: str
-    doc_type: str | None
-    decision_date: str | None
-    snippet: str | None
-    raw_match: str
-    statutes: list[dict]
-    score: float
-
-
 class SearchResponse(BaseModel):
     total: int
     page: int
@@ -74,7 +59,6 @@ class SearchResponse(BaseModel):
     source_count: int
     results: list[SearchResultItem]
     search_context: SearchContext
-    matched_citations: dict[str, list[MatchedCitationSource]]
 
 
 # ── GET /decisions/{id}/citations ──────────────────────────────────────────────

@@ -36,7 +36,6 @@ OpenSearch 查詢策略（記錄）：
 
 import os
 import re
-from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
@@ -388,28 +387,26 @@ def search_source_ids_baseline_pg(
         return ids
 
 
-# ── 搜尋結果：per-citation rows + Python 聚合 ─────────────────────────
+# ── 搜尋結果：SQL 聚合 target 排行 ───────────────────────────────────
 #
-# 設計理由：
-# SQL 回傳 per-citation rows（含 score），Python 做兩件事：
-#   1. 聚合出 target 排行（SUM score, COUNT）
-#   2. 保留 per-citation 明細（給前端展開 matched sources 用）
-# 這樣 score 只在 SQL 算一次，不會在展開時重複計算。
-# 前端展開 matched sources 直接使用搜尋結果帶的明細，不再打 API。
-# 展開 others 時才打 decisions.py 的 endpoint（不同 citation 集合）。
+# fetch_target_rankings() 單次查詢完成：
+#   scored  → 每筆 citation 計算 score（keyword + statute）
+#   deduped → 同一 (source, target) 保留 score 最高那筆
+#   ranked  → GROUP BY target：COUNT 代表有幾個符合搜尋條件 source 引用這個 target、SUM 代表所有 source 的分數加總
+#   最後 JOIN target 資訊，correlated subquery 取 total_citation_count
+#
+# Score 在兩處計算，但 citation 集合不同，不是重複計算：
+#   1. fetch_target_rankings()：所有 source_ids 的 citations → target 排行
+#   2. decisions._citation_rows()：特定 target 的 citations → 展開時排序
 # ──────────────────────────────────────────────────────────────────────
 
-def fetch_search_citation_rows(
+def fetch_target_rankings(
     conn: psycopg.Connection,
     source_ids: list[int],
     query_terms: list[str],
     statute_filters: list[tuple[str, str | None, str | None]],
 ) -> list[dict[str, Any]]:
-    """從 source_ids 取 per-citation rows，含 score + target/source info。
-
-    同一 (source, target) 可能有多筆 citation（不同 match 位置），
-    DISTINCT ON 保留 score 最高的那筆。
-    """
+    """依 source_ids 取 target 排行，單次 SQL 查詢完成聚合。"""
     if not source_ids:
         return []
 
@@ -423,15 +420,10 @@ def fetch_search_citation_rows(
         ),
         scored AS (
             SELECT
-                c.id,
                 c.source_id,
                 c.target_id,
                 c.target_authority_id,
-                c.snippet,
-                c.raw_match,
-                c.target_doc_type,
-                ({keyword_score_sql}) AS keyword_score,
-                ({statute_score_sql}) AS statute_score
+                ({keyword_score_sql}) + ({statute_score_sql}) AS score
             FROM citations c
             JOIN src s ON s.source_id = c.source_id
         ),
@@ -445,42 +437,40 @@ def fetch_search_citation_rows(
             ORDER BY source_id,
                      COALESCE(target_id, -1),
                      COALESCE(target_authority_id, -1),
-                     (keyword_score + statute_score) DESC,
-                     id DESC
+                     score DESC
+        ),
+        ranked AS (
+            SELECT
+                target_id,
+                target_authority_id,
+                COUNT(*)   AS matched_citation_count,
+                SUM(score) AS score
+            FROM deduped
+            GROUP BY target_id, target_authority_id
         )
         SELECT
-            d.id              AS citation_id,
-            d.source_id,
-            d.target_id,
-            d.target_authority_id,
-            d.keyword_score,
-            d.statute_score,
-            d.keyword_score + d.statute_score AS score,
-            d.snippet,
-            d.raw_match,
-            d.target_doc_type,
-            -- target info
-            COALESCE(td.root_norm, a.root_norm) AS target_root_norm,
-            tcu.level       AS target_level,
-            td.jyear        AS target_jyear,
-            td.jcase_norm   AS target_jcase_norm,
-            td.jno          AS target_jno,
-            a.doc_type      AS auth_type,
-            a.display       AS display_title,
-            -- source info
-            sd.unit_norm    AS source_unit_norm,
-            scu.level       AS source_court_level,
-            sd.jyear        AS source_jyear,
-            sd.jcase_norm   AS source_jcase_norm,
-            sd.jno          AS source_jno,
-            sd.doc_type     AS source_doc_type,
-            sd.decision_date AS source_decision_date
-        FROM deduped d
-        LEFT JOIN decisions td    ON td.id = d.target_id
+            r.target_id,
+            r.target_authority_id,
+            r.matched_citation_count,
+            r.score,
+            (
+                SELECT COUNT(DISTINCT source_id)
+                FROM citations c2
+                WHERE c2.target_id = r.target_id
+                   OR c2.target_authority_id = r.target_authority_id
+            )                               AS total_citation_count,
+            COALESCE(td.root_norm, a.root_norm) AS court,
+            tcu.level                       AS court_level,
+            td.jyear,
+            td.jcase_norm,
+            td.jno,
+            a.display                       AS display_title,
+            COALESCE(td.doc_type, a.doc_type) AS doc_type
+        FROM ranked r
+        LEFT JOIN decisions td    ON td.id = r.target_id
         LEFT JOIN court_units tcu ON tcu.id = td.court_unit_id
-        LEFT JOIN authorities a   ON a.id = d.target_authority_id
-        JOIN decisions sd         ON sd.id = d.source_id
-        LEFT JOIN court_units scu ON scu.id = sd.court_unit_id
+        LEFT JOIN authorities a   ON a.id = r.target_authority_id
+        ORDER BY r.score DESC, r.matched_citation_count DESC
     """
 
     with conn.cursor(row_factory=dict_row) as cur:
@@ -488,109 +478,7 @@ def fetch_search_citation_rows(
         return cur.fetchall()
 
 
-def aggregate_target_rankings(
-    citation_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """把 per-citation rows 聚合成 target 排行。"""
-    targets: dict[tuple, dict] = {}
-
-    for row in citation_rows:
-        key = (row["target_id"], row["target_authority_id"])
-        if key not in targets:
-            targets[key] = {
-                "target_id": row["target_id"],
-                "target_authority_id": row["target_authority_id"],
-                "target_root_norm": row["target_root_norm"],
-                "target_level": row["target_level"],
-                "jyear": row.get("target_jyear"),
-                "jcase_norm": row.get("target_jcase_norm"),
-                "jno": row.get("target_jno"),
-                "auth_type": row.get("auth_type"),
-                "display_title": row.get("display_title"),
-                "doc_type": row.get("target_doc_type") or row.get("auth_type"),
-                "citation_count": 0,
-                "score": 0,
-            }
-        t = targets[key]
-        t["citation_count"] += 1
-        t["score"] += row["score"]
-        if row.get("target_doc_type") and not t.get("doc_type"):
-            t["doc_type"] = row["target_doc_type"]
-
-    result = list(targets.values())
-    result.sort(key=lambda x: (-x["score"], -x["citation_count"]))
-    return result
-
-
-def fetch_total_citation_counts(
-    conn: psycopg.Connection,
-    target_ids: list[int],
-    authority_ids: list[int],
-) -> dict[tuple, int]:
-    """批次查詢 total citation count（跨所有 source，不受搜尋條件限制）。
-
-    Returns: {(target_id, None): count, (None, authority_id): count}
-    """
-    result: dict[tuple, int] = {}
-    if not target_ids and not authority_ids:
-        return result
-
-    parts = []
-    params: dict[str, Any] = {}
-
-    if target_ids:
-        parts.append("""
-            SELECT target_id, NULL::bigint AS target_authority_id,
-                   COUNT(DISTINCT source_id) AS cnt
-            FROM citations
-            WHERE target_id = ANY(%(target_ids)s)
-            GROUP BY target_id
-        """)
-        params["target_ids"] = target_ids
-
-    if authority_ids:
-        parts.append("""
-            SELECT NULL::bigint AS target_id, target_authority_id,
-                   COUNT(DISTINCT source_id) AS cnt
-            FROM citations
-            WHERE target_authority_id = ANY(%(authority_ids)s)
-            GROUP BY target_authority_id
-        """)
-        params["authority_ids"] = authority_ids
-
-    sql = " UNION ALL ".join(parts)
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, params)
-        for row in cur.fetchall():
-            key = (row["target_id"], row["target_authority_id"])
-            result[key] = int(row["cnt"])
-    return result
-
-
-def fetch_css_statutes_batch(
-    conn: psycopg.Connection,
-    citation_ids: list[int],
-) -> dict[int, list[dict]]:
-    """批次取 citation_snippet_statutes。"""
-    if not citation_ids:
-        return {}
-
-    sql = """
-        SELECT citation_id, law, article_raw AS article, sub_ref
-        FROM citation_snippet_statutes
-        WHERE citation_id = ANY(%(ids)s)
-        ORDER BY citation_id, law, article_raw, sub_ref
-    """
-    result: dict[int, list[dict]] = defaultdict(list)
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, {"ids": citation_ids})
-        for row in cur.fetchall():
-            cid = row.pop("citation_id")
-            result[cid].append(row)
-    return dict(result)
-
-
-# ── Legacy：保留舊版聚合函式供 main.py legacy endpoint 使用 ───────────
+# ── Legacy：供 main.py legacy endpoint 使用 ──────────────────────────
 
 def fetch_rankings_by_source_ids(
     conn: psycopg.Connection,
@@ -599,16 +487,5 @@ def fetch_rankings_by_source_ids(
     statute_filters: list[tuple[str, str, str | None]],
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Legacy: 回傳聚合後的 target 排行。新程式碼請用 fetch_search_citation_rows。"""
-    rows = fetch_search_citation_rows(conn, source_ids, query_terms, statute_filters)
-    rankings = aggregate_target_rankings(rows)
-
-    target_ids = [r["target_id"] for r in rankings if r["target_id"]]
-    auth_ids = [r["target_authority_id"] for r in rankings if r["target_authority_id"]]
-    total_counts = fetch_total_citation_counts(conn, target_ids, auth_ids)
-
-    for r in rankings:
-        key = (r["target_id"], r["target_authority_id"])
-        r["total_citation_count"] = total_counts.get(key, 0)
-
-    return rankings[:limit]
+    """Legacy wrapper。新程式碼請用 fetch_target_rankings。"""
+    return fetch_target_rankings(conn, source_ids, query_terms, statute_filters)[:limit]
