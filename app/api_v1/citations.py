@@ -65,18 +65,15 @@ def _citation_rows(
     query_terms: list[str],
     statute_filters: list[tuple],
     matched: bool,
-    page: int,
-    page_size: int,
-) -> tuple[list[dict], int]:
-    """查詢 target 的 citations，回傳 (當頁資料, 總筆數)。
+) -> list[dict]:
+    """查詢 target 的 citations，回傳全部結果。
 
     matched=True  → 所有搜尋條件都符合（AND）的 sources
     matched=False → 至少一個條件不符合的 sources（others）
 
     排序：score DESC → court_level ASC（相關性優先，同分才看位階）
-    分頁：SQL LIMIT/OFFSET，COUNT(*) OVER() 取總筆數，不需額外查詢。
     """
-    params: dict = {"target_val": target_val, "limit": page_size, "offset": (page - 1) * page_size}
+    params: dict = {"target_val": target_val}
 
     # 建 is_matched 條件（AND 串接）
     match_conds: list[str] = []
@@ -127,8 +124,7 @@ def _citation_rows(
                 '[]'::json
             )                               AS statutes,
             {str(matched).upper()}          AS is_matched,
-            ({keyword_score_sql}) + ({statute_score_sql}) AS score,
-            COUNT(*) OVER()                 AS total_count
+            ({keyword_score_sql}) + ({statute_score_sql}) AS score
         FROM citations c
         JOIN decisions src ON c.source_id = src.id
         LEFT JOIN court_units cu ON cu.id = src.court_unit_id
@@ -139,13 +135,10 @@ def _citation_rows(
                  src.jyear, src.jcase_norm, src.jno,
                  src.doc_type, src.decision_date
         ORDER BY score DESC, cu.level ASC NULLS LAST
-        LIMIT %(limit)s OFFSET %(offset)s
     """
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
-        rows = cur.fetchall()
-    total = int(rows[0]["total_count"]) if rows else 0
-    return rows, total
+        return cur.fetchall()
 
 
 # ── 共用回應組裝 ──────────────────────────────────────────────────────
@@ -176,11 +169,10 @@ def _parse_citation_params(keywords, statutes):
 
 def _build_citations_response(
     rows: list[dict],
-    total: int,
     target_info: CitationTargetInfo,
     matched_total: int,
 ) -> CitationsResponse:
-    """SQL 已排序分頁（score DESC → court_level ASC），直接組裝回傳。"""
+    """SQL 已排序（score DESC → court_level ASC），直接組裝回傳。"""
     sources = [
         CitationSource(
             citation_id=r["citation_id"],
@@ -200,7 +192,7 @@ def _build_citations_response(
     ]
     return CitationsResponse(
         target=target_info,
-        total=total,
+        total=len(rows),
         matched_total=matched_total,
         sources=sources,
     )
@@ -251,14 +243,12 @@ def get_decision_citations_matched(
     target_id: int,
     keywords: str | None = Query(None, description="逗號分隔"),
     statutes: str | None = Query(None, description="JSON array string"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
 ):
     query_terms, statute_list = _parse_citation_params(keywords, statutes)
     with get_conn() as conn:
         target_info = _get_decision_target(conn, target_id)
-        rows, total = _citation_rows(conn, "c.target_id", target_id, query_terms, statute_list, matched=True, page=page, page_size=page_size)
-    return _build_citations_response(rows, total, target_info, matched_total=total)
+        rows = _citation_rows(conn, "c.target_id", target_id, query_terms, statute_list, matched=True)
+    return _build_citations_response(rows, target_info, matched_total=len(rows))
 
 
 @router.get("/decisions/{target_id}/citations/others", response_model=CitationsResponse)
@@ -266,14 +256,12 @@ def get_decision_citations_others(
     target_id: int,
     keywords: str | None = Query(None, description="逗號分隔"),
     statutes: str | None = Query(None, description="JSON array string"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
 ):
     query_terms, statute_list = _parse_citation_params(keywords, statutes)
     with get_conn() as conn:
         target_info = _get_decision_target(conn, target_id)
-        rows, total = _citation_rows(conn, "c.target_id", target_id, query_terms, statute_list, matched=False, page=page, page_size=page_size)
-    return _build_citations_response(rows, total, target_info, matched_total=0)
+        rows = _citation_rows(conn, "c.target_id", target_id, query_terms, statute_list, matched=False)
+    return _build_citations_response(rows, target_info, matched_total=0)
 
 
 # ── Authority citations ───────────────────────────────────────────────
@@ -283,14 +271,12 @@ def get_authority_citations_matched(
     authority_id: int,
     keywords: str | None = Query(None, description="逗號分隔"),
     statutes: str | None = Query(None, description="JSON array string"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
 ):
     query_terms, statute_list = _parse_citation_params(keywords, statutes)
     with get_conn() as conn:
         target_info = _get_authority_target(conn, authority_id)
-        rows, total = _citation_rows(conn, "c.target_authority_id", authority_id, query_terms, statute_list, matched=True, page=page, page_size=page_size)
-    return _build_citations_response(rows, total, target_info, matched_total=total)
+        rows = _citation_rows(conn, "c.target_authority_id", authority_id, query_terms, statute_list, matched=True)
+    return _build_citations_response(rows, target_info, matched_total=len(rows))
 
 
 @router.get("/authorities/{authority_id}/citations/others", response_model=CitationsResponse)
@@ -298,14 +284,12 @@ def get_authority_citations_others(
     authority_id: int,
     keywords: str | None = Query(None, description="逗號分隔"),
     statutes: str | None = Query(None, description="JSON array string"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
 ):
     query_terms, statute_list = _parse_citation_params(keywords, statutes)
     with get_conn() as conn:
         target_info = _get_authority_target(conn, authority_id)
-        rows, total = _citation_rows(conn, "c.target_authority_id", authority_id, query_terms, statute_list, matched=False, page=page, page_size=page_size)
-    return _build_citations_response(rows, total, target_info, matched_total=0)
+        rows = _citation_rows(conn, "c.target_authority_id", authority_id, query_terms, statute_list, matched=False)
+    return _build_citations_response(rows, target_info, matched_total=0)
 
 
 # ── Decision detail ───────────────────────────────────────────────────
