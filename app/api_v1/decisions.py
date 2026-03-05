@@ -39,45 +39,9 @@ def _simplify_court(unit_norm: str) -> str:
 
 # ── Citation 查詢 ─────────────────────────────────────────────────────
 #
-# 兩種模式：
-#   1. 無搜尋條件 → _citation_rows_all：回傳全部 citations，不計分
-#   2. 有搜尋條件 → _citation_rows_others：只回傳 NOT is_matched，用共用 builder 計分
-#      matched citations 已在搜尋結果帶回，不再重複查詢
+# matched citations 已在搜尋結果帶回，此 endpoint 只回傳 NOT is_matched。
+# keywords/statutes 擇一必填，未帶搜尋條件回 400。
 # ──────────────────────────────────────────────────────────────────────
-
-
-def _citation_rows_all(conn, target_col: str, target_val: int) -> list[dict]:
-    """無搜尋條件：回傳 target 的全部 citations，不計分。"""
-    sql = f"""
-        SELECT
-            c.id                            AS citation_id,
-            c.source_id,
-            src.unit_norm                   AS source_court_raw,
-            cu.level                        AS source_court_level,
-            src.jyear, src.jcase_norm, src.jno,
-            src.doc_type, src.decision_date,
-            c.snippet, c.raw_match,
-            COALESCE(
-                json_agg(
-                    json_build_object('law', css.law, 'article', css.article_raw, 'sub_ref', css.sub_ref)
-                    ORDER BY css.law, css.article_raw, css.sub_ref
-                ) FILTER (WHERE css.id IS NOT NULL),
-                '[]'::json
-            )                               AS statutes,
-            TRUE                            AS is_matched,
-            0                               AS score
-        FROM citations c
-        JOIN decisions src ON c.source_id = src.id
-        LEFT JOIN court_units cu ON cu.id = src.court_unit_id
-        LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-        WHERE {target_col} = %(target_val)s
-        GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
-                 src.jyear, src.jcase_norm, src.jno,
-                 src.doc_type, src.decision_date
-    """
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, {"target_val": target_val})
-        return cur.fetchall()
 
 
 def _citation_rows_others(
@@ -224,7 +188,7 @@ def _build_citations_response(
     return CitationsResponse(
         target=target_info,
         total=total,
-        matched_total=total if rows and rows[0]["is_matched"] else 0,
+        matched_total=0,
         sources=sources,
     )
 
@@ -260,10 +224,9 @@ def get_decision_citations(
             doc_type=row["doc_type"],
         )
 
-        if query_terms or statute_list:
-            rows = _citation_rows_others(conn, "c.target_id", target_id, query_terms, statute_list)
-        else:
-            rows = _citation_rows_all(conn, "c.target_id", target_id)
+        if not query_terms and not statute_list:
+            raise HTTPException(status_code=400, detail="keywords 和 statutes 至少填一個")
+        rows = _citation_rows_others(conn, "c.target_id", target_id, query_terms, statute_list)
 
     return _build_citations_response(rows, target_info, page, page_size)
 
@@ -299,10 +262,9 @@ def get_authority_citations(
             doc_type=row["doc_type"],
         )
 
-        if query_terms or statute_list:
-            rows = _citation_rows_others(conn, "c.target_authority_id", authority_id, query_terms, statute_list)
-        else:
-            rows = _citation_rows_all(conn, "c.target_authority_id", authority_id)
+        if not query_terms and not statute_list:
+            raise HTTPException(status_code=400, detail="keywords 和 statutes 至少填一個")
+        rows = _citation_rows_others(conn, "c.target_authority_id", authority_id, query_terms, statute_list)
 
     return _build_citations_response(rows, target_info, page, page_size)
 
