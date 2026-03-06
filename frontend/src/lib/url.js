@@ -1,3 +1,7 @@
+// URL query params <-> SearchRequest 物件 轉換：
+// 1. searchRequestToParams(req)：讓搜尋狀態能放在 URL 上，重新整理、分享連結、上一頁/下一頁時都能還原同一組搜尋條件
+// 2. paramsToSearchRequest(params)：讓 search(searchReq) 直接吃標準化物件，不用每頁重複 parse query
+
 // 把法條陣列壓成字串
 function encodeStatutes(statutes) {
   return statutes
@@ -15,7 +19,6 @@ function decodeStatutes(raw) {
 }
 
 // 從 URL 讀 query params，還原成 API 要的 request 物件
-// 把「搜尋狀態」放在 URL，重新整理、分享連結、上一頁/下一頁時都能還原同一組搜尋條件，讓 search(searchReq) 直接吃標準化物件，不用每頁重複 parse query
 export function paramsToSearchRequest(params) {
   return {
     keywords: params.get("kw")?.split(",").filter(Boolean) || [],
@@ -30,7 +33,6 @@ export function paramsToSearchRequest(params) {
 }
 
 // 把 request 物件轉成 URL query 字串
-// 使用者改排序、分頁、篩選後，要把新狀態寫回網址，讓分享連結、上一頁/下一頁都能保留最新狀態
 export function searchRequestToParams(req) {
   const p = new URLSearchParams();
   if (req.keywords.length) p.set("kw", req.keywords.join(","));

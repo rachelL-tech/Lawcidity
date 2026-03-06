@@ -26,7 +26,7 @@ async function get(path) {
   return res.json();
 }
 
-// 打搜尋 API，req 是搜尋條件物件 searchReq
+// 打搜尋 API，req 是搜尋條件物件
 export function search(req) {
   return post("/search", req);
 }

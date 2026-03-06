@@ -1,5 +1,5 @@
 """
-展開單一 target 的 citation 列表。
+展開單一 target 的 citation 列表、查看判決全文。
 
 職責：
 - GET /decisions/{id}/citations/matched  — 符合全部搜尋條件的引用來源
