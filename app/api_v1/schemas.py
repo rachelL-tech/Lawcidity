@@ -19,7 +19,7 @@ class SearchRequest(BaseModel):
     exclude_keywords: list[str] = []
     exclude_statutes: list[StatuteFilter] = []
     case_types: list[str] = []
-    sort: Literal["matched_citation_count", "total_citation_count"] = "matched_citation_count"
+    sort: Literal["relevance", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
 
