@@ -5,12 +5,79 @@
 1. 兩字大標題：\u3000\u3000主\u3000文 → 主文
 2. 行尾殘留全形空白：「。\u3000\u3000\r\n」→「。\r\n」（讓規則 3 lookbehind 正確判斷）
 3. 段落內接行合併：\r\n + 縮排空白 → 移除（PDF 行內折行）
-   - Negative lookbehind：前一字是句末標點（。！？；：）時不合併，保留大標題前的 \r\n
+   - Negative lookbehind：前一字是句末標點（。！？：）時不合併，保留大標題前的 \r\n
 4. 大標題殘留前置全形空白：\r\n\u3000\u3000事實及理由 → \r\n事實及理由
+5. 正文區段強制合併接行：
+   - 區間：第一個「上列」之後到第一個「中　　華　　民　　國」之前
+   - 在此區間清除所有 \r\n，除非：
+     a) \r\n 左側最近非空白字元為句末標點（。！？：）
+     b) \r\n 左側該行（去除半形/全形空白後）為「主文」或「理由」
 """
 import re
 import json
 from pathlib import Path
+
+
+_DATE_LINE_RE = re.compile(r'中[ \t\u3000]*華[ \t\u3000]*民[ \t\u3000]*國')
+_KEEP_PUNCT = set("。：！？")
+_KEEP_HEADERS = {"主文", "理由"}
+
+
+def _normalize_spaces(text: str) -> str:
+    return re.sub(r'[ \t\u3000]+', '', text)
+
+
+def _merge_body_window_newlines(text: str) -> str:
+    """
+    區間：第一個「上列」之後到第一個「中 華 民 國」之前。
+    清除該區間中的 CRLF，保留條件：
+    1) 左側最近非空白字元為句末標點（。！？：）
+    2) 左側該行（去空白）為「主文」或「理由」
+    """
+    start = text.find("上列")
+    if start == -1:
+        return text
+
+    m = _DATE_LINE_RE.search(text, start)
+    if not m:
+        return text
+
+    end = m.start()
+    if end <= start:
+        return text
+
+    segment = text[start:end]
+    out = []
+    i = 0
+    n = len(segment)
+
+    while i < n:
+        if i + 1 < n and segment[i] == '\r' and segment[i + 1] == '\n':
+            line_start = segment.rfind('\r\n', 0, i)
+            line_start = 0 if line_start == -1 else line_start + 2
+            left_line = segment[line_start:i]
+            left_norm = _normalize_spaces(left_line)
+
+            k = i - 1
+            while k >= 0 and segment[k] in ' \t\u3000':
+                k -= 1
+            prev_char = segment[k] if k >= 0 else ''
+
+            keep = (
+                prev_char in _KEEP_PUNCT
+                or left_norm in _KEEP_HEADERS
+                or left_norm.endswith("主文")
+                or left_norm.endswith("理由")
+            )
+            if keep:
+                out.append('\r\n')
+            i += 2
+            continue
+
+        out.append(segment[i])
+        i += 1
+
+    return text[:start] + ''.join(out) + text[end:]
 
 
 def clean_judgment_text(full_text: str) -> str:
@@ -35,12 +102,15 @@ def clean_judgment_text(full_text: str) -> str:
     # 規則 3：段落內接行合併
     # \r\n 後面接縮排（半形空白、tab、全形空白）→ 直接移除，文字接上一行
     # Negative lookbehind：前一字是句末標點時不合併（保留大標題前的 \r\n）
-    text = re.sub(r'(?<![。！？；：])\r\n[ \t\u3000]+', '', text)
+    text = re.sub(r'(?<![。！？：])\r\n[ \t\u3000]+', '', text)
 
     # 規則 4：清除大標題殘留的前置全形空白
     # \r\n\u3000\u3000事實及理由 → \r\n事實及理由
     # （規則 1 只處理「X\u3000Y」型兩字標題；多字標題無內部全形空白，規則 1 不觸及）
     text = re.sub(r'\r\n\u3000+', '\r\n', text)
+
+    # 規則 5：正文區段強制合併接行（見函式註解）
+    text = _merge_body_window_newlines(text)
 
     return text
 
