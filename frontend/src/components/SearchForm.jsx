@@ -16,8 +16,9 @@ export default function SearchForm({ initialReq, onSearch }) {
   const kwComposingRef = useRef(false);
 
   const [statutes, setStatutes] = useState(
+    // URL 帶來的法條視為已確認（之前搜尋過，必然在白名單內）
     initialReq.statutes.length > 0
-      ? initialReq.statutes
+      ? initialReq.statutes.map((s) => ({ ...s, confirmed: true }))
       : []
   );
 
@@ -27,7 +28,7 @@ export default function SearchForm({ initialReq, onSearch }) {
 
   const [excludeStatutes, setExcludeStatutes] = useState(
     initialReq.exclude_statutes.length > 0
-      ? initialReq.exclude_statutes
+      ? initialReq.exclude_statutes.map((s) => ({ ...s, confirmed: true }))
       : []
   );
 
@@ -58,9 +59,9 @@ export default function SearchForm({ initialReq, onSearch }) {
   // 提交
   function handleSubmit(e) {
     e.preventDefault();
-    // 過濾掉沒填法律名稱的法條
-    const validStatutes = statutes.filter((s) => s.law.trim());
-    const validExcludeStatutes = excludeStatutes.filter((s) => s.law.trim());
+    // 過濾掉沒填法律名稱、或尚未從白名單確認的法條
+    const validStatutes = statutes.filter((s) => s.law.trim() && s.confirmed);
+    const validExcludeStatutes = excludeStatutes.filter((s) => s.law.trim() && s.confirmed);
     // 關鍵字和法條都是空的，不送出
     if (keywords.length === 0 && validStatutes.length === 0) return;
     onSearch({

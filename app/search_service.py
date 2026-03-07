@@ -115,7 +115,8 @@ def dedupe_statute_filters(
     seen: set[tuple[str, str | None, str | None]] = set()
     out: list[tuple[str, str | None, str | None]] = []
     for law, article, sub_ref in values:
-        key = (law, article, sub_ref)
+        norm_law = normalize_law_name(law)
+        key = (norm_law, article, sub_ref)
         if key not in seen:
             seen.add(key)
             out.append(key)
