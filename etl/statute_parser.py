@@ -13,14 +13,18 @@
 import re
 from typing import List, Tuple, Optional
 
-from law_names import LAW_NAMES, PSEUDO_LAWS, normalize_law_name
+from law_names import LAW_ALIASES, LAW_NAMES, PSEUDO_LAWS, normalize_law_name
 
 # =========================
 # Regex 建構
 # =========================
 
 # 按長度降序排列，避免短名遮蔽長名（例如「民法」遮蔽「民事訴訟法」）
-_ALL_NAMES = sorted(set(LAW_NAMES) | PSEUDO_LAWS, key=len, reverse=True)
+_ALL_NAMES = sorted(
+    set(LAW_NAMES) | set(LAW_ALIASES) | PSEUDO_LAWS,
+    key=len,
+    reverse=True,
+)
 
 # 具名法條：白名單法律（含虛指詞）+ 第 X 條（含 之N 附號）
 # group(1) = 法律名稱, group(2) = 條號, group(3) = 之N 附號（可能為 None）
@@ -71,10 +75,6 @@ def _extract_inline_law_aliases(text: str) -> dict[str, str]:
             continue
         out[alias] = canonical
     return out
-
-
-def _normalize(law: str, inline_aliases: dict[str, str] | None = None) -> str:
-    return normalize_law_name(law, aliases=inline_aliases)
 
 
 def _parse_qualifier(text: str, pos: int) -> Tuple[List[str], int]:
@@ -220,7 +220,7 @@ def extract_statutes(text: str) -> List[Tuple[str, str, str, str]]:
             break
 
         law_raw = full.group(1)
-        law = _normalize(law_raw, inline_aliases)
+        law = normalize_law_name(law_raw, aliases=inline_aliases)
         suf = f'之{full.group(3)}' if full.group(3) else ''
         article = full.group(2) + suf
 
@@ -265,6 +265,7 @@ if __name__ == '__main__':
         ('空白',        '民法第474 條第1 項'),
         ('多項+之1',    '銀行法第29條第1項、第2項、第29條之1定有明文'),
         ('括號簡稱',    '依勞動基準法（下稱勞基法）第59條、第13條及勞工請假規則第6條'),
+        ('別名命中',    '依民訴法第447條規定，應為處理。'),
     ]
 
     for label, text in cases:
