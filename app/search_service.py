@@ -187,7 +187,8 @@ def build_opensearch_query(
         if article is not None:
             nested_must.append({"term": {"statutes.article_raw": article}})
         if sub_ref is not None:
-            nested_must.append({"term": {"statutes.sub_ref": sub_ref}})
+            # prefix 比對：搜尋「第1項」可命中「第1項前段」、「第1項第1款」等
+            nested_must.append({"prefix": {"statutes.sub_ref": sub_ref}})
         filters.append({"nested": {"path": "statutes", "query": {"bool": {"must": nested_must}}}})
 
     must_not: list[dict[str, Any]] = [
@@ -199,7 +200,7 @@ def build_opensearch_query(
         if article is not None:
             excl_must.append({"term": {"statutes.article_raw": article}})
         if sub_ref is not None:
-            excl_must.append({"term": {"statutes.sub_ref": sub_ref}})
+            excl_must.append({"prefix": {"statutes.sub_ref": sub_ref}})
         must_not.append({"nested": {"path": "statutes", "query": {"bool": {"must": excl_must}}}})
 
     bool_query: dict[str, Any] = {"must": must, "filter": filters}

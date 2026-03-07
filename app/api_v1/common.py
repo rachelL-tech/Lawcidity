@@ -22,12 +22,7 @@ def get_laws(q: str = ""):
     # 從簡稱找以 q 開頭的，推薦其對應全名（去重）
     seen = set(matched)
     for alias, canonical in _ALIAS_TO_CANONICAL.items():
-        if alias.startswith(q):
-            # alias 本身若在 matched（因為也是白名單中的法律名稱），移除它，只顯示 canonical
-            if alias in seen:
-                matched.remove(alias)
-                seen.discard(alias)
-            if canonical not in seen:
+        if alias.startswith(q) and canonical not in seen:
                 matched.append(canonical)
                 seen.add(canonical)
     return {"laws": matched[:20]}
