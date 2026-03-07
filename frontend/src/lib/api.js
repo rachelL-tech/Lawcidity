@@ -56,7 +56,8 @@ export function fetchDecision(id) {
   return get(`/decisions/${id}`);
 }
 
-// GET /api/v1/laws?q=...，給法律 autocomplete 用
-export function fetchLaws(q) {
-  return get(`/laws?q=${encodeURIComponent(q)}`); // 避免中文/特殊字元壞掉 URL
+// GET /api/v1/laws?q=...，給法律 autocomplete 用；結果從字數小到大排序
+export async function fetchLaws(q) {
+  const data = await get(`/laws?q=${encodeURIComponent(q)}`);
+  return { laws: [...data.laws].reverse() };
 }

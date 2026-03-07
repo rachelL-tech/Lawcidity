@@ -1,6 +1,7 @@
 // 接兩個 props：
 // - label：chip 上顯示的文字
 // - onRemove：刪除時要執行的函式
+
 export default function FilterChip({ label, onRemove }) {
   return (
     <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full border border-brand-border bg-brand-light text-sm">
