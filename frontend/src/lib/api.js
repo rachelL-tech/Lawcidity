@@ -10,7 +10,9 @@ async function post(path, body) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     // 丟出 Error 讓頁面層 catch
-    throw new Error(err.detail || res.statusText);
+    // err.detail 可能是字串或陣列（FastAPI validation error），統一轉成字串
+    const detail = err.detail;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail) || res.statusText);
   }
   // 成功就回傳 res.json()
   return res.json();
@@ -21,7 +23,9 @@ async function get(path) {
   const res = await fetch(`${BASE}${path}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || res.statusText);
+    // err.detail 可能是字串或陣列（FastAPI validation error），統一轉成字串
+    const detail = err.detail;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail) || res.statusText);
   }
   return res.json();
 }
