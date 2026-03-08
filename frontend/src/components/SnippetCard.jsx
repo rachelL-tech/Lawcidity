@@ -1,21 +1,24 @@
+import { Link } from "react-router-dom";
 import { highlightText } from "../lib/highlight";
 
 // 單一引用來源的卡片：顯示來源判決的裁判字號、引用片段、涉及法條
 // Props:
-//   citation: {
-//     source_id, source_court, jyear, jcase_norm, jno,
-//     snippet,                    — 引用片段原文
-//     statutes: [{law, article, sub}]  — 此引用涉及的法條
-//   }
+//   citation: { source_id, source_court, case_ref, snippet, statutes, ... }
 //   keywords: string[] — 用來在 snippet 裡 highlight 關鍵字
 export default function SnippetCard({ citation, keywords }) {
   const caseRef = citation.case_ref || `來源 #${citation.source_id}`;
+  const kwParam = keywords.length ? `?kw=${keywords.join(",")}` : "";
 
   return (
     <div className="border border-brand-border rounded-lg p-3 bg-white text-sm space-y-2">
-      {/* 來源裁判字號 + 法院 */}
+      {/* 來源裁判字號（連結至判決詳情） + 法院 */}
       <div className="flex items-center gap-2 text-xs text-gray-500">
-        <span className="font-medium text-gray-700">{caseRef}</span>
+        <Link
+          to={`/decisions/${citation.source_id}${kwParam}`}
+          className="font-medium text-brand hover:underline"
+        >
+          {caseRef}
+        </Link>
         {citation.source_court && (
           <span className="text-gray-400">· {citation.source_court}</span>
         )}

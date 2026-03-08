@@ -34,6 +34,9 @@ DB_CONFIG = {
 
 
 def get_db_connection():
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        return psycopg.connect(database_url)
     conn_str = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
     return psycopg.connect(conn_str)
 

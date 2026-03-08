@@ -44,8 +44,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-    expose:
-      - "9200"
+    ports:
+      - "9200:9200"
 
 volumes:
   osdata:

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import DocTypeBadge from "./DocTypeBadge";
 import SnippetCard from "./SnippetCard";
 import { fetchMatchedCitations, fetchOtherCitations } from "../lib/api";
@@ -44,8 +43,8 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
 
   return (
     <div className="bg-white rounded-xl border border-brand-border shadow-sm overflow-hidden">
-      {/* 卡片標題列 */}
-      <div className="p-4">
+      {/* 卡片標題列 — 整塊可點擊展開/收合 */}
+      <div className="p-4 cursor-pointer select-none hover:bg-gray-50 transition-colors" onClick={handleExpand}>
         <div className="flex items-start gap-3">
           {/* 排名序號 */}
           <span className="text-2xl font-bold text-brand-border w-8 text-center flex-shrink-0">
@@ -55,12 +54,9 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
           <div className="flex-1 min-w-0">
             {/* 裁判字號 + 文書類型 + 法院 */}
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <Link
-                to={`/decisions/${item.target_id}`}
-                className="font-semibold text-brand hover:underline text-sm"
-              >
+              <span className="font-semibold text-gray-800 text-sm">
                 {item.case_ref || `判決 #${item.target_id}`}
-              </Link>
+              </span>
               <DocTypeBadge docType={item.doc_type} />
               {item.court && (
                 <span className="text-xs text-gray-400">{item.court}</span>
@@ -86,13 +82,10 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             </div>
           </div>
 
-          {/* 展開按鈕 */}
-          <button
-            onClick={handleExpand}
-            className="flex-shrink-0 text-xs text-brand border border-brand-border rounded-full px-3 py-1 hover:bg-brand-light transition-colors"
-          >
-            {expanded ? "收合 ▲" : "展開引用 ▼"}
-          </button>
+          {/* 展開/收合指示 */}
+          <span className="flex-shrink-0 text-sm text-brand-border">
+            {expanded ? "▲" : "▼"}
+          </span>
         </div>
       </div>
 
