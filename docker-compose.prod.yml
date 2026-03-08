@@ -1,0 +1,51 @@
+services:
+  fastapi:
+    build: .
+    container_name: lawcidity-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENSEARCH_URL: https://opensearch:9200
+      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-decisions_v2}
+      OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME:-admin}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
+      OPENSEARCH_VERIFY_CERTS: "false"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  nginx:
+    build: ./frontend
+    container_name: lawcidity-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - fastapi
+
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: lawcidity-opensearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD}
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk https://localhost:9200 -u admin:${OPENSEARCH_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    expose:
+      - "9200"
+
+volumes:
+  osdata:
