@@ -404,11 +404,24 @@ def search_source_ids_baseline_pg(
 #   2. decisions._citation_rows()：特定 target 的 citations → 展開時排序
 # ──────────────────────────────────────────────────────────────────────
 
+COURT_LEVEL_SQL = """
+    CASE COALESCE(td.root_norm, a.root_norm)
+        WHEN '憲法法庭' THEN 0
+        WHEN '最高法院' THEN 1  WHEN '最高行政法院' THEN 1
+        WHEN '高等法院' THEN 2  WHEN '高等行政法院' THEN 2  WHEN '智財商業法院' THEN 2
+        WHEN '地方法院' THEN 3  WHEN '少家法院' THEN 3      WHEN '高等行政法院地方庭' THEN 3
+        WHEN '地方法院簡易庭' THEN 4
+    END
+"""
+
+
 def fetch_target_rankings(
     conn: psycopg.Connection,
     source_ids: list[int],
     query_terms: list[str],
     statute_filters: list[tuple[str, str | None, str | None]],
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """依 source_ids 取 target 排行，單次 SQL 查詢完成聚合。"""
     if not source_ids:
@@ -417,6 +430,18 @@ def fetch_target_rankings(
     params: dict[str, Any] = {"source_ids": source_ids}
     keyword_score_sql = build_keyword_score_sql(query_terms, params, "c.snippet")
     statute_score_sql = build_statute_score_sql(statute_filters, params, "c.id")
+
+    # target 層篩選條件（用 joined CTE 的欄位名）
+    target_where = ""
+    target_filters = []
+    if doc_types:
+        params["doc_types"] = doc_types
+        target_filters.append("doc_type = ANY(%(doc_types)s)")
+    if court_levels:
+        params["court_levels"] = court_levels
+        target_filters.append("court_level = ANY(%(court_levels)s)")
+    if target_filters:
+        target_where = "WHERE " + " AND ".join(target_filters)
 
     sql = f"""
         WITH src AS (
@@ -451,30 +476,33 @@ def fetch_target_rankings(
                 SUM(score) AS score
             FROM deduped
             GROUP BY target_id, target_authority_id
+        ),
+        joined AS (
+            SELECT
+                r.target_id,
+                r.target_authority_id,
+                r.matched_citation_count,
+                r.score,
+                (
+                    SELECT COUNT(DISTINCT source_id)
+                    FROM citations c2
+                    WHERE c2.target_id = r.target_id
+                       OR c2.target_authority_id = r.target_authority_id
+                )                               AS total_citation_count,
+                COALESCE(td.root_norm, a.root_norm) AS court,
+                ({COURT_LEVEL_SQL})             AS court_level,
+                td.jyear,
+                td.jcase_norm,
+                td.jno,
+                a.display                       AS display_title,
+                COALESCE(td.doc_type, a.doc_type) AS doc_type
+            FROM ranked r
+            LEFT JOIN decisions td    ON td.id = r.target_id
+            LEFT JOIN authorities a   ON a.id = r.target_authority_id
         )
-        SELECT
-            r.target_id,
-            r.target_authority_id,
-            r.matched_citation_count,
-            r.score,
-            (
-                SELECT COUNT(DISTINCT source_id)
-                FROM citations c2
-                WHERE c2.target_id = r.target_id
-                   OR c2.target_authority_id = r.target_authority_id
-            )                               AS total_citation_count,
-            COALESCE(td.root_norm, a.root_norm) AS court,
-            tcu.level                       AS court_level,
-            td.jyear,
-            td.jcase_norm,
-            td.jno,
-            a.display                       AS display_title,
-            COALESCE(td.doc_type, a.doc_type) AS doc_type
-        FROM ranked r
-        LEFT JOIN decisions td    ON td.id = r.target_id
-        LEFT JOIN court_units tcu ON tcu.id = td.court_unit_id
-        LEFT JOIN authorities a   ON a.id = r.target_authority_id
-        ORDER BY r.score DESC, r.matched_citation_count DESC
+        SELECT * FROM joined
+        {target_where}
+        ORDER BY score DESC, matched_citation_count DESC
     """
 
     with conn.cursor(row_factory=dict_row) as cur:

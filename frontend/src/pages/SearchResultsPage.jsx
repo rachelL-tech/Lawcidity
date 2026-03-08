@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import SearchForm from "../components/SearchForm";
 import Pagination from "../components/Pagination";
 import ResultCard from "../components/ResultCard";
+import TargetFilterBar from "../components/TargetFilterBar";
 import { search } from "../lib/api";
 import { paramsToSearchRequest, searchRequestToParams } from "../lib/url";
 
@@ -65,7 +66,7 @@ export default function SearchResultsPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 flex gap-8">
       {/* 左側 Sidebar：搜尋條件 */}
-      <aside className="w-72 flex-shrink-0">
+      <aside className="w-72 shrink-0">
         <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-5 sticky top-6">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">搜尋條件</h2>
           <SearchForm initialReq={req} onSearch={handleSearch} />
@@ -74,6 +75,12 @@ export default function SearchResultsPage() {
 
       {/* 右側：結果列表 */}
       <main className="flex-1 min-w-0">
+        {/* Target 篩選：文書類型 + 法院層級 */}
+        <TargetFilterBar
+          req={req}
+          onChange={(newReq) => setSearchParams(searchRequestToParams(newReq))}
+        />
+
         {/* 結果摘要 + 排序 */}
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-gray-500">

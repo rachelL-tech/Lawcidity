@@ -26,6 +26,8 @@ export function paramsToSearchRequest(params) {
     exclude_keywords: params.get("xkw")?.split(",").filter(Boolean) || [],
     exclude_statutes: decodeStatutes(params.get("xst") || ""),
     case_types: params.get("ct")?.split(",").filter(Boolean) || [],
+    doc_types: params.get("dt")?.split(",").filter(Boolean) || [],
+    court_levels: params.get("cl")?.split(",").filter(Boolean).map(Number) || [],
     sort: params.get("sort") || "relevance",
     page: Number(params.get("page")) || 1,
     page_size: 20,
@@ -40,6 +42,8 @@ export function searchRequestToParams(req) {
   if (req.exclude_keywords.length) p.set("xkw", req.exclude_keywords.join(","));
   if (req.exclude_statutes.length) p.set("xst", encodeStatutes(req.exclude_statutes));
   if (req.case_types.length) p.set("ct", req.case_types.join(","));
+  if (req.doc_types?.length) p.set("dt", req.doc_types.join(","));
+  if (req.court_levels?.length) p.set("cl", req.court_levels.join(","));
   if (req.sort !== "relevance") p.set("sort", req.sort);
   if (req.page > 1) p.set("page", String(req.page));
   return p.toString();

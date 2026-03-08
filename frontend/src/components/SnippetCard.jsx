@@ -23,7 +23,7 @@ export default function SnippetCard({ citation, keywords }) {
 
       {/* 引用片段，關鍵字 highlight */}
       {citation.snippet && (
-        <p className="text-gray-700 leading-relaxed line-clamp-4">
+        <p className="text-gray-700 leading-relaxed">
           {highlightText(citation.snippet, keywords)}
         </p>
       )}

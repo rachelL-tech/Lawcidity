@@ -70,6 +70,8 @@ export default function SearchForm({ initialReq, onSearch }) {
       exclude_keywords: excludeKeywords,
       exclude_statutes: validExcludeStatutes,
       case_types: caseTypes,
+      doc_types: initialReq.doc_types || [],
+      court_levels: initialReq.court_levels || [],
       sort: initialReq.sort,
       page: 1,
       page_size: 20,

@@ -76,7 +76,11 @@ def search(req: SearchRequest):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{e}")
 
-        all_rankings = fetch_target_rankings(conn, source_ids, query_terms, statute_filters)
+        all_rankings = fetch_target_rankings(
+            conn, source_ids, query_terms, statute_filters,
+            doc_types=req.doc_types or None,
+            court_levels=req.court_levels or None,
+        )
 
     if req.sort == "total_citation_count":
         all_rankings.sort(key=lambda x: (-(x["total_citation_count"] or 0), -(x["matched_citation_count"] or 0)))
