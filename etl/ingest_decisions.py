@@ -12,33 +12,23 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 import re
 
 import psycopg
+from dotenv import load_dotenv
 from court_parser import parse_court_from_folder, to_generic_root_norm
 from citation_parser import extract_citations
 from text_cleaner import clean_judgment_text
 
-
-# =========================
-# DB 連線配置
-# =========================
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "citations",
-    "user": "postgres",
-    "password": "postgres"
-}
-
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 def get_db_connection():
-    database_url = os.environ.get("DATABASE_URL", "").strip()
-    if database_url:
-        return psycopg.connect(database_url)
-    conn_str = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-    return psycopg.connect(conn_str)
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/citations",
+    ).strip()
+    return psycopg.connect(database_url)
 
 
 def log_error(conn, folder_name: str, file_name: str, error_type: str, error_msg: str):

@@ -11,10 +11,12 @@ import json
 import os
 from collections import defaultdict
 from datetime import date
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import psycopg
+from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
 
@@ -245,21 +247,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
 
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+
     if args.env_file:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(args.env_file)
-        except ImportError:
-            # 如果沒有 dotenv，則手動簡單解析
-            if os.path.exists(args.env_file):
-                with open(args.env_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        if "=" in line:
-                            k, v = line.split("=", 1)
-                            os.environ[k.strip()] = v.strip().strip("'\"")
+        load_dotenv(args.env_file, override=True)
 
     if args.batch_size <= 0:
         raise ValueError("batch-size 必須 > 0")
