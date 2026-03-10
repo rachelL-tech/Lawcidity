@@ -59,8 +59,20 @@ class SearchResponse(BaseModel):
     page: int
     page_size: int
     source_count: int
+    source_ids: list[int]               # 供 rerank 用，避免重打 OpenSearch
     results: list[SearchResultItem]
     search_context: SearchContext
+
+
+class RerankRequest(BaseModel):
+    source_ids: list[int]
+    keywords: list[str] = []
+    statutes: list[StatuteFilter] = []
+    doc_types: list[str] = []
+    court_levels: list[int] = []
+    sort: Literal["relevance", "total_citation_count"] = "relevance"
+    page: int = 1
+    page_size: int = 20
 
 
 # ── GET /decisions/{id}/citations ──────────────────────────────────────────────

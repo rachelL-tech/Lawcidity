@@ -1,37 +1,61 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import SearchForm from "../components/SearchForm";
 import Pagination from "../components/Pagination";
 import ResultCard from "../components/ResultCard";
 import TargetFilterBar from "../components/TargetFilterBar";
-import { search } from "../lib/api";
-import { paramsToSearchRequest, searchRequestToParams } from "../lib/url";
+import { search, rerank } from "../lib/api";
+import { paramsToSearchRequest, searchRequestToParams, searchParamsKey } from "../lib/url";
 
 // 搜尋結果頁
-// URL 是 state 的唯一來源：URL 變 → 重打 API → 更新結果
+// URL 是 state 的唯一來源
+// 搜尋條件改變 → 打 OpenSearch + PG（完整搜尋）
+// doc_types / court_levels / sort / page 改變 → 只打 PG rerank
 export default function SearchResultsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
   const [results, setResults] = useState(null); // null = 未完成，[] = 空結果
   const [total, setTotal] = useState(0);
-  const [sourceCount, setSourceCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // 快取 source_ids（OpenSearch 回傳的），供 rerank 用
+  const sourceIdsRef = useRef([]);
+  // 記錄上次觸發 OpenSearch 的搜尋條件 key
+  const prevSearchKeyRef = useRef("");
+
   // 從 URL 還原目前的搜尋條件
   const req = paramsToSearchRequest(searchParams);
+  const currentSearchKey = searchParamsKey(searchParams);
 
-  // URL 改變時重打 API
+  // URL 改變時決定要打全量搜尋還是 rerank
   useEffect(() => {
+    const needFullSearch = currentSearchKey !== prevSearchKeyRef.current;
+
     async function fetchResults() {
       setLoading(true);
       setError(null);
       try {
-        const data = await search(req);
+        let data;
+        if (needFullSearch) {
+          data = await search(req);
+          sourceIdsRef.current = data.source_ids ?? [];
+          prevSearchKeyRef.current = currentSearchKey;
+        } else {
+          data = await rerank({
+            source_ids: sourceIdsRef.current,
+            keywords: req.keywords,
+            statutes: req.statutes,
+            doc_types: req.doc_types,
+            court_levels: req.court_levels,
+            sort: req.sort,
+            page: req.page,
+            page_size: req.page_size,
+          });
+        }
         setResults(data.results);
         setTotal(data.total);
-        setSourceCount(data.source_count);
       } catch (e) {
         setError(e.message);
         setResults([]);
@@ -41,7 +65,7 @@ export default function SearchResultsPage() {
     }
     fetchResults();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams.toString()]); // searchParams 物件每次 render 都是新的，用 toString() 比較字串
+  }, [searchParams.toString()]);
 
   // SearchForm 送出新搜尋條件時，更新 URL（會觸發上面的 useEffect）
   function handleSearch(newReq) {
@@ -68,7 +92,7 @@ export default function SearchResultsPage() {
       {/* 左側 Sidebar：搜尋條件 */}
       <aside className="w-72 shrink-0">
         <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-5 sticky top-6">
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">搜尋條件</h2>
+          <h2 className="text-sm font-semibold text-gray-700 mb-4">更改搜尋條件</h2>
           <SearchForm initialReq={req} onSearch={handleSearch} />
         </div>
       </aside>
@@ -90,8 +114,7 @@ export default function SearchResultsPage() {
               <span className="text-red-500">{error}</span>
             ) : results !== null ? (
               <>
-                共 <span className="font-medium text-gray-800">{total}</span> 筆目標判決，
-                來自 <span className="font-medium text-gray-800">{sourceCount}</span> 份引用來源
+                找到 <span className="font-medium text-gray-800">{total}</span> 則符合條件的被參照判決
               </>
             ) : null}
           </div>
@@ -99,7 +122,7 @@ export default function SearchResultsPage() {
           {/* 排序切換 */}
           {!loading && results?.length > 0 && (
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-400">排序：</span>
+              <span className="text-gray-400">排序依據：</span>
               {[
                 { value: "relevance", label: "相關度" },
                 { value: "total_citation_count", label: "總引用數" },

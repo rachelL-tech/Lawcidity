@@ -15,6 +15,9 @@ const DOC_TYPE_OPTIONS = [
   { value: "決議", label: "決議" },
   { value: "釋字", label: "釋字" },
   { value: "憲判字", label: "憲判字" },
+{ value: "法律座談會", label: "法律座談會" },
+  { value: "研審小組意見", label: "研審小組意見" },
+  { value: "聯席會議決議", label: "聯席會議決議" },
 ];
 
 // 多選下拉篩選元件
@@ -106,6 +109,7 @@ export default function TargetFilterBar({ req, onChange }) {
 
   return (
     <div className="flex items-center gap-2 flex-wrap mb-3">
+      <span className="text-sm text-gray-400 shrink-0">被參照判決：</span>
       <FilterDropdown
         label="文書類型"
         options={DOC_TYPE_OPTIONS}

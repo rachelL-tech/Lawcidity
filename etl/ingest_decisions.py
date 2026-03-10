@@ -397,10 +397,11 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
 
 # citation_parser 輸出的 auth_type（英文）→ authorities 表的 doc_type（中文）+ root_norm
 _AUTH_TYPE_TO_DOC_TYPE = {
-    "resolution":     "決議",
-    "grand_interp":   "釋字",
-    "conference":     "法律座談會",
-    "agency_opinion": "研審小組意見",
+    "resolution":       "決議",
+    "grand_interp":     "釋字",
+    "conference":       "法律座談會",
+    "agency_opinion":   "研審小組意見",
+    "admin_resolution": "聯席會議決議",
 }
 
 

@@ -34,6 +34,12 @@ export function paramsToSearchRequest(params) {
   };
 }
 
+// 萃取「觸發 OpenSearch」的搜尋參數字串（用來偵測搜尋條件是否真正改變）
+export function searchParamsKey(params) {
+  const keys = ["kw", "st", "xkw", "xst", "ct"];
+  return keys.map((k) => params.get(k) || "").join("|");
+}
+
 // 把 request 物件轉成 URL query 字串
 export function searchRequestToParams(req) {
   const p = new URLSearchParams();

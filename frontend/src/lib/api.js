@@ -35,6 +35,11 @@ export function search(req) {
   return post("/search", req);
 }
 
+// 只重跑 PG target ranking（不重打 OpenSearch），用於 doc_types / court_levels 篩選
+export function rerank(req) {
+  return post("/search/rerank", req);
+}
+
 // 把 citations 查詢需要的參數轉成 query string，給 fetchMatchedCitations 和 fetchOtherCitations 用
 function citationParams(keywords, statutes) {
   const p = new URLSearchParams();

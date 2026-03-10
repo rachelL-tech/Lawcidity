@@ -26,6 +26,7 @@ from app.api_v1.schemas import (
     SearchResultItem,
     SearchContext,
     StatuteFilter,
+    RerankRequest,
 )
 
 router = APIRouter()
@@ -115,11 +116,81 @@ def search(req: SearchRequest):
         page=req.page,
         page_size=req.page_size,
         source_count=len(source_ids),
+        source_ids=source_ids,
         results=results,
         search_context=SearchContext(
             keywords=query_terms,
             statutes=_to_statute_filter_objs(statute_filters),
             exclude_keywords=exclude_terms,
             exclude_statutes=_to_statute_filter_objs(exclude_statute_filters),
+        ),
+    )
+
+
+@router.post("/search/rerank", response_model=SearchResponse)
+def rerank(req: RerankRequest):
+    """只重跑 PostgreSQL target ranking，不重打 OpenSearch。"""
+    if not req.source_ids:
+        return SearchResponse(
+            total=0, page=req.page, page_size=req.page_size,
+            source_count=0, source_ids=[],
+            results=[], search_context=SearchContext(
+                keywords=req.keywords,
+                statutes=[StatuteFilter(law=s.law, article=s.article, sub_ref=s.sub_ref) for s in req.statutes],
+                exclude_keywords=[], exclude_statutes=[],
+            ),
+        )
+
+    query_terms = dedupe_query_terms(req.keywords)
+    statute_filters = dedupe_statute_filters([
+        (s.law, s.article, s.sub_ref) for s in req.statutes
+    ])
+
+    with get_conn() as conn:
+        all_rankings = fetch_target_rankings(
+            conn, req.source_ids, query_terms, statute_filters,
+            doc_types=req.doc_types or None,
+            court_levels=req.court_levels or None,
+        )
+
+    if req.sort == "total_citation_count":
+        all_rankings.sort(key=lambda x: (-(x["total_citation_count"] or 0), -(x["matched_citation_count"] or 0)))
+
+    total = len(all_rankings)
+    start = (req.page - 1) * req.page_size
+    page_rankings = all_rankings[start:start + req.page_size]
+
+    results = [
+        SearchResultItem(
+            target_id=row.get("target_id"),
+            authority_id=row.get("target_authority_id"),
+            court=row.get("court") or "",
+            court_level=row.get("court_level"),
+            jyear=row.get("jyear"),
+            jcase_norm=row.get("jcase_norm"),
+            jno=row.get("jno"),
+            case_ref=_fmt_case_ref(
+                row.get("jyear"), row.get("jcase_norm"),
+                row.get("jno"), row.get("display_title"),
+            ),
+            doc_type=row.get("doc_type"),
+            total_citation_count=int(row.get("total_citation_count") or 0),
+            matched_citation_count=int(row.get("matched_citation_count") or 0),
+            score=float(row.get("score") or 0),
+        )
+        for row in page_rankings
+    ]
+
+    return SearchResponse(
+        total=total,
+        page=req.page,
+        page_size=req.page_size,
+        source_count=len(req.source_ids),
+        source_ids=req.source_ids,
+        results=results,
+        search_context=SearchContext(
+            keywords=query_terms,
+            statutes=_to_statute_filter_objs(statute_filters),
+            exclude_keywords=[], exclude_statutes=[],
         ),
     )
