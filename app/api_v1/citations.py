@@ -108,33 +108,43 @@ def _citation_rows(
     statute_score_sql = build_statute_score_sql(statute_filters, params, "c.id")
 
     sql = f"""
-        SELECT
-            c.id                            AS citation_id,
-            c.source_id,
-            src.unit_norm                   AS source_court_raw,
-            cu.level                        AS source_court_level,
-            src.jyear, src.jcase_norm, src.jno,
-            src.doc_type, src.decision_date,
-            c.snippet, c.raw_match,
-            COALESCE(
-                json_agg(
-                    json_build_object('law', css.law, 'article', css.article_raw, 'sub_ref', css.sub_ref)
-                    ORDER BY css.law, css.article_raw, css.sub_ref
-                ) FILTER (WHERE css.id IS NOT NULL),
-                '[]'::json
-            )                               AS statutes,
-            {str(matched).upper()}          AS is_matched,
-            ({keyword_score_sql}) + ({statute_score_sql}) AS score
-        FROM citations c
-        JOIN decisions src ON c.source_id = src.id
-        LEFT JOIN court_units cu ON cu.id = src.court_unit_id
-        LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-        WHERE {target_col} = %(target_val)s
-          AND {where_filter}
-        GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
-                 src.jyear, src.jcase_norm, src.jno,
-                 src.doc_type, src.decision_date
-        ORDER BY score DESC, cu.level ASC NULLS LAST
+        WITH scored AS (
+            SELECT
+                c.id                            AS citation_id,
+                c.source_id,
+                src.unit_norm                   AS source_court_raw,
+                cu.level                        AS source_court_level,
+                src.jyear, src.jcase_norm, src.jno,
+                src.doc_type, src.decision_date,
+                c.snippet, c.raw_match,
+                COALESCE(
+                    json_agg(
+                        json_build_object('law', css.law, 'article', css.article_raw, 'sub_ref', css.sub_ref)
+                        ORDER BY css.law, css.article_raw, css.sub_ref
+                    ) FILTER (WHERE css.id IS NOT NULL),
+                    '[]'::json
+                )                               AS statutes,
+                {str(matched).upper()}          AS is_matched,
+                ({keyword_score_sql}) + ({statute_score_sql}) AS score
+            FROM citations c
+            JOIN decisions src ON c.source_id = src.id
+            LEFT JOIN court_units cu ON cu.id = src.court_unit_id
+            LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
+            WHERE {target_col} = %(target_val)s
+              AND {where_filter}
+            GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
+                     src.jyear, src.jcase_norm, src.jno,
+                     src.doc_type, src.decision_date
+        ),
+        deduped AS (
+            SELECT DISTINCT ON (source_id)
+                *
+            FROM scored
+            ORDER BY source_id, score DESC, citation_id
+        )
+        SELECT *
+        FROM deduped
+        ORDER BY score DESC, source_court_level ASC NULLS LAST, citation_id
     """
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)

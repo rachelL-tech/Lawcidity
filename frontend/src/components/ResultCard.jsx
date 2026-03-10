@@ -12,6 +12,7 @@ import { fetchMatchedCitations, fetchOtherCitations } from "../lib/api";
 export default function ResultCard({ item, keywords, statutes, rank }) {
   const [expanded, setExpanded] = useState(false);
   const [matched, setMatched] = useState(null); // null = 尚未載入
+  const [matchedTotal, setMatchedTotal] = useState(null);
   const [others, setOthers] = useState(null);
   const [loadingCitations, setLoadingCitations] = useState(false);
 
@@ -35,6 +36,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
       ]);
       // API 回傳 CitationsResponse { target, total, sources: [...] }，取 sources 陣列
       setMatched(m.sources ?? []);
+      setMatchedTotal(m.matched_total ?? (m.sources ?? []).length);
       setOthers(o.sources ?? []);
     } finally {
       setLoadingCitations(false);
@@ -100,7 +102,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
           {matched?.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-brand mb-2">
-                符合條件的引用來源（{matched.length}）
+                符合條件的引用來源（{matchedTotal ?? matched.length}）
               </h3>
               <div className="space-y-2">
                 {matched.map((c) => (
