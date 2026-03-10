@@ -103,7 +103,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
               </h3>
               <div className="space-y-3">
                 {matched.map((c) => (
-                  <SnippetCard key={c.citation_id} citation={c} keywords={keywords} />
+                  <SnippetCard key={c.citation_id} citation={c} keywords={keywords} searchStatutes={statutes} />
                 ))}
               </div>
             </section>
@@ -118,7 +118,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
               </h3>
               <div className="space-y-3">
                 {others.map((c) => (
-                  <SnippetCard key={c.citation_id} citation={c} keywords={keywords} />
+                  <SnippetCard key={c.citation_id} citation={c} keywords={keywords} searchStatutes={statutes} />
                 ))}
               </div>
             </section>

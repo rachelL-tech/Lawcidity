@@ -124,7 +124,8 @@ export default function SearchResultsPage() {
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-400">排序依據：</span>
               {[
-                { value: "relevance", label: "相關度" },
+                { value: "relevance", label: "命中率" },
+                { value: "matched_citation_count", label: "符合引用數" },
                 { value: "total_citation_count", label: "總引用數" },
               ].map(({ value, label }) => (
                 <button

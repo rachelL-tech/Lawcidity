@@ -452,6 +452,8 @@ def fetch_target_rankings(
                 c.source_id,
                 c.target_id,
                 c.target_authority_id,
+                ({keyword_score_sql})  AS kw_score,
+                ({statute_score_sql})  AS st_score,
                 ({keyword_score_sql}) + ({statute_score_sql}) AS score
             FROM citations c
             JOIN src s ON s.source_id = c.source_id
@@ -472,8 +474,10 @@ def fetch_target_rankings(
             SELECT
                 target_id,
                 target_authority_id,
-                COUNT(*)   AS matched_citation_count,
-                SUM(score) AS score
+                COUNT(*)       AS matched_citation_count,
+                SUM(score)     AS score,
+                SUM(kw_score)  AS keyword_score_sum,
+                SUM(st_score)  AS statute_score_sum
             FROM deduped
             GROUP BY target_id, target_authority_id
         ),
@@ -483,6 +487,8 @@ def fetch_target_rankings(
                 r.target_authority_id,
                 r.matched_citation_count,
                 r.score,
+                r.keyword_score_sum,
+                r.statute_score_sum,
                 (
                     SELECT COUNT(DISTINCT source_id)
                     FROM citations c2
@@ -502,7 +508,7 @@ def fetch_target_rankings(
         )
         SELECT * FROM joined
         {target_where}
-        ORDER BY score DESC, matched_citation_count DESC
+        ORDER BY score DESC, statute_score_sum DESC, keyword_score_sum DESC, court_level ASC
     """
 
     with conn.cursor(row_factory=dict_row) as cur:

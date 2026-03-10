@@ -5,7 +5,8 @@ import { highlightText } from "../lib/highlight";
 // Props:
 //   citation: { source_id, source_court, case_ref, snippet, statutes, doc_type, ... }
 //   keywords: string[] — 用來在 snippet 裡 highlight 關鍵字
-export default function SnippetCard({ citation, keywords }) {
+//   searchStatutes: StatuteFilter[] — 搜尋條件的法條，用來在 snippet 裡 highlight（淺綠色）
+export default function SnippetCard({ citation, keywords, searchStatutes }) {
   const caseRef = citation.case_ref || `來源 #${citation.source_id}`;
   const kwParam = keywords.length ? `?kw=${keywords.join(",")}` : "";
 
@@ -27,7 +28,7 @@ export default function SnippetCard({ citation, keywords }) {
       {/* 引用片段，關鍵字 highlight */}
       {citation.snippet && (
         <p className="text-gray-700 leading-relaxed">
-          {highlightText(citation.snippet, keywords)}
+          {highlightText(citation.snippet, keywords, searchStatutes)}
         </p>
       )}
 

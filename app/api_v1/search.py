@@ -83,8 +83,18 @@ def search(req: SearchRequest):
             court_levels=req.court_levels or None,
         )
 
-    if req.sort == "total_citation_count":
-        all_rankings.sort(key=lambda x: (-(x["total_citation_count"] or 0), -(x["matched_citation_count"] or 0)))
+    if req.sort == "matched_citation_count":
+        all_rankings.sort(key=lambda x: (
+            -(x["matched_citation_count"] or 0),
+            -(x["score"] or 0),
+            (x["court_level"] if x["court_level"] is not None else 99),
+        ))
+    elif req.sort == "total_citation_count":
+        all_rankings.sort(key=lambda x: (
+            -(x["total_citation_count"] or 0),
+            -(x["score"] or 0),
+            (x["court_level"] if x["court_level"] is not None else 99),
+        ))
 
     total = len(all_rankings)
     start = (req.page - 1) * req.page_size
@@ -153,8 +163,18 @@ def rerank(req: RerankRequest):
             court_levels=req.court_levels or None,
         )
 
-    if req.sort == "total_citation_count":
-        all_rankings.sort(key=lambda x: (-(x["total_citation_count"] or 0), -(x["matched_citation_count"] or 0)))
+    if req.sort == "matched_citation_count":
+        all_rankings.sort(key=lambda x: (
+            -(x["matched_citation_count"] or 0),
+            -(x["score"] or 0),
+            (x["court_level"] if x["court_level"] is not None else 99),
+        ))
+    elif req.sort == "total_citation_count":
+        all_rankings.sort(key=lambda x: (
+            -(x["total_citation_count"] or 0),
+            -(x["score"] or 0),
+            (x["court_level"] if x["court_level"] is not None else 99),
+        ))
 
     total = len(all_rankings)
     start = (req.page - 1) * req.page_size

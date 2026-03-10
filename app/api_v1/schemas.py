@@ -21,7 +21,7 @@ class SearchRequest(BaseModel):
     case_types: list[str] = []
     doc_types: list[str] = []          # 篩選 target 的文書類型（判決/裁定/…）
     court_levels: list[int] = []       # 篩選 target 的法院層級（0-4）
-    sort: Literal["relevance", "total_citation_count"] = "relevance"
+    sort: Literal["relevance", "matched_citation_count", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
 
@@ -70,7 +70,7 @@ class RerankRequest(BaseModel):
     statutes: list[StatuteFilter] = []
     doc_types: list[str] = []
     court_levels: list[int] = []
-    sort: Literal["relevance", "total_citation_count"] = "relevance"
+    sort: Literal["relevance", "matched_citation_count", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
 
