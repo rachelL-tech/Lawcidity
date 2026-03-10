@@ -236,19 +236,20 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
 # Citation 處理（Schema v4）
 # =========================
 def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
-                         doc_type: Optional[str], case_type: Optional[str]) -> Optional[int]:
+                         doc_type: Optional[str], case_type: Optional[str],
+                         root_norm: Optional[str] = None) -> Optional[int]:
     """INSERT new placeholder，ON CONFLICT DO UPDATE 確保冪等，回傳 id"""
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO decisions (unit_norm, root_norm, case_type, jyear, jcase_norm, jno, doc_type)
-                VALUES (%(court)s, %(court)s, %(case_type)s, %(jyear)s, %(jcase_norm)s, %(jno)s, %(doc_type)s)
+                VALUES (%(court)s, %(root_norm)s, %(case_type)s, %(jyear)s, %(jcase_norm)s, %(jno)s, %(doc_type)s)
                 ON CONFLICT (unit_norm, jyear, jcase_norm, jno,
                              COALESCE(case_type,''), COALESCE(doc_type,''))
                   WHERE jid IS NULL
                   DO UPDATE SET updated_at = now()
                 RETURNING id
-            """, {"court": court, "case_type": case_type,
+            """, {"court": court, "root_norm": root_norm or court, "case_type": case_type,
                   "jyear": jyear, "jcase_norm": jcase_norm,
                   "jno": jno, "doc_type": doc_type})
             row = cur.fetchone()
@@ -261,6 +262,18 @@ def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
 
 
 _RESOLVABLE_DOC_TYPES = {'判決', '裁定', '憲判字'}
+
+
+def _infer_level(unit_norm: str) -> int:
+    """從 unit_norm 推導 court level，供 to_generic_root_norm 使用"""
+    if '憲法法庭' in unit_norm:                                  return 0
+    if '最高' in unit_norm:                                       return 1
+    if '智慧財產' in unit_norm:                                   return 2
+    if '高等行政法院' in unit_norm and '地方庭' in unit_norm:     return 3
+    if '高等' in unit_norm:                                       return 2
+    if '少年' in unit_norm or '家事' in unit_norm:                return 3
+    if '簡易庭' in unit_norm:                                     return 4
+    return 3  # 地方法院
 
 
 def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
@@ -289,6 +302,11 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
     if len(jcase_norm) > 50:
         print(f"  跳過：jcase_norm 過長（{len(jcase_norm)} 字）：{jcase_norm[:60]!r}")
         return None
+
+    # 正規化法院名：台→臺，與 court_parser 一致，確保 placeholder 能被 source ingest 正確找到
+    court = court.replace('台', '臺')
+    # 推導 root_norm（通用層級分類），與 court_parser.to_generic_root_norm 一致
+    root_norm = to_generic_root_norm(court, level=_infer_level(court))
 
     try:
         ct = target_case_type or source_case_type  # source fallback
@@ -327,7 +345,7 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                 return ph[0]
 
             # 找不到 → INSERT
-            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, resolve_doc_type, ct)
+            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, resolve_doc_type, ct, root_norm)
 
         else:
             # 判例/裁判/None：只找/建 doc_type IS NULL placeholder
@@ -345,7 +363,7 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                 return ph[0]
 
             # 找不到 → INSERT doc_type=NULL placeholder
-            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, None, ct)
+            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, None, ct, root_norm)
 
     except Exception as e:
         print(f"錯誤：upsert_target_placeholder 失敗 - {e}")
