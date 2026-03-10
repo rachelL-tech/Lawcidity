@@ -260,6 +260,9 @@ def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
         return None
 
 
+_RESOLVABLE_DOC_TYPES = {'判決', '裁定', '憲判字'}
+
+
 def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
                                target_doc_type: Optional[str] = None,
                                target_case_type: Optional[str] = None,
@@ -267,17 +270,21 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
     """
     在 decisions 表 upsert target placeholder（jid IS NULL），回傳 decision_id
 
-    ct = target_case_type or source_case_type（source fallback）
-    pool = 同字號且 case_type == ct 的既有 placeholder（精確匹配）
+    本體 doc_type（resolve_doc_type）與 citation metadata 分開：
+      - resolve_doc_type = target_doc_type if target_doc_type in {判決,裁定,憲判字} else None
+      - 判例/裁判/None 都視為 unresolved，不決定本體 doc_type
 
-    doc_type 升級邏輯（在 pool 內）：
-      判決  → pool 有判例 → 回傳判例；有判決 → 回傳；有 NULL doc_type → 升級為判決
-      裁定  → pool 有裁定 → 回傳；有 NULL doc_type → 升級為裁定
-      判例  → 有判例 → 回傳；升級判決/NULL → 判例
-      None/其他 → pool 有明確 doc_type → 掛引用數最多的；只有 NULL doc_type → 掛 NULL；找不到 → INSERT
-      找不到可用的 → INSERT new placeholder（case_type=ct）
+    resolve_doc_type in {判決,裁定,憲判字}：
+      1. 查 jid IS NOT NULL + case_type + doc_type → 找到就回傳
+      2. 查 pool（jid IS NULL, 同 case_type）找同 doc_type placeholder → 回傳
+      3. 找不到 → INSERT doc_type=resolve_doc_type placeholder
 
-    ct=None（來源資料夾無後綴）時印警告；pool 找 case_type IS NULL 的既有 placeholder。
+    resolve_doc_type is None（判例/裁判/None）：
+      1. 查 pool（jid IS NULL, 同 case_type）找 doc_type IS NULL placeholder → 回傳
+      2. 找不到 → INSERT doc_type=NULL placeholder
+      不查完整 row，不碰 explicit placeholder
+
+    ct=None（來源資料夾無後綴）時印警告。
     """
     if len(jcase_norm) > 50:
         print(f"  跳過：jcase_norm 過長（{len(jcase_norm)} 字）：{jcase_norm[:60]!r}")
@@ -285,109 +292,60 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
 
     try:
         ct = target_case_type or source_case_type  # source fallback
+        resolve_doc_type = target_doc_type if target_doc_type in _RESOLVABLE_DOC_TYPES else None
 
-        # 先查是否已有完整 decisions row（jid IS NOT NULL）
-        # 須同時比對 case_type 與 doc_type，避免判決/裁定並存時回傳錯誤目標
-        # target_doc_type=None 時不限 doc_type（接受任意值）
-        if ct is not None:
-            with conn.cursor() as cur:
-                if target_doc_type is not None:
+        if ct is None:
+            print(f"  警告：無法確定 case_type（court={court}, {jyear}年{jcase_norm}字{jno}號）")
+
+        if resolve_doc_type is not None:
+            # 有明確本體類型：先查完整 row（jid IS NOT NULL）
+            if ct is not None:
+                with conn.cursor() as cur:
                     cur.execute("""
                         SELECT id FROM decisions
                         WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
                           AND jid IS NOT NULL AND case_type = %s AND doc_type = %s
                         LIMIT 1
-                    """, (court, jyear, jcase_norm, jno, ct, target_doc_type))
-                else:
-                    cur.execute("""
-                        SELECT id FROM decisions
-                        WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
-                          AND jid IS NOT NULL AND case_type = %s
-                        LIMIT 1
-                    """, (court, jyear, jcase_norm, jno, ct))
-                full_row = cur.fetchone()
-            if full_row:
+                    """, (court, jyear, jcase_norm, jno, ct, resolve_doc_type))
+                    full_row = cur.fetchone()
+                if full_row:
+                    conn.commit()
+                    return full_row[0]
+
+            # 查 placeholder pool
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id FROM decisions
+                    WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                      AND jid IS NULL AND case_type IS NOT DISTINCT FROM %s
+                      AND doc_type = %s
+                    LIMIT 1
+                """, (court, jyear, jcase_norm, jno, ct, resolve_doc_type))
+                ph = cur.fetchone()
+            if ph:
                 conn.commit()
-                return full_row[0]
+                return ph[0]
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, doc_type, case_type FROM decisions
-                WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
-                  AND jid IS NULL
-                ORDER BY id
-            """, (court, jyear, jcase_norm, jno))
-            all_ph = cur.fetchall()  # [(id, doc_type, case_type), ...]
-        if ct is None:
-            print(f"  警告：無法確定 case_type（court={court}, {jyear}年{jcase_norm}字{jno}號）")
-        pool = [r for r in all_ph if r[2] == ct]  # exact case_type match（含 ct=None 時找 case_type IS NULL 的既有 placeholder）
-
-        chosen_id = None
-
-        if target_doc_type in ('判決', '裁定'):
-            # 判例與判決不可並存；新來判決若已有判例，直接回傳判例
-            prec_ph = next((r for r in pool if r[1] == '判例'), None)
-            same_ph = next((r for r in pool if r[1] == target_doc_type), None)
-            null_ph = next((r for r in pool if r[1] is None), None)
-            if target_doc_type == '判決' and prec_ph:
-                chosen_id = prec_ph[0]
-            elif same_ph:
-                chosen_id = same_ph[0]
-            elif null_ph:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE decisions SET doc_type=%s, updated_at=now() WHERE id=%s",
-                        (target_doc_type, null_ph[0])
-                    )
-                chosen_id = null_ph[0]
-
-        elif target_doc_type == '判例':
-            prec_ph = next((r for r in pool if r[1] == '判例'), None)
-            judg_ph = next((r for r in pool if r[1] == '判決'), None)
-            null_ph = next((r for r in pool if r[1] is None), None)
-            if prec_ph:
-                chosen_id = prec_ph[0]
-            else:
-                upgrade_src = judg_ph or null_ph
-                if upgrade_src:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE decisions SET doc_type='判例', updated_at=now() WHERE id=%s",
-                            (upgrade_src[0],)
-                        )
-                    chosen_id = upgrade_src[0]
+            # 找不到 → INSERT
+            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, resolve_doc_type, ct)
 
         else:
-            # target_doc_type is None 或其他未知值
-            # 有明確 doc_type 的 placeholder → 掛引用數最多的（避免掛到不相關節點）
-            # 只有 NULL doc_type 的 placeholder → 掛 NULL（語意一致：都不知道 doc_type）
-            explicit_phs = [r for r in pool if r[1] is not None]
-            if explicit_phs:
-                explicit_ids = [r[0] for r in explicit_phs]
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT target_id, COUNT(*) AS cnt
-                        FROM citations
-                        WHERE target_id = ANY(%s)
-                        GROUP BY target_id
-                        ORDER BY cnt DESC
-                        LIMIT 1
-                    """, (explicit_ids,))
-                    row = cur.fetchone()
-                chosen_id = row[0] if row else explicit_phs[0][0]
-            else:
-                null_ph = next((r for r in pool if r[1] is None), None)
-                if null_ph:
-                    chosen_id = null_ph[0]
+            # 判例/裁判/None：只找/建 doc_type IS NULL placeholder
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id FROM decisions
+                    WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                      AND jid IS NULL AND case_type IS NOT DISTINCT FROM %s
+                      AND doc_type IS NULL
+                    LIMIT 1
+                """, (court, jyear, jcase_norm, jno, ct))
+                ph = cur.fetchone()
+            if ph:
+                conn.commit()
+                return ph[0]
 
-        if chosen_id is not None:
-            conn.commit()
-            return chosen_id
-
-        # 沒有可用的 → INSERT new placeholder（用 ct = effective_ct，含 source fallback）
-        conn.commit()
-        return _insert_placeholder(conn, court, jyear, jcase_norm, jno,
-                                   target_doc_type, ct)
+            # 找不到 → INSERT doc_type=NULL placeholder
+            return _insert_placeholder(conn, court, jyear, jcase_norm, jno, None, ct)
 
     except Exception as e:
         print(f"錯誤：upsert_target_placeholder 失敗 - {e}")

@@ -351,7 +351,7 @@ def _make_result(
         "jyear": int(jyear_str),
         "jcase_norm": jcase_norm,
         "jno": int(jno_str),
-        "doc_type": _normalize_doc_type(doc_type),  # 判決 | 裁定 | 判例 | None
+        "doc_type": '憲判字' if jcase_norm in ('憲判', '憲判字') else _normalize_doc_type(doc_type),
         "target_case_type": target_case_type,        # 民事 | 刑事 | 行政 | None
     }
 
