@@ -296,6 +296,7 @@ def _make_result(
     processed: str,
     fallback_start: int,
     fallback_end: int,
+    processed_end: Optional[int] = None,
     authority_mode: bool = False,
     doc_type: str = None,
     target_case_type: str = None,
@@ -347,6 +348,7 @@ def _make_result(
         "raw_match": raw_match,
         "match_start": match_start,
         "match_end": match_end,
+        "_processed_end": processed_end if processed_end is not None else fallback_end,
         "snippet": snippet,
         "jyear": int(jyear_str),
         "jcase_norm": jcase_norm,
@@ -467,6 +469,7 @@ def extract_citations(
                             processed=processed,
                             fallback_start=abbr.start(1),  # 年份起點，跳過分隔符
                             fallback_end=abbr.end(),
+                            processed_end=abbr.end(),
                             authority_mode=(current_court == '憲法法庭'),
                             doc_type=abbr.group(4),
                             target_case_type=_extract_target_case_type(a_raw),
@@ -537,6 +540,7 @@ def extract_citations(
                 processed=processed,
                 fallback_start=full.start(),
                 fallback_end=full.end(),
+                processed_end=full.end(),
                 authority_mode=is_const_court,
                 doc_type=full.group(5),
                 target_case_type=_extract_target_case_type(full.group(0)),
@@ -590,6 +594,7 @@ def extract_citations(
             "raw_match": raw_match,
             "match_start": match_start,
             "match_end": match_end,
+            "_processed_end": m.end(),
             "snippet": snippet,
         })
 
@@ -638,6 +643,7 @@ def extract_citations(
             "raw_match": raw_match,
             "match_start": match_start,
             "match_end": match_end,
+            "_processed_end": m.end(),
             "snippet": snippet,
         })
 
@@ -679,6 +685,7 @@ def extract_citations(
             "raw_match": raw_match,
             "match_start": match_start,
             "match_end": match_end,
+            "_processed_end": m.end(),
             "snippet": snippet,
         })
 
@@ -717,6 +724,7 @@ def extract_citations(
             "raw_match": raw_match,
             "match_start": match_start,
             "match_end": match_end,
+            "_processed_end": m.end(),
             "snippet": snippet,
         })
 
@@ -768,6 +776,7 @@ def extract_citations(
             "raw_match": raw_match,
             "match_start": match_start,
             "match_end": match_end,
+            "_processed_end": m.end(),
             "snippet": snippet,
         })
 
@@ -829,6 +838,7 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
 
     Guard 4：當事人陳述段落
       若 citation 落在最近的大節標題為原告主張/被告答辯/抗告意旨等的區段，過濾。
+      processed offset 在抽取當下寫入 result，避免 clean/processed 座標混用。
 
     match_start = None 的 citation（PDF 折行無法定位）略過 Guard 1/2/4 位置檢查。
     """
@@ -846,7 +856,6 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
     filtered = []
     for r in results:
         ms = r.get('match_start')
-        me = r.get('match_end')
         snippet  = r.get('snippet', '')
         raw_match = r.get('raw_match', '')
 
@@ -854,7 +863,8 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
         if _is_party_claim_snippet(snippet, raw_match):
             continue
 
-        if me is not None and _is_party_section_context(processed, me):
+        processed_anchor = r.get('_processed_end')
+        if processed_anchor is not None and _is_party_section_context(processed, processed_anchor):
             continue  # Guard 4：當事人陳述段落
 
         if ms is None:

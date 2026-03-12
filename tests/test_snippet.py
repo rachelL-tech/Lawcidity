@@ -315,6 +315,44 @@ def test_court_section_authority_citation_not_filtered():
     )
 
 
+# ─── Case 15-3：party guard 不應因 clean/processed offset 錯位誤濾法院判斷段 ─────
+
+def test_court_section_after_party_section_not_misfiltered_by_offset():
+    """
+    前文雖有「原告主張」大節，但 citation 實際位於「四、本院之判斷」段時，
+    不應因 clean_text / processed offset 錯位而被 party-section guard 誤濾。
+    """
+    text = (
+        "二、原告主張及聲明：\r\n"
+        "㈠主張要旨：\r\n"
+        + ("⒈原告甲○○主張程序違法，應撤銷原處分。\r\n" * 40)
+        + (
+        "四、本院之判斷：\r\n"
+        "⒈按參諸道交條例第35條第9項修法歷程可知，\r\n"
+        "又綜觀道交條例對「汽車所有人」設有處罰規定之立法體例，均明確表示處罰對象為「汽車所有人」。"
+        "因此，主管機關依道交條例第35條第9項前段規定而對汽機車所有人吊扣其車輛牌照時，"
+        "自當以汽機車所有人與駕駛人為同一人之時，始應適用道交條例第35條第9項前段規定對其為吊扣該汽機車牌照之處罰，"
+        "以符合處罰法定原則（最高行政法院113年度交上統字第2號判決意旨參照）。\r\n"
+        "五、綜上所述，原告訴請撤銷原處分及原告乙○○請求被告返還牌照，為有理由。\r\n"
+        )
+    )
+    results = extract_citations(text)
+    decision_results = [
+        r for r in results
+        if r.get("citation_type") == "decision"
+        and r.get("court") == "最高行政法院"
+        and r.get("jyear") == 113
+        and r.get("jcase_norm") == "交上統"
+        and r.get("jno") == 2
+    ]
+    assert len(decision_results) == 1, (
+        f"本院判斷段 citation 不應被 party guard 誤濾，但得到：{decision_results}"
+    )
+    assert "又綜觀道交條例對「汽車所有人」設有處罰規定之立法體例" in decision_results[0]["snippet"], (
+        f"snippet 應包含法院論斷段文字，實際為：{decision_results[0]['snippet'][:60]!r}"
+    )
+
+
 # ─── Case 16：以上正本證明與原本無異之後的 citation 應被過濾 ──────────────────────
 
 def test_zhengben_area_filtered():
