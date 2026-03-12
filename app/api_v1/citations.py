@@ -68,8 +68,8 @@ def _citation_rows(
 ) -> list[dict]:
     """查詢 target 的 citations，回傳全部結果。
 
-    matched=True  → 所有搜尋條件都符合（AND）的 sources
-    matched=False → 至少一個條件不符合的 sources（others）
+    matched=True  → 所有搜尋條件都符合（AND）的 citations
+    matched=False → 至少一個條件不符合的 citations（others）
 
     排序：score DESC → court_level ASC（相關性優先，同分才看位階）
     """
@@ -135,15 +135,9 @@ def _citation_rows(
             GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
                      src.jyear, src.jcase_norm, src.jno,
                      src.doc_type, src.decision_date
-        ),
-        deduped AS (
-            SELECT DISTINCT ON (source_id)
-                *
-            FROM scored
-            ORDER BY source_id, score DESC, citation_id
         )
         SELECT *
-        FROM deduped
+        FROM scored
         ORDER BY score DESC, source_court_level ASC NULLS LAST, citation_id
     """
     with conn.cursor(row_factory=dict_row) as cur:
