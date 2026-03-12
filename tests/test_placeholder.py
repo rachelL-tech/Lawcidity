@@ -52,7 +52,7 @@ def test_T1_判決_no_same_ph_inserts_判決():
     conn = _make_conn(None, None)  # full_row=None, ph=None
     with patch("etl.ingest_decisions._insert_placeholder", return_value=42) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type="判決", **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "判決", "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "判決", "民事", "最高法院")
     assert result == 42
 
 
@@ -74,7 +74,7 @@ def test_T3_裁定_ignores_判決_ph_inserts_裁定():
     conn = _make_conn(None, None)
     with patch("etl.ingest_decisions._insert_placeholder", return_value=55) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type="裁定", **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "裁定", "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "裁定", "民事", "最高法院")
     assert result == 55
 
 
@@ -85,7 +85,7 @@ def test_T4_判例_ignores_explicit_ph_inserts_null():
     conn = _make_conn(None)  # null ph = None
     with patch("etl.ingest_decisions._insert_placeholder", return_value=77) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type="判例", **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事", "最高法院")
     assert result == 77
 
 
@@ -95,7 +95,7 @@ def test_T5_None_ignores_explicit_ph_inserts_null():
     conn = _make_conn(None)  # null ph = None
     with patch("etl.ingest_decisions._insert_placeholder", return_value=88) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type=None, **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事", "最高法院")
     assert result == 88
 
 
@@ -116,7 +116,7 @@ def test_T7b_憲判字_resolves_correctly():
     conn = _make_conn(None, None)  # full_row=None, ph=None
     with patch("etl.ingest_decisions._insert_placeholder", return_value=11) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type="憲判字", **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "憲判字", "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, "憲判字", "民事", "最高法院")
     assert result == 11
 
 
@@ -127,5 +127,5 @@ def test_裁判_treated_as_unresolved():
     conn = _make_conn(None)
     with patch("etl.ingest_decisions._insert_placeholder", return_value=22) as mock_ins:
         result = upsert_target_placeholder(conn, target_doc_type="裁判", **_BASE)
-    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事")
+    mock_ins.assert_called_once_with(conn, "最高法院", 110, "台上", 1, None, "民事", "最高法院")
     assert result == 22

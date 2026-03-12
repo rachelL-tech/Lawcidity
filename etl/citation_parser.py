@@ -827,8 +827,13 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
       snippet 結尾為「云云。」，或 raw_match 出現在「云云」之前。
       match_start = None 的 citation 同樣套用此 guard。
 
-    match_start = None 的 citation（PDF 折行無法定位）略過 Guard 1/2 位置檢查。
+    Guard 4：當事人陳述段落
+      若 citation 落在最近的大節標題為原告主張/被告答辯/抗告意旨等的區段，過濾。
+
+    match_start = None 的 citation（PDF 折行無法定位）略過 Guard 1/2/4 位置檢查。
     """
+    processed = preprocess_text(clean_text)
+
     # Guard 1：書記欄起點
     zhengben_pos = clean_text.find('以上正本證明與原本無異')
     if zhengben_pos == -1:
@@ -841,12 +846,16 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
     filtered = []
     for r in results:
         ms = r.get('match_start')
+        me = r.get('match_end')
         snippet  = r.get('snippet', '')
         raw_match = r.get('raw_match', '')
 
         # Guard 3：云云 FP（不依賴位置，match_start=None 也套用）
         if _is_party_claim_snippet(snippet, raw_match):
             continue
+
+        if me is not None and _is_party_section_context(processed, me):
+            continue  # Guard 4：當事人陳述段落
 
         if ms is None:
             filtered.append(r)
@@ -996,9 +1005,6 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
         「號民事裁定（下稱系爭裁定）駁回上訴確定在案」→ 無收尾 → 過濾 ✓
         「號判決意旨參照）。查...（本院卷第71頁）」 → 意旨 先出現 → 不過濾 ✓
 
-    Check 2：段落結構（當事人陳述段落）
-      往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
-      而非法院論斷（本院判斷/本院查等）→ FP。
     """
     after = processed[match_end: match_end + 200]
 
@@ -1009,8 +1015,17 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
             if not _CITE_CLOSING_RE.search(before_fp):
                 return True
 
-    # Check 2：段落結構
-    window = processed[max(0, match_end - 3000): match_end]
+    return False
+
+
+def _is_party_section_context(processed: str, anchor: int) -> bool:
+    """
+    判斷 anchor 是否落在當事人陳述段落。
+
+    往前 3000 字內，若最近的大節標題是當事人陳述（原告主張/被告答辯/抗告意旨等），
+    而非法院論斷（本院判斷/本院查等）→ 視為當事人段落。
+    """
+    window = processed[max(0, anchor - 3000): anchor]
     last_party = None
     for m in _PARTY_SECTION_RE.finditer(window):
         last_party = m
@@ -1018,9 +1033,7 @@ def _is_false_positive_citation(processed: str, match_end: int) -> bool:
     for m in _COURT_SECTION_RE.finditer(window):
         last_court = m
     if last_party is not None:
-        if last_court is None or last_party.start() > last_court.start():
-            return True
-
+        return last_court is None or last_party.start() > last_court.start()
     return False
 
 

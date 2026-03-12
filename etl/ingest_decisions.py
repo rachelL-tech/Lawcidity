@@ -235,7 +235,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
 # =========================
 # Citation 處理（Schema v4）
 # =========================
-def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
+def _insert_placeholder(conn, unit_norm: str, jyear: int, jcase_norm: str, jno: int,
                          doc_type: Optional[str], case_type: Optional[str],
                          root_norm: Optional[str] = None) -> Optional[int]:
     """INSERT new placeholder，ON CONFLICT DO UPDATE 確保冪等，回傳 id"""
@@ -249,7 +249,7 @@ def _insert_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
                   WHERE jid IS NULL
                   DO UPDATE SET updated_at = now()
                 RETURNING id
-            """, {"court": court, "root_norm": root_norm or court, "case_type": case_type,
+            """, {"court": unit_norm, "root_norm": root_norm or unit_norm, "case_type": case_type,
                   "jyear": jyear, "jcase_norm": jcase_norm,
                   "jno": jno, "doc_type": doc_type})
             row = cur.fetchone()

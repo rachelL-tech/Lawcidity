@@ -280,6 +280,41 @@ def test_court_section_citation_not_filtered():
     )
 
 
+# ─── Case 15-1：原告主張段的 authority citation 應被過濾 ────────────────────────
+
+def test_party_section_authority_citation_filtered():
+    """
+    當事人陳述段落中的 authority citation（如釋字）也應被過濾。
+    """
+    text = (
+        "三、原告主張：員警要求酒測已違反警察職權行使法第8條，司法院釋字第699號解釋參照。\r\n"
+        "四、本院之判斷：經查..."
+    )
+    results = extract_citations(text)
+    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    assert len(authority_results) == 0, (
+        f"原告主張段 authority citation 不應保留，但得到：{authority_results}"
+    )
+
+
+# ─── Case 15-2：本院判斷段的 authority citation 不應被過濾 ───────────────────────
+
+def test_court_section_authority_citation_not_filtered():
+    """
+    法院論斷段落中的 authority citation（如釋字）應保留。
+    """
+    text = (
+        "三、原告主張：略以...\r\n"
+        "四、本院之判斷：員警得予以攔停，要求駕駛人接受酒測之檢定，"
+        "司法院釋字第699號解釋參照。"
+    )
+    results = extract_citations(text)
+    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    assert len(authority_results) == 1, (
+        f"本院判斷段 authority citation 應保留 1 筆，但得到 {len(authority_results)} 筆"
+    )
+
+
 # ─── Case 16：以上正本證明與原本無異之後的 citation 應被過濾 ──────────────────────
 
 def test_zhengben_area_filtered():
