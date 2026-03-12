@@ -74,7 +74,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
           {/* 右側：引用次數 + 展開箭頭 */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-sm text-gray-500">
-              被參照 <span className="font-semibold text-gray-700">{item.total_citation_count}</span> 次
+              共被 <span className="font-semibold text-gray-700">{item.total_citation_count}</span> 則判決參照
             </span>
             <span
               className={`text-brand transition-transform duration-200 ${
@@ -99,7 +99,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-brand mb-2 flex items-center gap-1">
                 <span>📎</span>
-                符合搜尋條件的引用來源（{matchedTotal ?? matched.length} 則結果）
+                符合搜尋條件的引用片段（{matchedTotal ?? matched.length} 筆）
               </h3>
               <div className="space-y-3">
                 {matched.map((c) => (
@@ -114,7 +114,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
                 <span>📎</span>
-                其他引用來源（{others.length} 則結果）
+                其他引用片段（{others.length} 筆）
               </h3>
               <div className="space-y-3">
                 {others.map((c) => (
