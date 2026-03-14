@@ -20,15 +20,15 @@ def to_generic_root_norm(unit_norm: str, level: int) -> str:
         智財商業法院 / 少家法院
         地方法院 / 地方法院簡易庭
     """
-    if level == 0:                                          return "憲法法庭"
-    if "最高行政法院" in unit_norm:                         return "最高行政法院"
+    if level == 0:                                         return "憲法法庭"
+    if "最高行政法院" in unit_norm:                          return "最高行政法院"
     if "最高法院" in unit_norm:                             return "最高法院"
     if "智慧財產" in unit_norm:                             return "智財商業法院"
-    if level == 4:                                          return "地方法院簡易庭"
+    if level == 4:                                         return "地方法院簡易庭"
     if "地方庭" in unit_norm:                               return "高等行政法院地方庭"
     if "行政法院" in unit_norm:                             return "高等行政法院"
     if "高等法院" in unit_norm:                             return "高等法院"
-    if "少年" in unit_norm or "家事" in unit_norm:          return "少家法院"
+    if "少年" in unit_norm:                                return "少家法院"
     if "地方法院" in unit_norm:                             return "地方法院"
     return unit_norm  # fallback
 
@@ -153,13 +153,11 @@ def parse_court_from_folder(folder_name: str) -> Optional[Dict[str, any]]:
                 "金門": "金門縣",
             }
             county = county_map.get(branch, "未知")
-            court_root_norm = court_name.replace(branch + "分院", "")
         else:
             county = "臺北市"
-            court_root_norm = court_name
         return {
             "unit_norm":       court_name,
-            "court_root_norm": court_root_norm,
+            "court_root_norm": court_name,
             "county":          county,
             "district":        None,
             "level":           2,

@@ -110,7 +110,7 @@ TARGET_COURTS: Set[str] = {
 
 # 地方法院引用 guard：號碼後 10 字內需有「參照」或「意旨」才算法律見解引用
 # 地方法院引用雜訊多（犯罪事實、卷宗頁碼等），用此快速濾除
-_CITE_INTENT_RE = re.compile(r'參照|意旨|供參')
+_CITE_INTENT_RE = re.compile(r'參照|意旨|供參|同旨')
 
 # 最高法院會議決議：「最高法院77年度第9次民事庭會議決議」
 # 加：本院（source = 最高法院 時自引）
@@ -793,7 +793,7 @@ _REASON_SECTION_RE = re.compile(
     r'\r\n[ \t　]{0,4}'
     r'(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+[、：,，])?'
     r'[ \t　]{0,4}'
-    r'(?:(?:犯罪)?事實(?:及|與))?理由'
+    r'(?:(?:犯罪)?事實(?:及|與))?理由(?:要領)?'
     r'[ \t　：:\r\n]'
 )
 
@@ -863,9 +863,8 @@ def _filter_by_position(results: List[Dict], clean_text: str) -> List[Dict]:
         if _is_party_claim_snippet(snippet, raw_match):
             continue
 
-        processed_anchor = r.get('_processed_end')
-        if processed_anchor is not None and _is_party_section_context(processed, processed_anchor):
-            continue  # Guard 4：當事人陳述段落
+        # Guard 4 暫時停用：目前僅靠位置猜測當事人陳述段落，會大規模誤殺合法 citation。
+        # 後續改由 section-aware filter 重建這層判斷。
 
         if ms is None:
             filtered.append(r)
@@ -988,19 +987,28 @@ _PARTY_SECTION_RE = re.compile(
     r'.{0,50}'
     r'(?:原告(?:起訴|之|的)?主張|被告(?:答辯|抗辯)?|抗告意旨|上訴意旨'
     r'|主張略以|答辯略以|抗辯略以|聲請人主張|反訴主張|反請求主張'
-    r'|被告則以|兩造不爭|不爭之事實|主張要旨|答辯要旨'
+    r'|被告則以|兩造不爭|不爭之事實|主張要旨|答辯要旨|辯護意旨'
     r'|聲請意旨略以|聲請意旨略謂|上訴意旨略以|聲請再審意旨略以|聲請刑事補償意旨略以)'
     # B. 無節次符號
     r'|(?:本件)?(?:聲請(?:再審)?|上訴|抗告)意旨略(?:以|謂)'
+    r'|原(?:裁定|判決|處分|審)略以'
 )
 
 # 法院論斷段落起頭：「五、本院之判斷：」「四、得心證理由：」等
-# 關鍵詞擴充：得心證理由／本案爭點 等
 _COURT_SECTION_RE = re.compile(
     r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+'
     r'[、：,，].{0,20}'
-    r'(?:本院(?:之|的)?判斷|本院查|本院認為|惟查|經查|得心證理由'
+    r'(?:本院(?:之|的)?判斷|本院查|本院認為|惟查|經查|得心證之理由'
     r'|茲就上訴意旨[，]?(?:再)?補充論斷如下)'
+)
+
+# 法律論述段落起頭：有節次標題，且近距離內接「按／再按／復按／次按／惟按」等
+# 這類格式常見於民事判決的法院論斷，未必會出現「本院之判斷」字樣，
+# 但實質上已進入法院法律分析，不應因前段有「原告主張」而被 party guard 誤殺。
+_LEGAL_ANALYSIS_SECTION_RE = re.compile(
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+'
+    r'[、：,，].{0,40}?'
+    r'(?:按|再按|復按|次按|又按|惟按)'
 )
 
 
@@ -1042,7 +1050,12 @@ def _is_party_section_context(processed: str, anchor: int) -> bool:
     last_court = None
     for m in _COURT_SECTION_RE.finditer(window):
         last_court = m
+    last_legal = None
+    for m in _LEGAL_ANALYSIS_SECTION_RE.finditer(window):
+        last_legal = m
     if last_party is not None:
+        if last_legal is not None and last_legal.start() > last_party.start():
+            return False
         return last_court is None or last_party.start() > last_court.start()
     return False
 
