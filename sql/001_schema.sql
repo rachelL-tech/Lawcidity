@@ -10,16 +10,17 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 
 -- =========================
--- 重置（DROP 舊表，方便重建）
+-- 全 Reset（DROP 舊表 + 重建）
+-- 執行前請確認已連到正確 DB：\c citations
 -- =========================
--- DROP TABLE IF EXISTS citation_snippet_statutes CASCADE;
--- DROP TABLE IF EXISTS decision_reason_statutes    CASCADE;
--- DROP TABLE IF EXISTS citations                   CASCADE;
--- DROP TABLE IF EXISTS authorities                 CASCADE;
--- DROP TABLE IF EXISTS decisions                   CASCADE;
--- DROP TABLE IF EXISTS court_units                 CASCADE;
--- DROP TABLE IF EXISTS ingest_error_log            CASCADE;
--- DROP TABLE IF EXISTS ingest_log                  CASCADE;
+DROP TABLE IF EXISTS citation_snippet_statutes CASCADE;
+DROP TABLE IF EXISTS decision_reason_statutes    CASCADE;
+DROP TABLE IF EXISTS citations                   CASCADE;
+DROP TABLE IF EXISTS authorities                 CASCADE;
+DROP TABLE IF EXISTS decisions                   CASCADE;
+DROP TABLE IF EXISTS court_units                 CASCADE;
+DROP TABLE IF EXISTS ingest_error_log            CASCADE;
+DROP TABLE IF EXISTS ingest_log                  CASCADE;
 
 
 -- =========================
@@ -88,6 +89,8 @@ CREATE TABLE decisions (
   -- ★ 文書內容欄位（placeholder 時全部為 NULL）
   jid           TEXT,              -- 官方唯一文書碼；placeholder 為 NULL
   doc_type      TEXT,              -- 本體類型：判決 / 裁定 / 憲判字 / 宣判筆錄
+                                   --           調解筆錄 / 和解筆錄 / 補償決定書
+                                   -- 支付命令 / 保護令 歸入「裁定」
                                    -- 判例不是本體 doc_type，placeholder 一律為 NULL
   decision_date DATE,
   title         TEXT,
@@ -185,9 +188,9 @@ CREATE UNIQUE INDEX citations_null_match_authority_uniq
   ON citations(source_id, target_authority_id, raw_match)
   WHERE match_start IS NULL;
 
-CREATE INDEX citations_target_idx    ON citations(target_id);
-CREATE INDEX citations_source_idx    ON citations(source_id);
-CREATE INDEX citations_authority_idx ON citations(target_authority_id);
+CREATE INDEX citations_target_idx       ON citations(target_id);
+CREATE INDEX citations_source_match_idx ON citations(source_id, match_start);  -- Phase 2 snippet bridging
+CREATE INDEX citations_authority_idx    ON citations(target_authority_id);
 
 
 -- =========================

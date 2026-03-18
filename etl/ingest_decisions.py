@@ -92,18 +92,27 @@ def parse_decision_date(jdate: str) -> Optional[str]:
 # 判決匯入（Schema v4）
 # =========================
 def _extract_doc_type(jfull: str) -> Optional[str]:
-    """從 JFULL 開頭推斷 doc_type（判決 / 裁定 / 憲判字 / 宣判筆錄）"""
+    """從 JFULL 開頭推斷 doc_type（判決 / 裁定 / 憲判字 / 宣判筆錄 / 調解筆錄 / 和解筆錄）"""
     if not jfull:
         return None
-    header = jfull[:200]
+    header = re.sub(r'[ \t\u3000]+', '', jfull[:200])  # 去除空白以處理全形空格排版
     if '憲判字' in header:
         return '憲判字'
-    if re.search(r"宣\s*示\s*判\s*決(?:\s*筆\s*錄)?", header):
+    if '宣示判決' in header:
         return '宣判筆錄'
+    if '調解筆錄' in header:
+        return '調解筆錄'
+    if '和解筆錄' in header:
+        return '和解筆錄'
     if '裁定' in header:
         return '裁定'
     if '判決' in header:
         return '判決'
+    # header 無「裁定」字眼但實質上是裁定的文書類型
+    if '支付命令' in header or '保護令' in header:
+        return '裁定'
+    if '補償決定書' in header:
+        return '補償決定書'
     return None
 
 
