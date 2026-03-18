@@ -661,14 +661,14 @@ def _scan_agency_opinions(
 # 嚴格 accept signal（R002 本院 / R009 地方法院）
 ACCEPT_STRICT_RE = re.compile(
     r'考諸|參照|可參|同旨|意旨|同此'
-    r'|指明|載明|闡釋|闡示|闡述'
+    r'|指明|載明|闡釋|闡示|闡述|明示|係指|揭示'
     r'|可知|參酌|供參'
 )
 
 # 寬鬆 accept signal（R005a rescue / R010 authority）
 ACCEPT_RE = re.compile(
     r'參照|意旨|可參|供參|同旨|見解|同此|揆諸|考諸'
-    r'|指明|載明|闡釋|闡示|闡述|揭示'
+    r'|指明|載明|闡釋|闡示|闡述|明示|揭示'
     r'|係指|所謂|係就|係以'
     r'|可知|參酌|釋明'
     r'|判決理由|理由書略以|要旨參|解釋在案|解釋文著有明文|解釋認'
@@ -1125,7 +1125,11 @@ def find_snippet_end(
     nl = rest.find('\r\n')
     ends = []
     if period != -1:
-        ends.append(match_end + period + 1)      # 含句號
+        end_pos = match_end + period + 1          # 含句號
+        # 句號後緊接閉引號時延伸一字元（如「有別。」）
+        if end_pos < len(clean_text) and clean_text[end_pos] in '」』"':
+            end_pos += 1
+        ends.append(end_pos)
     if nl != -1:
         ends.append(match_end + nl)               # 不含 \r\n
     if ends:

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest
-from etl.citation_parser_next import extract_citations, extract_snippet
+from etl.citation_parser_next import extract_citations_next, find_snippet_start, find_snippet_end
 
 
 def _pos(text: str, sub: str) -> tuple[int, int]:
@@ -17,6 +17,16 @@ def _pos(text: str, sub: str) -> tuple[int, int]:
     if idx == -1:
         pytest.fail(f"找不到 {sub!r} in text")
     return idx, idx + len(sub)
+
+
+def extract_citations(text, **kw):
+    return [c.to_dict() for c in extract_citations_next(text, **kw)]
+
+
+def extract_snippet(text, start, end, **kw):
+    ss = find_snippet_start(text, start)
+    se = find_snippet_end(text, start, end)
+    return text[ss:se]
 
 
 def test_r011_judgment_can_kao_retained():

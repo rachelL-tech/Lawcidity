@@ -1,38 +1,9 @@
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { fetchDecision } from "../lib/api";
+import { parseDecisionSections } from "../lib/decisionSections";
 import { highlightText } from "../lib/highlight";
 import DocTypeBadge from "../components/DocTypeBadge";
-
-function parseDecisionSections(text) {
-  const mainIdx = text.indexOf("主　　文") !== -1
-    ? text.indexOf("主　　文")
-    : text.indexOf("主文");
-  const reasonIdx = text.indexOf("理　　由") !== -1
-    ? text.indexOf("理　　由")
-    : text.indexOf("理由");
-
-  if (mainIdx === -1 && reasonIdx === -1) {
-    return { header: text, main: "", reason: "" };
-  }
-
-  const header = mainIdx !== -1 ? text.slice(0, mainIdx).trim() : text.slice(0, reasonIdx).trim();
-
-  let main = "";
-  if (mainIdx !== -1) {
-    const mainStart = text.indexOf("\n", mainIdx);
-    const mainEnd = reasonIdx !== -1 ? reasonIdx : text.length;
-    main = text.slice(mainStart !== -1 ? mainStart : mainIdx + 2, mainEnd).trim();
-  }
-
-  let reason = "";
-  if (reasonIdx !== -1) {
-    const reasonStart = text.indexOf("\n", reasonIdx);
-    reason = text.slice(reasonStart !== -1 ? reasonStart : reasonIdx + 2).trim();
-  }
-
-  return { header, main, reason };
-}
 
 export default function DecisionPage() {
   const { id } = useParams();

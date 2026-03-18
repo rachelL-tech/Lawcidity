@@ -87,7 +87,8 @@ CREATE TABLE decisions (
 
   -- ★ 文書內容欄位（placeholder 時全部為 NULL）
   jid           TEXT,              -- 官方唯一文書碼；placeholder 為 NULL
-  doc_type      TEXT,              -- 判決 / 裁定 / 判例 / 憲判字 / 宣判筆錄
+  doc_type      TEXT,              -- 本體類型：判決 / 裁定 / 憲判字 / 宣判筆錄
+                                   -- 判例不是本體 doc_type，placeholder 一律為 NULL
   decision_date DATE,
   title         TEXT,
   clean_text    TEXT,              -- clean_judgment_text() 處理後（citation/snippet 用）
@@ -101,6 +102,7 @@ CREATE TABLE decisions (
 CREATE UNIQUE INDEX decisions_jid_uniq ON decisions(jid) WHERE jid IS NOT NULL;
 
 -- placeholder 唯一：同一案號 + case_type + doc_type 只能有一筆 placeholder
+-- 同字號可合法並存多種本體（例如「判決」與「裁定」各一筆，doc_type IS NULL 也獨立一筆）
 CREATE UNIQUE INDEX decisions_placeholder_uniq
   ON decisions(unit_norm, jyear, jcase_norm, jno, COALESCE(case_type, ''), COALESCE(doc_type, ''))
   WHERE jid IS NULL;
@@ -116,12 +118,12 @@ CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 
 -- =========================
 -- 3) 裁判外權威資料（會議決議、釋字、法律座談會等）
---    doc_type 值：決議 / 釋字 / 法律座談會 / 研審小組意見
+--    doc_type 值：決議 / 釋字 / 法律座談會 / 研審小組意見 / 聯席會議決議
 --    ref_key 自然鍵範例：'民事庭|77|9'、'144'、'高等法院|111|21'
 -- =========================
 CREATE TABLE authorities (
   id         BIGSERIAL PRIMARY KEY,
-  doc_type   TEXT NOT NULL,    -- 決議 / 釋字 / 法律座談會 / 研審小組意見 / 行政法院月份聯席會議決議
+  doc_type   TEXT NOT NULL,    -- 決議 / 釋字 / 法律座談會 / 研審小組意見 / 聯席會議決議
   root_norm  TEXT NOT NULL,    -- 來源機關聚合（如：最高法院、司法院、高等法院）
   ref_key    TEXT NOT NULL,    -- 自然鍵
   display    TEXT,             -- 顯示用完整名稱
@@ -156,7 +158,8 @@ CREATE TABLE citations (
   snippet     TEXT,
 
   target_case_type TEXT,  -- 快取：目標的案件類型（民事/刑事/行政）
-  target_doc_type  TEXT,  -- 快取：目標的文書類型（判決/裁定/判例）
+  target_doc_type  TEXT,  -- citation raw metadata：判決/裁定/判例/裁判/NULL
+                          -- 不代表 target 本體 doc_type；判例/裁判 僅表示引用文字所寫
 
   created_at  TIMESTAMPTZ DEFAULT now(),
 

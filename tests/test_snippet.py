@@ -5,10 +5,19 @@ tests/test_snippet.py — extract_snippet() + extract_citations() 回歸測試
 跑法：python -m pytest tests/test_snippet.py -v
 """
 import sys
-sys.path.insert(0, 'etl')
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import pytest
-from etl.citation_parser import extract_snippet, extract_citations
+from etl.citation_parser import (
+    _CITE_INTENT_RE,
+    _REASON_SECTION_RE,
+    extract_citations,
+    extract_snippet,
+)
 
 
 # ─── 工具 ─────────────────────────────────────────────────────────────────────
@@ -243,12 +252,12 @@ def test_conference_result_trail_absorbed():
     assert "判決意旨參照）" in snip
 
 
-# ─── Case 14：原告主張段落 citation 應被過濾為 FP ─────────────────────────────────
+# ─── Case 14：暫停 party guard 後，原告主張段 citation 先保留 ───────────────────────
 
-def test_party_section_citation_filtered():
+def test_party_section_citation_temporarily_retained_without_section_filter():
     """
-    當事人陳述段落（一、原告主張：…）中的 citation 應被過濾，
-    不產生 decision citation。
+    在 section-aware filter 上線前，party section guard 已停用；
+    原告主張段中的 citation 目前先保留，避免大規模誤殺合法引用。
     """
     text = (
         "一、原告主張：按法律關係不明確，原告有即受確認判決之法律上利益，"
@@ -257,8 +266,8 @@ def test_party_section_citation_filtered():
     )
     results = extract_citations(text)
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
-    assert len(decision_results) == 0, (
-        f"原告主張段落不應產生 decision citation，但得到：{decision_results}"
+    assert len(decision_results) == 1, (
+        f"party guard 停用後，此類 decision citation 目前應保留，但得到：{decision_results}"
     )
 
 
@@ -280,11 +289,12 @@ def test_court_section_citation_not_filtered():
     )
 
 
-# ─── Case 15-1：原告主張段的 authority citation 應被過濾 ────────────────────────
+# ─── Case 15-1：暫停 party guard 後，原告主張段 authority 先保留 ─────────────────
 
-def test_party_section_authority_citation_filtered():
+def test_party_section_authority_citation_temporarily_retained_without_section_filter():
     """
-    當事人陳述段落中的 authority citation（如釋字）也應被過濾。
+    在 section-aware filter 上線前，party section guard 已停用；
+    原告主張段中的 authority citation 目前先保留，避免誤殺釋字與決議引用。
     """
     text = (
         "三、原告主張：員警要求酒測已違反警察職權行使法第8條，司法院釋字第699號解釋參照。\r\n"
@@ -292,8 +302,87 @@ def test_party_section_authority_citation_filtered():
     )
     results = extract_citations(text)
     authority_results = [r for r in results if r.get("citation_type") == "authority"]
-    assert len(authority_results) == 0, (
-        f"原告主張段 authority citation 不應保留，但得到：{authority_results}"
+    assert len(authority_results) == 1, (
+        f"party guard 停用後，此類 authority citation 目前應保留，但得到：{authority_results}"
+    )
+
+
+# ─── Case 15-1b：原裁定略以段 citation 目前暫時保留 ────────────────────────────
+
+def test_prior_ruling_summary_citation_temporarily_retained_without_section_filter():
+    """
+    在 section-aware filter 上線前，位置型 party/summary 過濾已停用；
+    「原裁定略以」中的 citation 目前先保留，避免再次大規模誤殺。
+    """
+    text = (
+        "理由\r\n"
+        "二、原裁定略以：㈠本件抗告人即受判決人陳某對於本院維持第二審法院所為之原確定判決提起再審，係主張："
+        "憲法法庭113年憲判字第8號（下稱憲判8號）判決主文及形成主文之主要理由具體諭知宣告，"
+        "原確定判決所適用之法律以死刑為其唯一之法定刑違憲，並賦予抗告人特別救濟請求權，"
+        "故得以該憲法法庭判決作為再審事由，請求予以救濟。況該憲法法庭判決主文及形成主文之主要理由"
+        "具體諭知之死刑案件罪刑相當、迴避死刑之量刑基準、加重量刑因子及其所連結之刑法第63條、"
+        "公政公約第6條、第14條、第36號一般性意見書等，應相當於憲法法庭112年憲判字第2號"
+        "（下稱憲判2號）判決所諭知之減輕或免除其刑之法律規定。\r\n"
+        "三、抗告意旨略以：原裁定違法。"
+    )
+    results = extract_citations(text, court_root_norm="最高法院")
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1, (
+        f"原裁定略以段 citation 在暫停位置型過濾後目前應保留，但得到：{decision_results}"
+    )
+
+
+def test_prior_judgment_summary_authority_citation_filtered():
+    """
+    「原判決略以」屬轉述原判決理由，不是本院自行援引。
+    該段落中的 citation 應被過濾。
+    """
+    text = (
+        "理由\r\n"
+        "二、原判決略以：原告主張依憲法法庭113年憲判字第8號判決意旨，"
+        "且憲法法庭112年憲判字第2號判決亦足作為救濟依據。\r\n"
+        "三、本院認為：上訴無理由。"
+    )
+    results = extract_citations(text, court_root_norm="最高法院")
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"原判決略以段 decision citation 不應保留，但得到：{decision_results}"
+    )
+
+
+def test_prior_disposition_summary_citation_temporarily_retained_without_section_filter():
+    """
+    在 section-aware filter 上線前，位置型 party/summary 過濾已停用；
+    「原處分略以」中的 citation 目前先保留，避免再次大規模誤殺。
+    """
+    text = (
+        "理由\r\n"
+        "二、原處分略以：相對人援引憲法法庭113年憲判字第8號判決理由，"
+        "並主張憲法法庭112年憲判字第2號判決可資參照。\r\n"
+        "三、本院認為：聲請駁回。"
+    )
+    results = extract_citations(text, court_root_norm="最高法院")
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 2, (
+        f"原處分略以段 citation 在暫停位置型過濾後目前應保留，但得到：{decision_results}"
+    )
+
+
+def test_prior_instance_summary_authority_citation_filtered():
+    """
+    「原審略以」屬轉述原審理由，不是本院自行援引。
+    該段落中的 citation 應被過濾。
+    """
+    text = (
+        "理由\r\n"
+        "二、原審略以：聲請人主張憲法法庭113年憲判字第8號判決可作為依據，"
+        "且憲法法庭112年憲判字第2號判決與本件情形相當。\r\n"
+        "三、本院認為：抗告無理由。"
+    )
+    results = extract_citations(text, court_root_norm="最高法院")
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 0, (
+        f"原審略以段 decision citation 不應保留，但得到：{decision_results}"
     )
 
 
@@ -563,3 +652,132 @@ def test_after_context_shiting_not_extracted():
     assert ct is None, (
         f"citation 後接刑事庭不應誤判 target_case_type，實際值：{ct!r}"
     )
+
+
+# ─── Case 26：標題 + 按 的法院論述，不應被 Guard 4 當成 party section ──────────────────
+
+def test_authority_citation_after_heading_and_an_should_not_be_filtered():
+    """
+    民事判決常見格式：
+    「一、被告...」「二、原告得請求損害賠償之金額：」後接「按...」，
+    雖未出現「本院之判斷」等字樣，仍屬法院法律論述，不應因前段有「原告主張」而被 Guard 4 過濾。
+    """
+    text = (
+        "理由要領\r\n"
+        "一、被告應負侵權行為損害賠償責任：原告主張被告於民國112年8月25日23時51分許，"
+        "駕駛車輛倒車時未注意其他車輛之過失，擦撞原告承保車輛，應負侵權行為損害賠償責任。\r\n"
+        "二、原告得請求損害賠償之金額：\r\n"
+        "　　按物被毀損時，被害人除得依民法第196條請求賠償外，並不排除民法第213條至第215條之適用。"
+        "依民法第196條請求賠償物被毀損所減少之價額，得以修復費用為估定之標準，但以必要者為限，例如："
+        "修理材料以新品換舊品，應予折舊(最高法院77年度第9次民事庭會議決議（一）參照)。\r\n"
+    )
+    results = extract_citations(text)
+    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    assert len(authority_results) == 1, (
+        f"標題 + 按 的法院論述中之決議引用不應被過濾，但得到：{authority_results}"
+    )
+    assert authority_results[0]["auth_type"] == "resolution"
+
+
+# ─── Case 27：理由要領 / 事實及理由要領 應被視為理由段起點 ──────────────────────
+
+def test_reason_section_accepts_yaoling_variants():
+    """
+    _REASON_SECTION_RE 應接受「理由要領」「事實及理由要領」，
+    避免 reason_pos 抓不到，造成後續位置型 guard 不穩。
+    """
+    text = (
+        "主文\r\n"
+        "被告應給付原告新臺幣1萬元。\r\n"
+        "事實及理由要領\r\n"
+        "一、按侵權行為損害賠償，民法第184條定有明文。"
+        "最高法院113年度台上字第999號判決意旨參照）。\r\n"
+    )
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1, (
+        f"事實及理由要領下的 citation 應保留，但得到：{decision_results}"
+    )
+
+
+def test_reason_section_regex_matches_yaoling_variants():
+    text1 = "主文\r\n被告應給付。\r\n理由要領\r\n一、按民法第184條。"
+    text2 = "主文\r\n被告應給付。\r\n事實及理由要領\r\n一、按民法第184條。"
+
+    m1 = _REASON_SECTION_RE.search(text1)
+    m2 = _REASON_SECTION_RE.search(text2)
+
+    assert m1 is not None, "理由要領 應被 _REASON_SECTION_RE 命中"
+    assert m2 is not None, "事實及理由要領 應被 _REASON_SECTION_RE 命中"
+
+
+def test_resolution_citation_should_survive_party_section_guard():
+    text = (
+        "事實及理由\r\n"
+        "二、原告主張：被告駕駛車輛碰撞原告車輛，應負侵權行為損害賠償責任。\r\n"
+        "四、本院之判斷：\r\n"
+        "㈢茲就原告請求之損害賠償內容及金額部分，審酌如下：\r\n"
+        "3.B車維修費用：\r\n"
+        "原告主張其支出B車維修費用56,250元（均為零件費用）等語，並提出昶盈車業估價單1份為證，"
+        "應堪認屬實。惟查，修復費用之賠償以必要者為限，則修理材料以新品換舊品，自應予以折舊"
+        "（最高法院77年度第9次民事庭會議決議㈠意旨參照）。"
+    )
+
+    results = extract_citations(text)
+    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+
+    assert any(r.get("auth_key") == "民事庭|77|9" for r in authority_results), (
+        f"民事庭第77年度第9次決議不應被 party section guard 過濾，但得到：{authority_results}"
+    )
+
+
+def test_grand_interp_citation_should_survive_party_section_guard():
+    text = (
+        "犯罪事實及理由\r\n"
+        "二、論罪科刑(二)被告前因違反毒品危害防制條例案件，經法院判處有期徒刑確定，"
+        "於執行完畢後，5年以內故意再犯本件有期徒刑以上之罪，為刑法第47條第1項所定之累犯。"
+        "茲依司法院釋字第775號解釋意旨，審酌被告因上述前案執行完畢後，仍未能謹慎守法，"
+        "於5年內再犯本案，顯見其刑罰反應力薄弱，自我控制力及守法意識不佳，依其本案犯罪情節，"
+        "亦無處以法定最輕本刑仍顯過苛之情形，爰依刑法第47條第1項規定加重其刑。"
+    )
+
+    results = extract_citations(text)
+    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+
+    assert any(r.get("auth_type") == "grand_interp" and r.get("auth_key") == "釋字|775" for r in authority_results), (
+        f"釋字第775號不應被 party section guard 過濾，但得到：{authority_results}"
+    )
+
+
+def test_constitutional_decision_citation_should_survive_party_section_guard():
+    text = (
+        "理　　由\r\n"
+        "壹、證據能力之認定：本判決所引用之供述及非供述證據，均有證據能力。\r\n"
+        "貳、有罪部分：\r\n"
+        "一、認定犯罪事實所憑之證據及理由：上揭犯罪事實，業據被告於本院審理中坦承不諱。\r\n"
+        "二、所犯法條及刑之酌科：\r\n"
+        "㈣國家本即擁有不同方式及強度之公權力手段以達成公務目的，"
+        "於人民當場辱罵公務員之情形，代表國家執行公務之公務員原即得透過其他之合法手段，"
+        "以即時排除、制止此等言論對公務執行之干擾。例如執行職務之公務員本人或其在場之主管、同僚等，"
+        "均得先警告或制止表意人，要求表意人停止其辱罵行為。"
+        "人民以具有表意成分之肢體動作對公務員予以侮辱，不論是否觸及公務員身體，"
+        "就其是否構成侮辱公務員罪，仍應由法院依本判決意旨於個案認定之"
+        "（憲法法庭113年度憲判字第5號判決意旨參照）。"
+    )
+
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+
+    assert any(
+        r.get("court") == "憲法法庭"
+        and r.get("jyear") == 113
+        and r.get("jcase_norm") == "憲判"
+        and r.get("jno") == 5
+        for r in decision_results
+    ), f"憲法法庭113年度憲判字第5號判決不應被 party section guard 過濾，但得到：{decision_results}"
+
+
+def test_cite_intent_regex_matches_tongzhi_variant():
+    """「同旨」應被視為引用意圖，避免本院裁定同旨被漏掉。"""
+    assert _CITE_INTENT_RE.search("同旨），聲請意旨")
+    assert _CITE_INTENT_RE.search("裁定同旨")

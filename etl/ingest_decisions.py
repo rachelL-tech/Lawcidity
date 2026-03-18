@@ -18,7 +18,7 @@ import re
 import psycopg
 from dotenv import load_dotenv
 from court_parser import parse_court_from_folder, to_generic_root_norm
-from citation_parser import extract_citations
+from citation_parser_next import extract_citations_next
 from text_cleaner import clean_judgment_text
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
@@ -439,8 +439,8 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     Returns:
         (成功寫入/更新的 citation 數量, 錯誤訊息清單)
     """
-    raw_citations = extract_citations(clean_text, court_root_norm=court_root_norm,
-                                      self_key=source_self_key)
+    raw_citations = [c.to_dict() for c in extract_citations_next(
+        clean_text, court_root_norm=court_root_norm, self_key=source_self_key)]
     inserted = 0
     errors = []
 

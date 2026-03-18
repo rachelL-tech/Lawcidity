@@ -22,6 +22,7 @@ data/downloads/
 # Claude
 /.agents/
 /.claude/
+/.worktrees/
 /docs/
 AGENTS.md
 
@@ -33,4 +34,3 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
