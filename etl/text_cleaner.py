@@ -1,83 +1,232 @@
 """
-將判決原始全文（JFULL）清理成適合前端顯示的 clean_text
+將判決原始全文（JFULL）清理成適合前端顯示的 clean_text。
 
-清理規則（套用順序重要）：
-1. 兩字大標題：\u3000\u3000主\u3000文 → 主文
-2. 行尾殘留全形空白：「。\u3000\u3000\r\n」→「。\r\n」（讓規則 3 lookbehind 正確判斷）
-3. 段落內接行合併：\r\n + 縮排空白 → 移除（PDF 行內折行）
-   - Negative lookbehind：前一字是句末標點（。！？：）時不合併，保留大標題前的 \r\n
-4. 大標題殘留前置全形空白：\r\n\u3000\u3000事實及理由 → \r\n事實及理由
-5. 正文區段強制合併接行：
-   - 區間：第一個「上列」之後到第一個「中　　華　　民　　國」之前
-   - 在此區間清除所有 \r\n，除非：
-     a) \r\n 左側最近非空白字元為句末標點（。！？：）
-     b) \r\n 左側該行（去除半形/全形空白後）為「主文」或「理由」
+目標：
+1. 正規化法院 title 與主文 / 理由類 heading 的字間空白
+2. 只在正文區合併 PDF 折行
+3. 保留當事人名單區與簽署區的版面空白和換行
 """
 import re
 import json
 from pathlib import Path
 
 
+# 偵測同行內嵌大標題（某些 PDF 以 \u3000 代替 \r\n），如「起訴。　　理　由一、」
+_INLINE_HEADING_RE = re.compile(
+    r'([。！？])\u3000{2,}'
+    r'(主\u3000*文'
+    r'|理\u3000*由(?:\u3000*要\u3000*領)?'
+    r'|事\u3000*實\u3000*(?:及|與)\u3000*理\u3000*由(?:\u3000*要\u3000*領)?'
+    r'|事\u3000*實\u3000*理\u3000*由\u3000*及\u3000*證\u3000*據)'
+    r'\u3000*'
+)
+
 _DATE_LINE_RE = re.compile(r'中[ \t\u3000]*華[ \t\u3000]*民[ \t\u3000]*國')
-_KEEP_PUNCT = set("。：！？")
-_KEEP_HEADERS = {"主文", "理由"}
+_DATE_LINE_ONLY_RE = re.compile(
+    r'^[ \t\u3000]*'
+    r'中[ \t\u3000]*華[ \t\u3000]*民[ \t\u3000]*國'
+    r'[ \t\u3000]*\d{2,3}[ \t\u3000]*年'
+    r'[ \t\u3000]*\d{1,2}[ \t\u3000]*月'
+    r'[ \t\u3000]*\d{1,2}[ \t\u3000]*日'
+    r'[ \t\u3000]*$'
+)
+_SECTION_INDEX_START_RE = re.compile(
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁'
+    r'㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩'
+    r'①②③④⑤⑥⑦⑧⑨⑩'
+    r'⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽'
+    r'⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑'
+    r'0-9０-９（(]'
+)
+_BODY_BLOCK_START_RE = re.compile(
+    r'^[ \t\u3000]*(?:'
+    r'[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+[、：:](?![一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁][、：:])'
+    r'|[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩]'
+    r'|[①②③④⑤⑥⑦⑧⑨⑩]'
+    r'|[⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽]'
+    r'|[⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑]'
+    r'|[（(][一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+[）)]'
+    r'|[0-9０-９]{1,3}[.、](?![0-9０-９])'   # 排除小數（如 4.9%）
+    r')'
+)
+# 附表/附件/附錄 的 inline 引用排除（如「附表一編號」「附件一之」），不視為段落起首
+_ATTACHMENT_INLINE_RE = re.compile(
+    r'附[錄表件][一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]*'
+    r'(?:所示|編號|之|所列|明細)'
+)
+_KEEP_HEADERS = {"主文", "理由", "理由要領", "事實及理由", "事實與理由", "事實及理由要領", "事實理由及證據"}
+_KEEP_SECTION_LINE_RE = re.compile(
+    r'(?:'
+    r'主文'
+    r'|理由(?:要領)?'
+    r'|事實(?:及|與)理由(?:要領)?'
+    r'|(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]+[、：:]?)'
+    r'(?:原告(?:起訴|之|的)?主張|被告(?:答辯|抗辯)|被告則以'
+    r'|本院(?:之|的)?判斷|本院判斷|得心證之理由|茲分敘理由如下'
+    r'|程序方面|程序事項|程序部分|實體方面|實體事項|實體部分'
+    r'|論罪科刑|沒收(?:部分)?|證據能力|原判決認定|原裁定略以|兩造不爭執事項)'
+    r'[:：]?'
+    r')$'
+)
+_COURT_TITLE_RE = re.compile(r'^.+法院.*(?:判決|裁定)$')
+_REASON_HEADING_RE = re.compile(
+    r'^(?:理由(?:要領)?|事實(?:及|與)?理由(?:要領)?|事實理由及證據)$'
+)
 
 
 def _normalize_spaces(text: str) -> str:
     return re.sub(r'[ \t\u3000]+', '', text)
 
 
-def _merge_body_window_newlines(text: str) -> str:
-    """
-    區間：第一個「上列」之後到第一個「中 華 民 國」之前。
-    清除該區間中的 CRLF，保留條件：
-    1) 左側最近非空白字元為句末標點（。！？：）
-    2) 左側該行（去空白）為「主文」或「理由」
-    """
-    start = text.find("上列")
-    if start == -1:
-        return text
+def _canonical_heading(line: str) -> str | None:
+    leading = re.match(r'^[ \t\u3000]*', line).group(0)
+    norm = _normalize_spaces(line.strip())
+    if norm == "主文":
+        return leading + "主文"
+    if _REASON_HEADING_RE.fullmatch(norm):
+        return leading + norm
+    return None
 
-    m = _DATE_LINE_RE.search(text, start)
-    if not m:
-        return text
 
-    end = m.start()
-    if end <= start:
-        return text
+def _canonical_title(line: str) -> str | None:
+    norm = _normalize_spaces(line.strip())
+    if _COURT_TITLE_RE.fullmatch(norm):
+        return norm
+    return None
 
-    segment = text[start:end]
-    out = []
-    i = 0
-    n = len(segment)
 
-    while i < n:
-        if i + 1 < n and segment[i] == '\r' and segment[i + 1] == '\n':
-            line_start = segment.rfind('\r\n', 0, i)
-            line_start = 0 if line_start == -1 else line_start + 2
-            left_line = segment[line_start:i]
-            left_norm = _normalize_spaces(left_line)
+def _normalize_body_line(line: str) -> str:
+    heading = _canonical_heading(line)
+    if heading is not None:
+        return heading
 
-            k = i - 1
-            while k >= 0 and segment[k] in ' \t\u3000':
-                k -= 1
-            prev_char = segment[k] if k >= 0 else ''
+    if line.startswith('\u3000'):
+        stripped_full = line.lstrip('\u3000')
+        if stripped_full and _SECTION_INDEX_START_RE.match(stripped_full):
+            return stripped_full
+    return line
 
-            keep = (
-                prev_char in _KEEP_PUNCT
-                or left_norm in _KEEP_HEADERS
-                or left_norm.endswith("主文")
-                or left_norm.endswith("理由")
-            )
-            if keep:
-                out.append('\r\n')
-            i += 2
+
+def _is_body_keep_line(line: str) -> bool:
+    norm = _normalize_spaces(line.strip())
+    return norm in _KEEP_HEADERS or bool(_KEEP_SECTION_LINE_RE.fullmatch(norm))
+
+
+def _starts_new_body_block(line: str) -> bool:
+    stripped = line.lstrip(' \t\u3000')
+    if not stripped:
+        return True
+    norm = _normalize_spaces(stripped)
+    return (
+        norm in _KEEP_HEADERS
+        or (stripped.startswith("附錄") and not _ATTACHMENT_INLINE_RE.match(stripped))
+        or (stripped.startswith("附表") and not _ATTACHMENT_INLINE_RE.match(stripped))
+        or (stripped.startswith("附件") and not _ATTACHMENT_INLINE_RE.match(stripped))
+        or norm.startswith("中華民國")
+        or norm.startswith("如不服")
+        or "正本證明" in norm
+        or bool(_KEEP_SECTION_LINE_RE.fullmatch(norm))
+        or _BODY_BLOCK_START_RE.match(stripped) is not None
+    )
+
+
+def _split_lines_preserve_trailing(text: str) -> tuple[list[str], bool]:
+    trailing_newline = text.endswith('\r\n')
+    if trailing_newline:
+        text = text[:-2]
+    return text.split('\r\n'), trailing_newline
+
+
+def _join_lines(lines: list[str], trailing_newline: bool) -> str:
+    text = '\r\n'.join(lines)
+    if trailing_newline:
+        text += '\r\n'
+    return text
+
+
+def _normalize_header_lines(lines: list[str], body_start_idx: int | None) -> list[str]:
+    limit = len(lines) if body_start_idx is None else body_start_idx
+    out = list(lines)
+    for idx in range(limit):
+        title = _canonical_title(out[idx])
+        if title is not None:
+            out[idx] = title
+    return out
+
+
+def _find_footer_start(lines: list[str], body_start_idx: int) -> int:
+    for idx in range(body_start_idx, len(lines)):
+        line = lines[idx]
+        if _DATE_LINE_ONLY_RE.fullmatch(line) or "正本證明與原本無異" in line:
+            return idx
+    return len(lines)
+
+
+def _find_footer_end(lines: list[str], footer_start_idx: int) -> int:
+    """從 footer 起始往後找最後一個含「書記官」的行，傳回該行的下一個 index。
+    若找不到，傳回 footer_start_idx（保留整個 footer，不截斷）。"""
+    last_secretary = -1
+    for idx in range(footer_start_idx, len(lines)):
+        if "書記官" in lines[idx]:
+            last_secretary = idx
+        # 遇到 附錄/附表/附件 之後的第二個日期行就停止搜尋（避免掃到法條全文內的「書記官」）
+        if idx > footer_start_idx and _DATE_LINE_ONLY_RE.fullmatch(lines[idx]):
+            break
+    if last_secretary >= 0:
+        return last_secretary + 1
+    return footer_start_idx
+
+
+_ZHUJIAN_SENT_END_RE = re.compile(r'。\s*$')
+
+_BODY_SPACE_RE = re.compile(
+    r'(?<=[\u4e00-\u9fff\d\u3000-\u303f\u2460-\u24ff\u3200-\u32ff])'
+    r'\s+'
+    r'(?=[\u4e00-\u9fff\d\u3000-\u303f\u2460-\u24ff\u3200-\u32ff])'
+)
+
+
+def _compress_body_spaces(lines: list[str], body_start_idx: int, footer_start_idx: int) -> list[str]:
+    """正文區（body_start_idx ~ footer_start_idx）逐行壓縮 CJK/數字間的殘留空白。"""
+    out = list(lines)
+    for idx in range(body_start_idx, min(footer_start_idx, len(out))):
+        out[idx] = _BODY_SPACE_RE.sub('', out[idx])
+    return out
+
+
+def _merge_body_lines(lines: list[str], body_start_idx: int, footer_start_idx: int) -> list[str]:
+    out = list(lines)
+    if body_start_idx >= footer_start_idx:
+        return out
+
+    body_lines = [_normalize_body_line(line) for line in lines[body_start_idx:footer_start_idx]]
+    merged: list[str] = []
+    in_zhujian = False
+    for line in body_lines:
+        if not merged:
+            merged.append(line)
             continue
+        prev = merged[-1]
+        norm_prev = _normalize_spaces(prev.strip())
+        # 進入主文區後一律保留換行；遇到下一個大標題才離開
+        if norm_prev == '主文':
+            in_zhujian = True
+        elif in_zhujian and _is_body_keep_line(prev):
+            in_zhujian = False
+        keep_break = (
+            not prev.strip()
+            or not line.strip()
+            or _is_body_keep_line(prev)
+            or _starts_new_body_block(line)
+            or (in_zhujian and bool(_ZHUJIAN_SENT_END_RE.search(prev)))
+        )
+        if keep_break:
+            merged.append(line)
+        else:
+            merged[-1] = prev.rstrip(' \t\u3000') + line.lstrip(' \t\u3000')
 
-        out.append(segment[i])
-        i += 1
-
-    return text[:start] + ''.join(out) + text[end:]
+    out[body_start_idx:footer_start_idx] = merged
+    return out
 
 
 def clean_judgment_text(full_text: str) -> str:
@@ -88,31 +237,41 @@ def clean_judgment_text(full_text: str) -> str:
     Returns:
         clean_text：段落內換行合併、大標題清理後的文字
     """
-    text = full_text
+    text = re.sub(r'\u3000+(\r\n)', r'\1', full_text)
+    # 把「。　　理　由」等內嵌大標題前後補換行（某些 PDF 用 \u3000 代替 \r\n）
+    text = _INLINE_HEADING_RE.sub(r'\1\r\n\2\r\n', text)
+    lines, trailing_newline = _split_lines_preserve_trailing(text)
 
-    # 規則 1：兩字大標題全形空白清理
-    # \u3000\u3000主\u3000文 → 主文 / \u3000\u3000理\u3000由 → 理由
-    text = re.sub(r'\u3000{2}(\S)\u3000(\S)', r'\1\2', text)
+    body_start_idx = next(
+        (idx for idx, line in enumerate(lines)
+         if line.lstrip(' \t\u3000').startswith('上列')   # 只比對行首的「上列」
+         or "上開當事人間" in line
+         or line.lstrip().startswith("列當事人間")
+         or "當事人間" in line                             # 補字 / 無「上列」格式
+         or "裁定如下" in line or "判決如下" in line),
+        None,
+    )
+    # 最後備援：若以上觸發條件都沒有（如 補/裁定 案件），
+    # 從第 3 行起找第一個段落號行（一、/㈠/① 等）
+    if body_start_idx is None:
+        body_start_idx = next(
+            (idx for idx, line in enumerate(lines)
+             if idx >= 3 and _BODY_BLOCK_START_RE.match(line)),
+            None,
+        )
+    lines = _normalize_header_lines(lines, body_start_idx)
 
-    # 規則 2：行尾殘留全形空白（PDF 對齊填充）
-    # 「。\u3000\u3000\r\n」→「。\r\n」
-    # 目的：讓規則 3 的 lookbehind 能看到正確的句末標點
-    text = re.sub(r'\u3000+(\r\n)', r'\1', text)
+    if body_start_idx is None:
+        return _join_lines(lines, trailing_newline)
 
-    # 規則 3：段落內接行合併
-    # \r\n 後面接縮排（半形空白、tab、全形空白）→ 直接移除，文字接上一行
-    # Negative lookbehind：前一字是句末標點時不合併（保留大標題前的 \r\n）
-    text = re.sub(r'(?<![。！？：])\r\n[ \t\u3000]+', '', text)
+    footer_start_idx = _find_footer_start(lines, body_start_idx)
+    lines = _merge_body_lines(lines, body_start_idx, footer_start_idx)
+    footer_start_idx = _find_footer_start(lines, body_start_idx)  # recompute: merge changes line count
+    footer_end_idx = _find_footer_end(lines, footer_start_idx)
+    lines = lines[:footer_end_idx]  # 截斷書記官以下（附錄、附表、起訴書等）
+    lines = _compress_body_spaces(lines, body_start_idx, footer_start_idx)
 
-    # 規則 4：清除大標題殘留的前置全形空白
-    # \r\n\u3000\u3000事實及理由 → \r\n事實及理由
-    # （規則 1 只處理「X\u3000Y」型兩字標題；多字標題無內部全形空白，規則 1 不觸及）
-    text = re.sub(r'\r\n\u3000+', '\r\n', text)
-
-    # 規則 5：正文區段強制合併接行（見函式註解）
-    text = _merge_body_window_newlines(text)
-
-    return text
+    return _join_lines(lines, trailing_newline)
 
 
 # =========================
