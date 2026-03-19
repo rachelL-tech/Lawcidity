@@ -187,6 +187,8 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                       decision_date, jtitle, clean_text,
                       jpdf, ph_id))
                 row = cur.fetchone()
+            ref = f"{jyear}年{jcase_norm}字第{jno}號"
+            print(f"  ↑ 升級 placeholder id={ph_id} → {unit_norm} {ref}（ct={case_type!r} dt={doc_type!r} jid={jid}）")
             conn.commit()
             return True, row[0]
 

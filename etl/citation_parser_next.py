@@ -213,10 +213,13 @@ _PRIOR_CASE_RE = re.compile(
     r'|不服'
     r'|(?:提起|撤回)上訴'
     r'|提起公訴'
+    r'|提起抗告'
+    r'|聲請再審'
+    r'|裁定停止執行'
     r'|言詞辯論終結'
     r'|移送(?:執行|併辦)|前依'
     # ── 進行中 ──
-    r'|(?:審理|受理)中'
+    r'|(?:審理|受理|繫屬)中'
     r'|事件終結前'
     # ── 事實認定 ──
     r'|(?:判決|裁定)認定|即堪認定'
@@ -660,7 +663,7 @@ def _scan_agency_opinions(
 
 # 嚴格 accept signal（R002 本院 / R009 地方法院）
 ACCEPT_STRICT_RE = re.compile(
-    r'考諸|參照|可參|同旨|意旨|同此'
+    r'考諸|參照|同旨|判決意旨|裁定意旨|同此'
     r'|指明|載明|闡釋|闡示|闡述|明示|係指|揭示'
     r'|可知|參酌|供參'
 )
@@ -787,14 +790,33 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
         pre_start = pre_start + cuts[1]
     # 0 or 1 個 separator → 用完整 200 字
 
-    # 往後：截到最近的 。 或 \r\n
+    # 往後：若第一個 separator 是句號，截到句號；否則截到第二個 separator
     post_cap = 200
     raw = clean_text[match_end: match_end + post_cap]
+    _FWD_SEPS = ('，', '、', '；', '。', '\r\n')
+    fwd_cuts: list[int] = []
+    for sep in _FWD_SEPS:
+        idx = 0
+        while True:
+            p = raw.find(sep, idx)
+            if p == -1:
+                break
+            fwd_cuts.append(p)
+            idx = p + len(sep)
+    fwd_cuts.sort()
     end = len(raw)
-    for sep in ('。', '\r\n'):
-        idx = raw.find(sep)
-        if idx != -1 and idx < end:
-            end = idx
+    if fwd_cuts:
+        if raw[fwd_cuts[0]] == '。':
+            end = fwd_cuts[0]
+        else:
+            # 第二個 separator 必須是子句分隔符（，/、/；），不能是句號或換行
+            clause_cuts = [p for p in fwd_cuts[1:] if raw[p] not in ('。', '\r')]
+            if clause_cuts:
+                end = clause_cuts[0]
+            else:
+                # 沒有第二個子句分隔符，截到最近的句號或換行
+                sentence_cuts = [p for p in fwd_cuts if raw[p] in ('。', '\r')]
+                end = sentence_cuts[0] if sentence_cuts else fwd_cuts[0]
 
     return clean_text[pre_start: match_end + end]
 
