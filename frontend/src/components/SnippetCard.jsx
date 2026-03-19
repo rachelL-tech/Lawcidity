@@ -10,8 +10,7 @@ export default function SnippetCard({ citation, keywords, searchStatutes }) {
   const caseRef = citation.case_ref || `來源 #${citation.source_id}`;
   const params = new URLSearchParams();
   if (keywords.length) params.set("kw", keywords.join(","));
-  if (citation.match_start != null) params.set("ms", String(citation.match_start));
-  if (citation.match_end != null) params.set("me", String(citation.match_end));
+  if (citation.snippet) params.set("anchor", citation.snippet);
   const queryStr = params.toString() ? `?${params.toString()}` : "";
 
   return (
