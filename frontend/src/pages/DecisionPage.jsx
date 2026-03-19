@@ -9,7 +9,7 @@ export default function DecisionPage() {
   const { id } = useParams();
   const [urlParams] = useSearchParams();
   const keywords = urlParams.get("kw")?.split(",").filter(Boolean) || [];
-  const anchor = urlParams.get("anchor") || "";
+  const anchor = (urlParams.get("anchor") || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
   const [decision, setDecision] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -28,11 +28,7 @@ export default function DecisionPage() {
   if (error) return <div className="p-8 text-center text-red-500">錯誤：{error}</div>;
   if (!decision) return null;
 
-  // snippet anchor：從搜尋結果點進來時，後端已算好的 snippet 文字，直接當 highlight 定位詞
-  const snippetTerm = anchor
-    ? anchor.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim()
-    : "";
-  const highlightTerms = snippetTerm ? [snippetTerm, ...keywords] : keywords;
+  const highlightTerms = [anchor, ...keywords].filter(Boolean);
   const sections = parseDecisionSections(decision.clean_text || "");
 
   return (
