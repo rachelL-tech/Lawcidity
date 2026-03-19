@@ -669,6 +669,21 @@ def main(folder_path: str):
         """, (folder_name, success_count, total_citations))
     conn.commit()
 
+    # 清理沒有任何 citation 指向的 placeholder
+    with conn.cursor() as cur:
+        cur.execute("""
+            DELETE FROM decisions
+            WHERE jid IS NULL
+              AND id NOT IN (
+                  SELECT DISTINCT target_id FROM citations WHERE target_id IS NOT NULL
+              )
+            RETURNING id
+        """)
+        deleted_ids = cur.fetchall()
+    conn.commit()
+    if deleted_ids:
+        print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
+
     conn.close()
     print(f"\n完成！成功 {success_count} 筆，失敗 {fail_count} 筆")
     print(f"✓ 已寫入 ingest_log：{folder_name}")
@@ -806,12 +821,75 @@ def main_retry(base_dir: str):
     conn.close()
 
 
+def main_regen(unit_norm_filter: str = ""):
+    """
+    用 DB 裡現有的 clean_text 重跑 citation 抽取（不重讀 JSON）。
+    主要用途：更新 parser 邏輯後，刷新 citation 並自動清理孤兒 placeholder。
+
+    unit_norm_filter：若指定，只重跑該法院的 source 判決（模糊比對 unit_norm）。
+    """
+    conn = get_db_connection()
+
+    with conn.cursor() as cur:
+        sql = """
+            SELECT d.id, d.clean_text, d.root_norm, d.unit_norm,
+                   d.jyear, d.jcase_norm, d.jno, d.case_type
+            FROM decisions d
+            WHERE d.jid IS NOT NULL AND d.clean_text IS NOT NULL
+        """
+        if unit_norm_filter:
+            cur.execute(sql + " AND d.unit_norm LIKE %s ORDER BY d.id",
+                        (f"%{unit_norm_filter}%",))
+        else:
+            cur.execute(sql + " ORDER BY d.id")
+        rows = cur.fetchall()
+
+    total = len(rows)
+    print(f"重跑 {total} 筆 source 判決的 citation 抽取...")
+
+    for i, (decision_id, clean_text, root_norm, unit_norm,
+            jyear, jcase_norm, jno, case_type) in enumerate(rows, 1):
+        self_key = (
+            (root_norm or unit_norm).replace('臺', '台'),
+            jyear, jcase_norm, jno,
+        )
+        _, errors = ingest_citations(
+            conn, decision_id, clean_text,
+            court_root_norm=root_norm,
+            source_self_key=self_key,
+            source_case_type=case_type,
+        )
+        for e in errors:
+            print(f"  ⚠ id={decision_id}: {e}")
+        if i % 200 == 0:
+            print(f"  進度：{i}/{total}")
+
+    # 清理孤兒 placeholder（stale cleanup 已刪掉指向它們的 citation row）
+    with conn.cursor() as cur:
+        cur.execute("""
+            DELETE FROM decisions
+            WHERE jid IS NULL
+              AND id NOT IN (
+                  SELECT DISTINCT target_id FROM citations WHERE target_id IS NOT NULL
+              )
+            RETURNING id
+        """)
+        deleted_ids = cur.fetchall()
+    conn.commit()
+    if deleted_ids:
+        print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
+
+    conn.close()
+    print(f"\n完成！重跑 {total} 筆")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("使用方式：")
         print("  單一資料夾：python etl/ingest_decisions.py <資料夾路徑>")
         print("  批次匯入：  python etl/ingest_decisions.py --batch <基底目錄>")
         print("  重跑錯誤：  python etl/ingest_decisions.py --retry <基底目錄>")
+        print("  重跑 parser：python etl/ingest_decisions.py --regen [法院關鍵字]")
         sys.exit(1)
 
     if sys.argv[1] == "--batch":
@@ -825,5 +903,8 @@ if __name__ == "__main__":
             print("錯誤：--retry 需要指定基底目錄")
             sys.exit(1)
         main_retry(sys.argv[2])
+    elif sys.argv[1] == "--regen":
+        unit_norm_filter = sys.argv[2] if len(sys.argv) > 2 else ""
+        main_regen(unit_norm_filter)
     else:
         main(sys.argv[1])
