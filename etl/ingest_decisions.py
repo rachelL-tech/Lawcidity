@@ -124,9 +124,10 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
     邏輯：
     1. jid 已存在 → 直接回傳（冪等，重複 ingest 防護）
     2. 找可升級的 placeholder（jid IS NULL，同 unit_norm/jyear/jcase_norm/jno）
-       → 優先挑同 case_type，其次 NULL；case_type 相同後再優先同 doc_type，其次 NULL
-    3. 找到 → UPDATE 填入 jid + 文書內容 + 升級 case_type
-    4. 找不到 → INSERT，ON CONFLICT(jid) DO UPDATE
+       → 嚴格匹配：case_type 與 doc_type 都必須完全相同（IS NOT DISTINCT FROM）
+       → 不同 case_type 或不同 doc_type（含 NULL vs 非NULL）不匹配
+    3. 找到 → UPDATE 填入 jid + 文書內容（case_type/doc_type 不變，因為已嚴格匹配）
+    4. 找不到 → INSERT 新 row
 
     Returns:
         (True, decision_id) 成功，(False, error_msg) 失敗
@@ -158,32 +159,21 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
             return True, existing[0]
 
         with conn.cursor() as cur:
-            # 找可升級的 placeholder
+            # 找可升級的 placeholder — 嚴格匹配 case_type + doc_type
+            # 不同 case_type 或不同 doc_type（含 NULL vs 非NULL）一律不匹配，改走 INSERT
             cur.execute("""
                 SELECT id, doc_type, case_type FROM decisions
                 WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
                   AND jid IS NULL
-                ORDER BY
-                  CASE WHEN case_type = %s THEN 0
-                       WHEN case_type IS NULL THEN 1
-                       ELSE 2 END,
-                  CASE WHEN doc_type = %s THEN 0
-                       WHEN doc_type IS NULL THEN 1
-                       ELSE 2 END,
-                  id
+                  AND case_type IS NOT DISTINCT FROM %s
+                  AND doc_type IS NOT DISTINCT FROM %s
+                ORDER BY id
                 LIMIT 1
             """, (unit_norm, jyear, jcase_norm, jno, case_type, doc_type))
             placeholder = cur.fetchone()
 
         if placeholder:
-            ph_id, _, ph_case_type = placeholder
-
-            # conservative case_type upgrade
-            new_case_type = case_type
-            if case_type is None:
-                new_case_type = ph_case_type
-            elif ph_case_type is not None and ph_case_type != case_type:
-                print(f"  衝突：placeholder id={ph_id} case_type={ph_case_type!r} vs {case_type!r}，用新值")
+            ph_id = placeholder[0]
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -193,7 +183,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                         pdf_url=%s, updated_at=now()
                     WHERE id=%s
                     RETURNING id
-                """, (jid, doc_type, new_case_type, court_unit_id,
+                """, (jid, doc_type, case_type, court_unit_id,
                       decision_date, jtitle, clean_text,
                       jpdf, ph_id))
                 row = cur.fetchone()
@@ -201,6 +191,20 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
             return True, row[0]
 
         else:
+            # 除錯：檢查是否有不匹配的 placeholder 被跳過
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, case_type, doc_type FROM decisions
+                    WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                      AND jid IS NULL
+                """, (unit_norm, jyear, jcase_norm, jno))
+                skipped = cur.fetchall()
+            if skipped:
+                ref = f"{jyear}年{jcase_norm}字第{jno}號"
+                for s_id, s_ct, s_dt in skipped:
+                    print(f"  ⚠ 跳過 placeholder id={s_id}（ct={s_ct!r} dt={s_dt!r}）"
+                          f"→ 新建 {ref}（ct={case_type!r} dt={doc_type!r}）")
+
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO decisions (
