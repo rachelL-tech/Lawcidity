@@ -86,6 +86,8 @@ class CitationSource(BaseModel):
     doc_type: str | None
     decision_date: str | None
     snippet: str | None
+    match_start: int | None
+    match_end: int | None
     raw_match: str
     statutes: list[dict]
     is_matched: bool

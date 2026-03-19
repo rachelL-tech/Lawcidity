@@ -9,6 +9,8 @@ export default function DecisionPage() {
   const { id } = useParams();
   const [urlParams] = useSearchParams();
   const keywords = urlParams.get("kw")?.split(",").filter(Boolean) || [];
+  const ms = urlParams.get("ms") != null ? parseInt(urlParams.get("ms")) : null;
+  const me = urlParams.get("me") != null ? parseInt(urlParams.get("me")) : null;
 
   const [decision, setDecision] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +29,16 @@ export default function DecisionPage() {
   if (error) return <div className="p-8 text-center text-red-500">錯誤：{error}</div>;
   if (!decision) return null;
 
+  // 從 clean_text 偏移量切出 snippet 作為高亮定位詞（從搜尋結果點進來時）
+  let snippetTerm = "";
+  if (ms != null && me != null && decision.clean_text) {
+    snippetTerm = decision.clean_text
+      .slice(ms, me)
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .trim();
+  }
+  const highlightTerms = snippetTerm ? [snippetTerm, ...keywords] : keywords;
   const sections = parseDecisionSections(decision.clean_text || "");
 
   return (
@@ -37,14 +49,17 @@ export default function DecisionPage() {
         <p className="text-sm text-gray-400">即將推出</p>
       </div>
 
-      {/* 跳至關鍵段落 */}
-      {sections.reason && (
+      {/* 跳至引用段落（使用者從搜尋結果點進來時，跳到 snippet 高亮位置） */}
+      {highlightTerms.length > 0 && (
         <div className="text-center">
           <button
-            onClick={() => document.getElementById("section-reason")?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() => {
+              const firstMark = document.querySelector("mark");
+              if (firstMark) firstMark.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
             className="px-6 py-2 bg-gray-800 text-white rounded-full text-sm"
           >
-            跳至理由段落
+            跳至引用段落
           </button>
         </div>
       )}
@@ -69,7 +84,7 @@ export default function DecisionPage() {
         {/* Header / 前文 */}
         {sections.header && (
           <div className="mb-6 text-sm leading-7 whitespace-pre-wrap">
-            {highlightText(sections.header, keywords)}
+            {highlightText(sections.header, highlightTerms)}
           </div>
         )}
 
@@ -78,17 +93,31 @@ export default function DecisionPage() {
           <div className="mb-6">
             <h3 className="text-brand font-bold text-lg mb-2">主文</h3>
             <blockquote className="border-l-4 border-brand pl-4 text-sm leading-7 whitespace-pre-wrap bg-brand-light rounded-r-lg py-3">
-              {highlightText(sections.main, keywords)}
+              {highlightText(sections.main, highlightTerms)}
             </blockquote>
           </div>
         )}
 
-        {/* 理由 */}
+        {/* 事實（有些刑事判決事實/理由為獨立段落） */}
+        {sections.fact && (
+          <div id="section-fact" className="mb-6">
+            <h3 className="text-brand font-bold text-lg mb-2">
+              {sections.factLabel || "事實"}
+            </h3>
+            <div className="text-sm leading-7 whitespace-pre-wrap">
+              {highlightText(sections.fact, highlightTerms)}
+            </div>
+          </div>
+        )}
+
+        {/* 理由（或事實及理由） */}
         {sections.reason && (
           <div id="section-reason" className="mb-6">
-            <h3 className="text-brand font-bold text-lg mb-2">理由</h3>
+            <h3 className="text-brand font-bold text-lg mb-2">
+              {sections.reasonLabel || "理由"}
+            </h3>
             <div className="text-sm leading-7 whitespace-pre-wrap">
-              {highlightText(sections.reason, keywords)}
+              {highlightText(sections.reason, highlightTerms)}
             </div>
           </div>
         )}

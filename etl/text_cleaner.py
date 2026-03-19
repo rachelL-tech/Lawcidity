@@ -16,8 +16,8 @@ _INLINE_HEADING_RE = re.compile(
     r'([。！？])\u3000{2,}'
     r'(主\u3000*文'
     r'|理\u3000*由(?:\u3000*要\u3000*領)?'
-    r'|事\u3000*實\u3000*(?:及|與)\u3000*理\u3000*由(?:\u3000*要\u3000*領)?'
-    r'|事\u3000*實\u3000*理\u3000*由\u3000*及\u3000*證\u3000*據)'
+    r'|事\u3000*實(?:\u3000*(?:及|與)\u3000*理\u3000*由(?:\u3000*要\u3000*領)?'
+    r'|\u3000*理\u3000*由\u3000*及\u3000*證\u3000*據)?)'
     r'\u3000*'
 )
 
@@ -49,15 +49,18 @@ _BODY_BLOCK_START_RE = re.compile(
     r'|[0-9０-９]{1,3}[.、](?![0-9０-９])'   # 排除小數（如 4.9%）
     r')'
 )
-# 附表/附件/附錄 的 inline 引用排除（如「附表一編號」「附件一之」），不視為段落起首
+# 附表/附件/附錄 的 inline 引用排除（如「附表一編號」「附件一之」「附表四、五所示」），不視為段落起首
 _ATTACHMENT_INLINE_RE = re.compile(
-    r'附[錄表件][一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]*'
+    r'附[錄表件]'
+    r'(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]+'
+    r'(?:[、，][一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]+)*)?'
     r'(?:所示|編號|之|所列|明細)'
 )
-_KEEP_HEADERS = {"主文", "理由", "理由要領", "事實及理由", "事實與理由", "事實及理由要領", "事實理由及證據"}
+_KEEP_HEADERS = {"主文", "事實", "理由", "理由要領", "事實及理由", "事實與理由", "事實及理由要領", "事實理由及證據"}
 _KEEP_SECTION_LINE_RE = re.compile(
     r'(?:'
     r'主文'
+    r'|事實'
     r'|理由(?:要領)?'
     r'|事實(?:及|與)理由(?:要領)?'
     r'|(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁0-9０-９]+[、：:]?)'
@@ -70,7 +73,7 @@ _KEEP_SECTION_LINE_RE = re.compile(
 )
 _COURT_TITLE_RE = re.compile(r'^.+法院.*(?:判決|裁定)$')
 _REASON_HEADING_RE = re.compile(
-    r'^(?:理由(?:要領)?|事實(?:及|與)?理由(?:要領)?|事實理由及證據)$'
+    r'^(?:理由(?:要領)?|事實(?:及|與)?理由(?:要領)?|事實理由及證據|事實)$'
 )
 
 
@@ -166,16 +169,26 @@ def _find_footer_end(lines: list[str], footer_start_idx: int) -> int:
     """從 footer 起始往後找最後一個含「書記官」的行，傳回該行的下一個 index。
     若找不到，傳回 footer_start_idx（保留整個 footer，不截斷）。"""
     last_secretary = -1
-    for idx in range(footer_start_idx, len(lines)):
+    for idx in range(footer_start_idx, min(footer_start_idx + 40, len(lines))):
         if "書記官" in lines[idx]:
             last_secretary = idx
-        # 遇到 附錄/附表/附件 之後的第二個日期行就停止搜尋（避免掃到法條全文內的「書記官」）
+        # 已找到書記官後遇到日期行才停（避免掃到附錄法條內的「書記官」）
+        # 若尚未找到書記官（如宜蘭地院「日期→如不服→日期→書記官」格式），繼續往下掃
         if idx > footer_start_idx and _DATE_LINE_ONLY_RE.fullmatch(lines[idx]):
-            break
+            if last_secretary >= 0:
+                break
     if last_secretary >= 0:
         return last_secretary + 1
     return footer_start_idx
 
+
+# 圈號項目起首（㈠~㈩ 等），用於移除清單項目間的多餘空行
+_CIRCLED_ITEM_START_RE = re.compile(
+    r'^[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑]'
+)
+
+# footer 區「隔行」分隔符（這些行不與其他行合併）
+_FOOTER_SPECIAL_RE = re.compile(r'正本(?:係照|係依|證明)|書記官|法\s*官|審判長')
 
 _ZHUJIAN_SENT_END_RE = re.compile(r'。\s*$')
 
@@ -191,6 +204,39 @@ def _compress_body_spaces(lines: list[str], body_start_idx: int, footer_start_id
     out = list(lines)
     for idx in range(body_start_idx, min(footer_start_idx, len(out))):
         out[idx] = _BODY_SPACE_RE.sub('', out[idx])
+    return out
+
+
+def _merge_footer_lines(lines: list[str], footer_start_idx: int, footer_end_idx: int) -> list[str]:
+    """合併 footer 區的折行（如不服本判決/本裁定 等段落）。
+    日期行、法官行、書記官行、正本行保持獨立；段落起首行（如不服/告訴人）
+    開始一個新段落，其後的折行續接。"""
+    if footer_end_idx <= footer_start_idx:
+        return list(lines)
+    out = list(lines)
+    footer = [lines[i] for i in range(footer_start_idx, footer_end_idx)]
+    merged: list[str] = []
+    in_paragraph = False  # 是否在可續接的段落中
+    for line in footer:
+        stripped = line.strip()
+        is_break = (
+            not stripped
+            or bool(_DATE_LINE_RE.search(line))
+            or bool(_FOOTER_SPECIAL_RE.search(stripped))
+        )
+        is_para_start = stripped.startswith('如不服') or stripped.startswith('告訴人')
+        if is_break:
+            merged.append(line)
+            in_paragraph = False
+        elif is_para_start:
+            merged.append(line)
+            in_paragraph = True
+        elif in_paragraph and merged:
+            merged[-1] = merged[-1].rstrip(' \t\u3000') + line.lstrip(' \t\u3000')
+        else:
+            merged.append(line)
+            in_paragraph = False
+    out[footer_start_idx:footer_end_idx] = merged
     return out
 
 
@@ -225,7 +271,17 @@ def _merge_body_lines(lines: list[str], body_start_idx: int, footer_start_idx: i
         else:
             merged[-1] = prev.rstrip(' \t\u3000') + line.lstrip(' \t\u3000')
 
-    out[body_start_idx:footer_start_idx] = merged
+    # 後處理：移除緊接在圈號項目（㈠~㈩ 等）前的多餘空行（PDF 排版殘留）
+    cleaned: list[str] = []
+    for j, line in enumerate(merged):
+        if not line.strip():
+            nxt = next((merged[k] for k in range(j + 1, len(merged)) if merged[k].strip()), '')
+            nxt_stripped = nxt.lstrip(' \t\u3000')
+            if nxt_stripped and _CIRCLED_ITEM_START_RE.match(nxt_stripped):
+                continue  # 跳過此空行
+        cleaned.append(line)
+
+    out[body_start_idx:footer_start_idx] = cleaned
     return out
 
 
@@ -269,6 +325,7 @@ def clean_judgment_text(full_text: str) -> str:
     footer_start_idx = _find_footer_start(lines, body_start_idx)  # recompute: merge changes line count
     footer_end_idx = _find_footer_end(lines, footer_start_idx)
     lines = lines[:footer_end_idx]  # 截斷書記官以下（附錄、附表、起訴書等）
+    lines = _merge_footer_lines(lines, footer_start_idx, footer_end_idx)
     lines = _compress_body_spaces(lines, body_start_idx, footer_start_idx)
 
     return _join_lines(lines, trailing_newline)

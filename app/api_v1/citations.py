@@ -116,7 +116,7 @@ def _citation_rows(
                 cu.level                        AS source_court_level,
                 src.jyear, src.jcase_norm, src.jno,
                 src.doc_type, src.decision_date,
-                c.snippet, c.raw_match,
+                c.snippet, c.match_start, c.match_end, c.raw_match,
                 COALESCE(
                     json_agg(
                         json_build_object('law', css.law, 'article', css.article_raw, 'sub_ref', css.sub_ref)
@@ -134,7 +134,7 @@ def _citation_rows(
               AND {where_filter}
             GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
                      src.jyear, src.jcase_norm, src.jno,
-                     src.doc_type, src.decision_date
+                     src.doc_type, src.decision_date, c.match_start, c.match_end
         )
         SELECT *
         FROM scored
@@ -187,6 +187,8 @@ def _build_citations_response(
             doc_type=r["doc_type"],
             decision_date=str(r["decision_date"]) if r["decision_date"] else None,
             snippet=r["snippet"],
+            match_start=r["match_start"],
+            match_end=r["match_end"],
             raw_match=r["raw_match"],
             statutes=list(r["statutes"]) if r["statutes"] else [],
             is_matched=bool(r["is_matched"]),
