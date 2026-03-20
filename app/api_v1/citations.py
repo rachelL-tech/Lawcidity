@@ -70,7 +70,7 @@ def _get_sibling_target_ids(conn, target_id: int) -> list[int]:
             )
         """, (target_id,))
         rows = cur.fetchall()
-    return [r[0] for r in rows] if rows else [target_id]
+    return [r["id"] for r in rows] if rows else [target_id]
 
 
 def _citation_rows(

@@ -519,7 +519,7 @@ def fetch_target_rankings(
                 SUM(score)                  OVER w AS score,
                 SUM(keyword_score_sum)      OVER w AS keyword_score_sum,
                 SUM(statute_score_sum)      OVER w AS statute_score_sum,
-                CASE WHEN COUNT(DISTINCT doc_type) OVER w > 1 THEN '裁判'
+                CASE WHEN MIN(doc_type) OVER w IS DISTINCT FROM MAX(doc_type) OVER w THEN '裁判'
                      ELSE MAX(doc_type) OVER w
                 END                             AS doc_type,
                 court,
@@ -537,14 +537,17 @@ def fetch_target_rankings(
             )
         ),
         case_merged AS (
-            SELECT DISTINCT ON (unit_norm, jyear, jcase_norm, jno)
-                target_id, target_authority_id,
-                matched_citation_count, total_citation_count,
-                score, keyword_score_sum, statute_score_sum,
-                doc_type, court, court_level,
-                jyear, jcase_norm, jno, display_title
-            FROM decisions_windowed
-            ORDER BY unit_norm, jyear, jcase_norm, jno, orig_matched DESC
+            SELECT *
+            FROM (
+                SELECT DISTINCT ON (unit_norm, jyear, jcase_norm, jno)
+                    target_id, target_authority_id,
+                    matched_citation_count, total_citation_count,
+                    score, keyword_score_sum, statute_score_sum,
+                    doc_type, court, court_level,
+                    jyear, jcase_norm, jno, display_title
+                FROM decisions_windowed
+                ORDER BY unit_norm, jyear, jcase_norm, jno, orig_matched DESC
+            ) deduped_decisions
             UNION ALL
             SELECT
                 target_id, target_authority_id,
