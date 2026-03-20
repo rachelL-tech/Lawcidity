@@ -58,6 +58,21 @@ def _simplify_court(unit_norm: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _get_sibling_target_ids(conn, target_id: int) -> list[int]:
+    """找同案號（unit_norm/jyear/jcase_norm/jno）下所有 target_id，含自身。
+    用於合併不同 doc_type placeholder 的 citations。"""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id FROM decisions
+            WHERE (unit_norm, jyear, jcase_norm, jno) = (
+                SELECT unit_norm, jyear, jcase_norm, jno
+                FROM decisions WHERE id = %s
+            )
+        """, (target_id,))
+        rows = cur.fetchall()
+    return [r[0] for r in rows] if rows else [target_id]
+
+
 def _citation_rows(
     conn,
     target_col: str,
@@ -72,8 +87,17 @@ def _citation_rows(
     matched=False → 至少一個條件不符合的 citations（others）
 
     排序：score DESC → court_level ASC（相關性優先，同分才看位階）
+
+    decision target 會自動合併同案號所有 doc_type 的 citations。
     """
-    params: dict = {"target_val": target_val}
+    # decision target：找同案號兄弟 ids，合併所有 doc_type 的 citations
+    if target_col == "c.target_id":
+        sibling_ids = _get_sibling_target_ids(conn, target_val)
+        params: dict = {"target_vals": sibling_ids}
+        target_filter = "c.target_id = ANY(%(target_vals)s)"
+    else:
+        params = {"target_val": target_val}
+        target_filter = f"{target_col} = %(target_val)s"
 
     # 建 is_matched 條件（AND 串接）
     match_conds: list[str] = []
@@ -130,7 +154,7 @@ def _citation_rows(
             JOIN decisions src ON c.source_id = src.id
             LEFT JOIN court_units cu ON cu.id = src.court_unit_id
             LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
-            WHERE {target_col} = %(target_val)s
+            WHERE {target_filter}
               AND {where_filter}
             GROUP BY c.id, c.source_id, src.unit_norm, cu.level,
                      src.jyear, src.jcase_norm, src.jno,

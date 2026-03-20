@@ -497,6 +497,7 @@ def fetch_target_rankings(
                 )                               AS total_citation_count,
                 COALESCE(td.root_norm, a.root_norm) AS court,
                 ({COURT_LEVEL_SQL})             AS court_level,
+                td.unit_norm,
                 td.jyear,
                 td.jcase_norm,
                 td.jno,
@@ -505,8 +506,56 @@ def fetch_target_rankings(
             FROM ranked r
             LEFT JOIN decisions td    ON td.id = r.target_id
             LEFT JOIN authorities a   ON a.id = r.target_authority_id
+        ),
+        -- 同案號多個 target_id（不同 doc_type）時，合計 citation count，
+        -- 取 matched_citation_count 最高的 target_id 為代表（最有可能有全文）
+        decisions_windowed AS (
+            SELECT
+                target_id,
+                target_authority_id,
+                matched_citation_count          AS orig_matched,
+                SUM(matched_citation_count) OVER w AS matched_citation_count,
+                SUM(total_citation_count)   OVER w AS total_citation_count,
+                SUM(score)                  OVER w AS score,
+                SUM(keyword_score_sum)      OVER w AS keyword_score_sum,
+                SUM(statute_score_sum)      OVER w AS statute_score_sum,
+                CASE WHEN COUNT(DISTINCT doc_type) OVER w > 1 THEN '裁判'
+                     ELSE MAX(doc_type) OVER w
+                END                             AS doc_type,
+                court,
+                court_level,
+                unit_norm,
+                jyear,
+                jcase_norm,
+                jno,
+                display_title
+            FROM joined
+            WHERE target_id IS NOT NULL
+            WINDOW w AS (
+                PARTITION BY unit_norm, jyear, jcase_norm, jno
+                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+            )
+        ),
+        case_merged AS (
+            SELECT DISTINCT ON (unit_norm, jyear, jcase_norm, jno)
+                target_id, target_authority_id,
+                matched_citation_count, total_citation_count,
+                score, keyword_score_sum, statute_score_sum,
+                doc_type, court, court_level,
+                jyear, jcase_norm, jno, display_title
+            FROM decisions_windowed
+            ORDER BY unit_norm, jyear, jcase_norm, jno, orig_matched DESC
+            UNION ALL
+            SELECT
+                target_id, target_authority_id,
+                matched_citation_count, total_citation_count,
+                score, keyword_score_sum, statute_score_sum,
+                doc_type, court, court_level,
+                jyear, jcase_norm, jno, display_title
+            FROM joined
+            WHERE target_authority_id IS NOT NULL
         )
-        SELECT * FROM joined
+        SELECT * FROM case_merged
         {target_where}
         ORDER BY score DESC, statute_score_sum DESC, keyword_score_sum DESC, court_level ASC
     """

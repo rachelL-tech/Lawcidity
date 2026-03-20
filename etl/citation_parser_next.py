@@ -663,7 +663,7 @@ def _scan_agency_opinions(
 
 # 嚴格 accept signal（R002 本院 / R009 地方法院）
 ACCEPT_STRICT_RE = re.compile(
-    r'考諸|參照|同旨|判決意旨|裁定意旨|同此'
+    r'考諸|參照|同旨|判決意旨|裁定意旨|裁判意旨|同此'
     r'|指明|載明|闡釋|闡示|闡述|明示|係指|揭示'
     r'|可知|參酌|供參'
 )
@@ -771,7 +771,8 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
     往前：截到第二近的標點（，/、/；/。/\\r\\n），多含一個子句。
     往後：截到最近的句號（。）或換行，確保能抓到句尾的 accept signal。
     """
-    _SEPS = ('，', '、', '；', '。', '\r\n')
+    # 「、」是枚舉符，不作為子句邊界（避免成對案號互相截斷 context）
+    _SEPS = ('，', '；', '。', '\r\n')
 
     # 往前：收集所有 separator 的「截斷位置」（separator 之後的第一個字）
     pre_start = max(0, match_start - 200)
@@ -791,9 +792,10 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
     # 0 or 1 個 separator → 用完整 200 字
 
     # 往後：若第一個 separator 是句號，截到句號；否則截到第二個 separator
+    # 注意：往後不用「、」做截斷點，避免成對案號（A號、B號...可資參照）第一個案號漏收 accept signal
     post_cap = 200
     raw = clean_text[match_end: match_end + post_cap]
-    _FWD_SEPS = ('，', '、', '；', '。', '\r\n')
+    _FWD_SEPS = ('，', '；', '。', '\r\n')
     fwd_cuts: list[int] = []
     for sep in _FWD_SEPS:
         idx = 0
@@ -809,7 +811,7 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
         if raw[fwd_cuts[0]] == '。':
             end = fwd_cuts[0]
         else:
-            # 第二個 separator 必須是子句分隔符（，/、/；），不能是句號或換行
+            # 第二個 separator 必須是子句分隔符（，/；），不能是句號或換行
             clause_cuts = [p for p in fwd_cuts[1:] if raw[p] not in ('。', '\r')]
             if clause_cuts:
                 end = clause_cuts[0]
@@ -821,24 +823,24 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
     return clean_text[pre_start: match_end + end]
 
 
-def _accept_window(clean_text: str, match_start: int, match_end: int) -> str:
-    """R002/R009/R010 共用的局部 context 窗口。
-    前：最多 400 字，截斷到最近的 。/\\r\\n（取最靠近 match_start 的那個）。
-    後：到最近的 。/\\r\\n（取最靠近 match_end 的那個），上限 200 字。
-    """
-    pre_start = max(0, match_start - 400)
-    pre = clean_text[pre_start: match_start]
-    cut = -1
-    for sep in ('。', '\r\n'):
-        idx = pre.rfind(sep)
-        if idx != -1:
-            pos = idx + len(sep)
-            if pos > cut:
-                cut = pos
-    if cut != -1:
-        pre_start = pre_start + cut
-    post = _post_sentence(clean_text, match_end)
-    return clean_text[pre_start: match_end + len(post)]
+# def _accept_window(clean_text: str, match_start: int, match_end: int) -> str:
+#     """R002/R009/R010 共用的局部 context 窗口。
+#     前：最多 400 字，截斷到最近的 。/\\r\\n（取最靠近 match_start 的那個）。
+#     後：到最近的 。/\\r\\n（取最靠近 match_end 的那個），上限 200 字。
+#     """
+#     pre_start = max(0, match_start - 400)
+#     pre = clean_text[pre_start: match_start]
+#     cut = -1
+#     for sep in ('。', '\r\n'):
+#         idx = pre.rfind(sep)
+#         if idx != -1:
+#             pos = idx + len(sep)
+#             if pos > cut:
+#                 cut = pos
+#     if cut != -1:
+#         pre_start = pre_start + cut
+#     post = _post_sentence(clean_text, match_end)
+#     return clean_text[pre_start: match_end + len(post)]
 
 def _prev_heading_pos(clean_text: str, pos: int) -> int:
     """pos 之前最近的標題起點（_PARA_START_RE 或 \r\n）。"""
