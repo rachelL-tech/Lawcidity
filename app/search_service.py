@@ -501,7 +501,9 @@ def fetch_target_rankings(
                 td.jyear,
                 td.jcase_norm,
                 td.jno,
-                a.display                       AS display_title,
+                COALESCE(a.display,
+                         td.jyear::TEXT || '年度' || td.jcase_norm || '字第' || td.jno::TEXT || '號'
+                )                               AS display_title,
                 COALESCE(td.doc_type, a.doc_type) AS doc_type
             FROM ranked r
             LEFT JOIN decisions td    ON td.id = r.target_id

@@ -32,12 +32,8 @@ from app.api_v1.schemas import (
 router = APIRouter()
 
 
-def _fmt_case_ref(jyear, jcase_norm, jno, display_title=None):
-    if display_title:
-        return display_title
-    if jyear is None or jcase_norm is None or jno is None:
-        return ""
-    return f"{jyear}年度{jcase_norm}字第{jno}號"
+def _fmt_case_ref(display_title):
+    return display_title or ""
 
 
 def _to_statute_filter_objs(statute_filters: list[tuple]) -> list[StatuteFilter]:
@@ -109,10 +105,7 @@ def search(req: SearchRequest):
             jyear=row.get("jyear"),
             jcase_norm=row.get("jcase_norm"),
             jno=row.get("jno"),
-            case_ref=_fmt_case_ref(
-                row.get("jyear"), row.get("jcase_norm"),
-                row.get("jno"), row.get("display_title"),
-            ),
+            case_ref=_fmt_case_ref(row.get("display_title")),
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
             matched_citation_count=int(row.get("matched_citation_count") or 0),
@@ -189,10 +182,7 @@ def rerank(req: RerankRequest):
             jyear=row.get("jyear"),
             jcase_norm=row.get("jcase_norm"),
             jno=row.get("jno"),
-            case_ref=_fmt_case_ref(
-                row.get("jyear"), row.get("jcase_norm"),
-                row.get("jno"), row.get("display_title"),
-            ),
+            case_ref=_fmt_case_ref(row.get("display_title")),
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
             matched_citation_count=int(row.get("matched_citation_count") or 0),
