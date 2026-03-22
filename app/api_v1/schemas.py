@@ -20,7 +20,6 @@ class SearchRequest(BaseModel):
     exclude_statutes: list[StatuteFilter] = []
     case_types: list[str] = []
     doc_types: list[str] = []          # 篩選 target 的文書類型（判決/裁定/…）
-    court_levels: list[int] = []       # 篩選 target 的法院層級（0-4）
     sort: Literal["relevance", "matched_citation_count", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
@@ -107,6 +106,42 @@ class CitationsResponse(BaseModel):
     total: int
     matched_total: int
     sources: list[CitationSource]
+
+
+# ── POST /search/semantic ──────────────────────────────────────────────────────
+
+class SemanticSearchRequest(BaseModel):
+    query: str
+    case_type: str | None = None   # 民事/刑事/行政（可選）
+    k: int = 200                   # knn 召回 chunk 數
+    page: int = 1
+    page_size: int = 20
+
+
+class SemanticTarget(BaseModel):
+    target_id: int | None
+    authority_id: int | None
+    case_ref: str
+    court: str
+    doc_type: str | None
+
+
+class SemanticSourceItem(BaseModel):
+    source_id: int
+    case_ref: str
+    court: str
+    doc_type: str | None
+    decision_date: str | None
+    score: float
+    chunk_count: int
+    cited_targets: list[SemanticTarget]
+
+
+class SemanticSearchResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    results: list[SemanticSourceItem]
 
 
 # ── GET /decisions/{id} ────────────────────────────────────────────────────────

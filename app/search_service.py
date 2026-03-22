@@ -570,6 +570,193 @@ def fetch_target_rankings(
         return cur.fetchall()
 
 
+# ── 語意搜尋 ─────────────────────────────────────────────────────────
+
+CHUNK_INDEX_NAME = "citation_chunks_v1"
+QWEN3_QUERY_INSTRUCTION = "Instruct: 給定法律查詢，找出引用相關判決的法院判決段落\nQuery: "
+
+_embed_model = None
+
+
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise RuntimeError("缺少 sentence-transformers，請執行 pip install sentence-transformers")
+        _embed_model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", truncate_dim=512)
+    return _embed_model
+
+
+def semantic_chunk_search(
+    query: str,
+    case_type: str | None,
+    k: int = 200,
+) -> list[dict[str, Any]]:
+    """Embed query → knn on citation_chunks_v1 → return scored chunk hits."""
+    model = _get_embed_model()
+    vec = model.encode(
+        [QWEN3_QUERY_INSTRUCTION + query],
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )[0].tolist()
+
+    knn_clause: dict[str, Any] = {"vector": vec, "k": k}
+    if case_type:
+        knn_clause["filter"] = {"term": {"case_type": case_type}}
+
+    body = {
+        "size": k,
+        "query": {"knn": {"embedding": knn_clause}},
+        "_source": [
+            "decision_id", "case_type",
+            "target_ids", "target_authority_ids",
+            "chunk_index", "start_offset", "end_offset",
+        ],
+    }
+
+    client = _get_opensearch_client()
+    resp = client.search(index=CHUNK_INDEX_NAME, body=body)
+    hits = resp.get("hits", {}).get("hits", [])
+
+    return [
+        {
+            "decision_id":          int(h["_source"]["decision_id"]),
+            "chunk_index":          h["_source"].get("chunk_index"),
+            "case_type":            h["_source"].get("case_type"),
+            "target_ids":           h["_source"].get("target_ids") or [],
+            "target_authority_ids": h["_source"].get("target_authority_ids") or [],
+            "start_offset":         h["_source"].get("start_offset"),
+            "end_offset":           h["_source"].get("end_offset"),
+            "score":                float(h.get("_score", 0.0)),
+        }
+        for h in hits
+        if h.get("_source", {}).get("decision_id") is not None
+    ]
+
+
+def fetch_semantic_source_rankings(
+    conn: psycopg.Connection,
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Aggregate knn chunks by decision_id → rank sources by max semantic score.
+    Each source carries cited targets (from matched chunks) as metadata.
+    """
+    if not chunks:
+        return []
+
+    # ── Aggregate by decision_id ──────────────────────────────────────
+    agg: dict[int, dict[str, Any]] = {}
+    for c in chunks:
+        did = c["decision_id"]
+        if did not in agg:
+            agg[did] = {
+                "max_score":            0.0,
+                "chunk_count":          0,
+                "target_ids":           set(),
+                "target_authority_ids": set(),
+            }
+        e = agg[did]
+        e["max_score"]   = max(e["max_score"], c["score"])
+        e["chunk_count"] += 1
+        e["target_ids"].update(c["target_ids"])
+        e["target_authority_ids"].update(c["target_authority_ids"])
+
+    sorted_dids = sorted(
+        agg, key=lambda d: (-agg[d]["max_score"], -agg[d]["chunk_count"])
+    )
+
+    # ── Fetch source decision metadata ────────────────────────────────
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("""
+            SELECT id,
+                   root_norm                                                  AS court,
+                   doc_type,
+                   decision_date::text                                        AS decision_date,
+                   jyear::text || '年度' || jcase_norm || '字第'
+                       || jno::text || '號'                                   AS display_title
+            FROM decisions
+            WHERE id = ANY(%(ids)s::bigint[])
+        """, {"ids": sorted_dids})
+        src_map: dict[int, dict] = {row["id"]: dict(row) for row in cur.fetchall()}
+
+    # ── Fetch target metadata ─────────────────────────────────────────
+    all_target_ids    = {tid for e in agg.values() for tid in e["target_ids"]}
+    all_authority_ids = {aid for e in agg.values() for aid in e["target_authority_ids"]}
+
+    decision_targets: dict[int, dict] = {}
+    if all_target_ids:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("""
+                SELECT id,
+                       root_norm                                              AS court,
+                       doc_type,
+                       jyear::text || '年度' || jcase_norm || '字第'
+                           || jno::text || '號'                               AS display_title
+                FROM decisions
+                WHERE id = ANY(%(ids)s::bigint[])
+            """, {"ids": list(all_target_ids)})
+            decision_targets = {row["id"]: dict(row) for row in cur.fetchall()}
+
+    authority_targets: dict[int, dict] = {}
+    if all_authority_ids:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("""
+                SELECT id,
+                       root_norm  AS court,
+                       doc_type,
+                       display    AS display_title
+                FROM authorities
+                WHERE id = ANY(%(ids)s::bigint[])
+            """, {"ids": list(all_authority_ids)})
+            authority_targets = {row["id"]: dict(row) for row in cur.fetchall()}
+
+    # ── Assemble results ──────────────────────────────────────────────
+    results = []
+    for did in sorted_dids:
+        if did not in src_map:
+            continue
+        src = src_map[did]
+        e   = agg[did]
+
+        cited: list[dict] = []
+        for tid in sorted(e["target_ids"]):
+            if tid in decision_targets:
+                t = decision_targets[tid]
+                cited.append({
+                    "target_id":    tid,
+                    "authority_id": None,
+                    "case_ref":     t.get("display_title") or "",
+                    "court":        t.get("court") or "",
+                    "doc_type":     t.get("doc_type"),
+                })
+        for aid in sorted(e["target_authority_ids"]):
+            if aid in authority_targets:
+                t = authority_targets[aid]
+                cited.append({
+                    "target_id":    None,
+                    "authority_id": aid,
+                    "case_ref":     t.get("display_title") or "",
+                    "court":        t.get("court") or "",
+                    "doc_type":     t.get("doc_type"),
+                })
+
+        results.append({
+            "source_id":     did,
+            "case_ref":      src.get("display_title") or "",
+            "court":         src.get("court") or "",
+            "doc_type":      src.get("doc_type"),
+            "decision_date": src.get("decision_date"),
+            "score":         e["max_score"],
+            "chunk_count":   e["chunk_count"],
+            "cited_targets": cited,
+        })
+
+    return results
+
+
 # ── Legacy：供 main.py legacy endpoint 使用 ──────────────────────────
 
 def fetch_rankings_by_source_ids(

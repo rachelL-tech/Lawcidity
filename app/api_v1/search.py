@@ -19,6 +19,8 @@ from app.search_service import (
     parse_case_types,
     search_source_ids_opensearch,
     fetch_target_rankings,
+    semantic_chunk_search,
+    fetch_semantic_source_rankings,
 )
 from app.api_v1.schemas import (
     SearchRequest,
@@ -27,6 +29,10 @@ from app.api_v1.schemas import (
     SearchContext,
     StatuteFilter,
     RerankRequest,
+    SemanticSearchRequest,
+    SemanticSearchResponse,
+    SemanticSourceItem,
+    SemanticTarget,
 )
 
 router = APIRouter()
@@ -76,7 +82,6 @@ def search(req: SearchRequest):
         all_rankings = fetch_target_rankings(
             conn, source_ids, query_terms, statute_filters,
             doc_types=req.doc_types or None,
-            court_levels=req.court_levels or None,
         )
 
     if req.sort == "matched_citation_count":
@@ -127,6 +132,39 @@ def search(req: SearchRequest):
             exclude_keywords=exclude_terms,
             exclude_statutes=_to_statute_filter_objs(exclude_statute_filters),
         ),
+    )
+
+
+@router.post("/search/semantic", response_model=SemanticSearchResponse)
+def search_semantic(req: SemanticSearchRequest):
+    try:
+        chunks = semantic_chunk_search(
+            query=req.query,
+            case_type=req.case_type,
+            k=req.k,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"語意搜尋失敗：{e}")
+
+    with get_conn() as conn:
+        all_results = fetch_semantic_source_rankings(conn, chunks)
+
+    total = len(all_results)
+    start = (req.page - 1) * req.page_size
+    page_results = all_results[start:start + req.page_size]
+
+    return SemanticSearchResponse(
+        total=total,
+        page=req.page,
+        page_size=req.page_size,
+        results=[
+            SemanticSourceItem(
+                **{**r, "cited_targets": [SemanticTarget(**t) for t in r["cited_targets"]]}
+            )
+            for r in page_results
+        ],
     )
 
 

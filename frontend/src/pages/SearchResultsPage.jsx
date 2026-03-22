@@ -114,7 +114,7 @@ export default function SearchResultsPage() {
               <span className="text-red-500">{error}</span>
             ) : results !== null ? (
               <>
-                找到 <span className="font-medium text-gray-800">{total}</span> 則符合條件的被參照判決
+                找到 <span className="font-medium text-gray-800">{total}</span> 筆有力實務見解
               </>
             ) : null}
           </div>
@@ -125,8 +125,8 @@ export default function SearchResultsPage() {
               <span className="text-gray-400">排序依據：</span>
               {[
                 { value: "relevance", label: "命中率" },
-                { value: "matched_citation_count", label: "符合引用數" },
-                { value: "total_citation_count", label: "總引用數" },
+                { value: "matched_citation_count", label: "引用數" },
+                // { value: "total_citation_count", label: "總引用數" },
               ].map(({ value, label }) => (
                 <button
                   key={value}

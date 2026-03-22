@@ -28,8 +28,8 @@ export default function HomePage() {
     <div className="max-w-2xl mx-auto px-4 py-20">
       {/* Hero */}
       <div className="text-center mb-10">
-        <h1 className="text-4xl font-bold text-brand mb-3">今天您想探索哪類案件？</h1>
-        <p className="text-gray-500 text-base">台灣判決引用關係搜尋</p>
+        <h1 className="text-4xl font-bold text-brand mb-3">今天您想探索什麼案件類型？</h1>
+        <p className="text-gray-500 text-base">台灣有力實務見解搜尋</p>
       </div>
 
       {/* 模式切換 */}

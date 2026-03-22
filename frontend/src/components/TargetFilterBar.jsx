@@ -11,7 +11,6 @@ const COURT_LEVEL_OPTIONS = [
 const DOC_TYPE_OPTIONS = [
   { value: "判決", label: "判決" },
   { value: "裁定", label: "裁定" },
-  { value: "判例", label: "判例" },
   { value: "決議", label: "決議" },
   { value: "釋字", label: "釋字" },
   { value: "憲判字", label: "憲判字" },
@@ -109,7 +108,7 @@ export default function TargetFilterBar({ req, onChange }) {
 
   return (
     <div className="flex items-center gap-2 flex-wrap mb-3">
-      <span className="text-sm text-gray-400 shrink-0">被參照判決：</span>
+      <span className="text-sm text-gray-400 shrink-0">篩選實務見解：</span>
       <FilterDropdown
         label="文書類型"
         options={DOC_TYPE_OPTIONS}

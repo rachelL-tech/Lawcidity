@@ -58,9 +58,9 @@ export default function DecisionPage() {
       <div className="bg-white rounded-2xl p-6 shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold">判決全文</h2>
-          <span className="text-sm text-brand">
+          {/* <span className="text-sm text-brand">
             被引用 {decision.total_citation_count} 次
-          </span>
+          </span> */}
         </div>
 
         {/* Metadata */}
