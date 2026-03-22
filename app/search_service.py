@@ -576,6 +576,7 @@ CHUNK_INDEX_NAME = "citation_chunks_v1"
 QWEN3_QUERY_INSTRUCTION = "Instruct: 給定法律查詢，找出引用相關判決的法院判決段落\nQuery: "
 
 MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
+HF_EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 EMBED_DIMS = 512
 
 _embed_model = None
@@ -593,8 +594,9 @@ def _get_embed_model():
     return _embed_model, _embed_tokenizer
 
 
-def _embed_texts(texts: list[str]) -> list[list[float]]:
+def _embed_texts_mlx(texts: list[str]) -> list[list[float]]:
     import mlx.core as mx
+    import numpy as np
     model, tokenizer = _get_embed_model()
     encoded = [tokenizer.encode(t, max_length=512, truncation=True) for t in texts]
     max_len = max(len(e) for e in encoded)
@@ -602,11 +604,36 @@ def _embed_texts(texts: list[str]) -> list[list[float]]:
     padded = [e + [pad_id] * (max_len - len(e)) for e in encoded]
     mask   = [[1] * len(e) + [0] * (max_len - len(e)) for e in encoded]
     out = model(mx.array(padded), attention_mask=mx.array(mask))
-    import numpy as np
     embeds = np.array(out.text_embeds)[:, :EMBED_DIMS]
     norms = np.linalg.norm(embeds, axis=1, keepdims=True)
     norms[norms == 0] = 1
     return (embeds / norms).tolist()
+
+
+def _embed_texts_hf(texts: list[str]) -> list[list[float]]:
+    import numpy as np
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError:
+        raise RuntimeError("缺少 huggingface-hub，請執行 pip install huggingface-hub")
+    token = os.environ.get("HF_TOKEN")
+    client = InferenceClient(model=HF_EMBED_MODEL, token=token)
+    result = []
+    for text in texts:
+        emb = np.array(client.feature_extraction(text), dtype=np.float32)
+        if emb.ndim > 1:
+            emb = emb[0]           # some models return (1, dim)
+        emb = emb[:EMBED_DIMS]
+        emb = emb / (np.linalg.norm(emb) or 1)
+        result.append(emb.tolist())
+    return result
+
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    backend = os.environ.get("EMBED_BACKEND", "mlx").lower()
+    if backend == "hf":
+        return _embed_texts_hf(texts)
+    return _embed_texts_mlx(texts)
 
 
 def semantic_chunk_search(
