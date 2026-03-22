@@ -575,18 +575,38 @@ def fetch_target_rankings(
 CHUNK_INDEX_NAME = "citation_chunks_v1"
 QWEN3_QUERY_INSTRUCTION = "Instruct: 給定法律查詢，找出引用相關判決的法院判決段落\nQuery: "
 
+MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
+EMBED_DIMS = 512
+
 _embed_model = None
+_embed_tokenizer = None
 
 
 def _get_embed_model():
-    global _embed_model
+    global _embed_model, _embed_tokenizer
     if _embed_model is None:
         try:
-            from sentence_transformers import SentenceTransformer
+            from mlx_embeddings.utils import load as mlx_load
         except ImportError:
-            raise RuntimeError("缺少 sentence-transformers，請執行 pip install sentence-transformers")
-        _embed_model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", truncate_dim=512)
-    return _embed_model
+            raise RuntimeError("缺少 mlx-embeddings，請執行 pip install mlx-embeddings")
+        _embed_model, _embed_tokenizer = mlx_load(MLX_MODEL)
+    return _embed_model, _embed_tokenizer
+
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    import mlx.core as mx
+    model, tokenizer = _get_embed_model()
+    encoded = [tokenizer.encode(t, max_length=512, truncation=True) for t in texts]
+    max_len = max(len(e) for e in encoded)
+    pad_id = tokenizer.pad_token_id or 0
+    padded = [e + [pad_id] * (max_len - len(e)) for e in encoded]
+    mask   = [[1] * len(e) + [0] * (max_len - len(e)) for e in encoded]
+    out = model(mx.array(padded), attention_mask=mx.array(mask))
+    import numpy as np
+    embeds = np.array(out.text_embeds)[:, :EMBED_DIMS]
+    norms = np.linalg.norm(embeds, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return (embeds / norms).tolist()
 
 
 def semantic_chunk_search(
@@ -595,12 +615,8 @@ def semantic_chunk_search(
     k: int = 200,
 ) -> list[dict[str, Any]]:
     """Embed query → knn on citation_chunks_v1 → return scored chunk hits."""
-    model = _get_embed_model()
-    vec = model.encode(
-        [QWEN3_QUERY_INSTRUCTION + query],
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )[0].tolist()
+    vecs = _embed_texts([QWEN3_QUERY_INSTRUCTION + query])
+    vec = vecs[0]
 
     knn_clause: dict[str, Any] = {"vector": vec, "k": k}
     if case_type:

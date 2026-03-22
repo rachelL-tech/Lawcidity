@@ -194,23 +194,33 @@ def clear_checkpoint():
 
 # ── Embedding ──────────────────────────────────────────────────────────────
 
+MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
+
+
 def load_model():
     try:
-        from sentence_transformers import SentenceTransformer
+        from mlx_embeddings.utils import load as mlx_load
     except ImportError:
-        print("ERROR: pip install sentence-transformers")
+        print("ERROR: pip install mlx-embeddings")
         sys.exit(1)
-    print(f"Loading {EMBED_MODEL} (truncate_dim={DIMS})...")
-    return SentenceTransformer(EMBED_MODEL, truncate_dim=DIMS)
+    print(f"Loading {MLX_MODEL} (truncate_dim={DIMS})...")
+    model, tokenizer = mlx_load(MLX_MODEL)
+    return model, tokenizer
 
 
-def embed_batch(model, texts: list[str]) -> np.ndarray:
-    return model.encode(
-        texts,
-        batch_size=len(texts),
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
+def embed_batch(model_pair, texts: list[str]) -> np.ndarray:
+    import mlx.core as mx
+    model, tokenizer = model_pair
+    encoded = [tokenizer.encode(t, max_length=512, truncation=True) for t in texts]
+    max_len = max(len(e) for e in encoded)
+    pad_id = tokenizer.pad_token_id or 0
+    padded = [e + [pad_id] * (max_len - len(e)) for e in encoded]
+    mask = [[1] * len(e) + [0] * (max_len - len(e)) for e in encoded]
+    out = model(mx.array(padded), attention_mask=mx.array(mask))
+    embeds = np.array(out.text_embeds)[:, :DIMS]
+    norms = np.linalg.norm(embeds, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return embeds / norms
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
