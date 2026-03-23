@@ -576,7 +576,7 @@ CHUNK_INDEX_NAME = "citation_chunks_v1"
 QWEN3_QUERY_INSTRUCTION = "Instruct: 給定法律查詢，找出引用相關判決的法院判決段落\nQuery: "
 
 MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
-HF_EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+CF_AI_MODEL = "@cf/qwen/qwen3-embedding-0.6b"
 EMBED_DIMS = 512
 
 _embed_model = None
@@ -610,20 +610,34 @@ def _embed_texts_mlx(texts: list[str]) -> list[list[float]]:
     return (embeds / norms).tolist()
 
 
-def _embed_texts_hf(texts: list[str]) -> list[list[float]]:
+def _embed_texts_cf(texts: list[str]) -> list[list[float]]:
+    import json
+    import urllib.request
     import numpy as np
-    try:
-        from huggingface_hub import InferenceClient
-    except ImportError:
-        raise RuntimeError("缺少 huggingface-hub，請執行 pip install huggingface-hub")
-    token = os.environ.get("HF_TOKEN")
-    client = InferenceClient(model=HF_EMBED_MODEL, token=token)
+
+    account_id = os.environ.get("CF_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CF_AI_TOKEN", "").strip()
+    if not account_id or not token:
+        raise RuntimeError("缺少 CF_ACCOUNT_ID 或 CF_AI_TOKEN 環境變數")
+
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
+        f"/ai/run/{CF_AI_MODEL}"
+    )
+    payload = json.dumps({"text": texts}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+
+    if not data.get("success"):
+        raise RuntimeError(f"Cloudflare AI 錯誤：{data.get('errors')}")
+
     result = []
-    for text in texts:
-        emb = np.array(client.feature_extraction(text), dtype=np.float32)
-        if emb.ndim > 1:
-            emb = emb[0]           # some models return (1, dim)
-        emb = emb[:EMBED_DIMS]
+    for vec in data["result"]["data"]:
+        emb = np.array(vec[:EMBED_DIMS], dtype=np.float32)
         emb = emb / (np.linalg.norm(emb) or 1)
         result.append(emb.tolist())
     return result
@@ -631,8 +645,8 @@ def _embed_texts_hf(texts: list[str]) -> list[list[float]]:
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
     backend = os.environ.get("EMBED_BACKEND", "mlx").lower()
-    if backend == "hf":
-        return _embed_texts_hf(texts)
+    if backend == "cf":
+        return _embed_texts_cf(texts)
     return _embed_texts_mlx(texts)
 
 
