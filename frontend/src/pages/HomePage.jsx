@@ -29,7 +29,7 @@ export default function HomePage() {
       {/* Hero */}
       <div className="text-center mb-10">
         <h1 className="text-4xl font-bold text-brand mb-3">今天您想探索什麼案件類型？</h1>
-        <p className="text-gray-500 text-base">台灣有力實務見解搜尋</p>
+        <p className="text-gray-500 text-base">台灣熱門實務見解搜尋</p>
       </div>
 
       {/* 模式切換 */}

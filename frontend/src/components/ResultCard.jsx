@@ -99,7 +99,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-brand mb-2 flex items-center gap-1">
                 <span>📎</span>
-                內文符合搜尋條件（{matchedTotal ?? matched.length} 筆）
+                完全符合搜尋條件（{matchedTotal ?? matched.length} 筆）
               </h3>
               <div className="space-y-3">
                 {matched.map((c) => (
@@ -114,7 +114,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
                 <span>📎</span>
-                其他引用片段（{others.length} 筆）
+                也出現在以下判決（{others.length} 筆）
               </h3>
               <div className="space-y-3">
                 {others.map((c) => (

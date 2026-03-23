@@ -114,7 +114,7 @@ export default function SearchResultsPage() {
               <span className="text-red-500">{error}</span>
             ) : results !== null ? (
               <>
-                找到 <span className="font-medium text-gray-800">{total}</span> 筆有力實務見解
+                找到 <span className="font-medium text-gray-800">{total}</span> 筆熱門實務見解
               </>
             ) : null}
           </div>

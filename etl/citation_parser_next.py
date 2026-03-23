@@ -668,14 +668,13 @@ ACCEPT_STRICT_RE = re.compile(
     r'|可知|參酌|供參'
 )
 
-# 寬鬆 accept signal（R005a rescue / R010 authority）
+# 寬鬆 accept signal（R010 authority）
 ACCEPT_RE = re.compile(
     r'參照|意旨|可參|供參|同旨|見解|同此|揆諸|考諸'
     r'|指明|載明|闡釋|闡示|闡述|明示|揭示'
     r'|係指|所謂|係就|係以'
     r'|可知|參酌|釋明'
     r'|判決理由|理由書略以|要旨參|解釋在案|解釋文著有明文|解釋認'
-    r'|依據?[憲司臺台最福]'
 )
 
 _PARTY_SUBJ = r'(?:再審|反訴|反請求)?(?:原告|被告|檢察官|上訴人|被上訴人|抗告人|聲請人|異議人)'
@@ -697,26 +696,7 @@ PARTY_CLAIM_RE = re.compile(
     r'|上訴理由'
 )
 
-# QUOTED_REASONING_RE = re.compile(
-#     r'原確定判決已論明'
-#     r'|原判決說明|原判決認[為定]'
-#     r'|原裁定略以|原裁定認定'
-#     r'|原審(?:認[為定]?|見解|說明|略以)'
-# )
-
-# TURNING_RE = re.compile(r'惟|然[按查]?|但(?!書)')
-
 _BLOCK_RESCUE_RE = re.compile(r'云云|等情(?!況|形)|等語|等等')
-
-# 段落序號前綴：偵測 PARTY_CLAIM_RE 是否出現在段落標題中（有序號 → 不允許 TURNING_RE rescue）
-# 偵測 PARTY_CLAIM_RE 是否為段落標題（不允許 TURNING_RE rescue）：
-# 從當前行起點到 party keyword 前，只有「序號 + 空白」→ 標題型
-# 「三、經查，原告主張」→ 前綴含「經查，」→ 不 match
-_HEADING_PREFIX_RE = re.compile(
-    r'(?:[一二三四五六七八九十壹貳參肆伍陸柒捌玖甲乙丙丁]+[、：,，]'
-    r'|[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑①②③④⑤⑥⑦⑧⑨⑩])'
-    r'[ \t　]*$'   # 序號後只允許空白
-)
 
 # ─── FilterContext ─────────────────────────────────────────────────────────────
 
@@ -822,26 +802,6 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
 
     return clean_text[pre_start: match_end + end]
 
-
-# def _accept_window(clean_text: str, match_start: int, match_end: int) -> str:
-#     """R002/R009/R010 共用的局部 context 窗口。
-#     前：最多 400 字，截斷到最近的 。/\\r\\n（取最靠近 match_start 的那個）。
-#     後：到最近的 。/\\r\\n（取最靠近 match_end 的那個），上限 200 字。
-#     """
-#     pre_start = max(0, match_start - 400)
-#     pre = clean_text[pre_start: match_start]
-#     cut = -1
-#     for sep in ('。', '\r\n'):
-#         idx = pre.rfind(sep)
-#         if idx != -1:
-#             pos = idx + len(sep)
-#             if pos > cut:
-#                 cut = pos
-#     if cut != -1:
-#         pre_start = pre_start + cut
-#     post = _post_sentence(clean_text, match_end)
-#     return clean_text[pre_start: match_end + len(post)]
-
 def _prev_heading_pos(clean_text: str, pos: int) -> int:
     """pos 之前最近的標題起點（_PARA_START_RE 或 \r\n）。"""
     window = clean_text[max(0, pos - 600): pos]
@@ -881,21 +841,21 @@ def _r001_self_citation(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
 
 
 def _r002_ben_yuan_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
-    """本院 resolved citations 需有 ACCEPT_STRICT_RE signal（clause_window 範圍內）。"""
+    """本院 resolved citations 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
     if c.chain_court_source != '本院':
         return None
-    window = _clause_window(ctx.clean_text, c.match_start, c.match_end)
-    if ACCEPT_STRICT_RE.search(window):
+    after = _post_sentence(ctx.clean_text, c.match_end)
+    if _CITE_CLOSING_RE.search(after):
         return None
     return "R002_ben_yuan_missing_intent"
 
 
 def _r009_district_court_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
-    """地方法院 decision 需有 ACCEPT_STRICT_RE signal（clause_window 範圍內）。"""
+    """地方法院 decision 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
     if c.citation_type != "decision" or '地方法院' not in c.court:
         return None
-    window = _clause_window(ctx.clean_text, c.match_start, c.match_end)
-    if ACCEPT_STRICT_RE.search(window):
+    after = _post_sentence(ctx.clean_text, c.match_end)
+    if _CITE_CLOSING_RE.search(after):
         return None
     return "R009_district_court_missing_intent"
 
@@ -930,7 +890,7 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     """
     Party-claim context check。
 
-    PARTY_CLAIM_RE 命中 → ACCEPT_RE rescue（但 _BLOCK_RESCUE_RE 可擋）→ reject
+    PARTY_CLAIM_RE 命中 → ACCEPT_STRICT_RE rescue（但 _BLOCK_RESCUE_RE 可擋）→ reject
     """
     heading_pos = _prev_heading_pos(ctx.clean_text, c.match_start)
     section_before = ctx.clean_text[heading_pos: c.match_start]
@@ -939,10 +899,10 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     if not pm:
         return None
 
-    # ACCEPT_RE rescue，但 _BLOCK_RESCUE_RE 可擋
+    # ACCEPT_STRICT_RE rescue，但 _BLOCK_RESCUE_RE 可擋
     pre3 = ctx.clean_text[max(0, c.match_start - 3): c.match_start]
     after_sent = _post_sentence(ctx.clean_text, c.match_end)
-    if ACCEPT_RE.search(pre3) or ACCEPT_RE.search(after_sent):
+    if ACCEPT_STRICT_RE.search(pre3) or ACCEPT_STRICT_RE.search(after_sent):
         after_long = _post_sentence(ctx.clean_text, c.match_end, cap=500)
         if not _BLOCK_RESCUE_RE.search(after_long):
             return None
@@ -951,7 +911,7 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
 
 
 def _r010_authority_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
-    """釋字/憲法法庭需要 ACCEPT_RE signal（clause_window 範圍內）。"""
+    """釋字/憲法法庭需要 ACCEPT_STRICT_RE signal（clause_window 範圍內）。"""
     if not c.needs_intent_signal:
         return None
     window = _clause_window(ctx.clean_text, c.match_start, c.match_end)
