@@ -423,7 +423,9 @@ def fetch_target_rankings(
     doc_types: list[str] | None = None,
     court_levels: list[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """依 source_ids 取 target 排行，單次 SQL 查詢完成聚合。"""
+    """依 source_ids 取 target 排行，單次 SQL 查詢完成聚合。
+    以 canonical_id 分組合併同字號不同 doc_type；total_citation_count 直接讀 decisions 欄位。
+    """
     if not source_ids:
         return []
 
@@ -431,7 +433,6 @@ def fetch_target_rankings(
     keyword_score_sql = build_keyword_score_sql(query_terms, params, "c.snippet")
     statute_score_sql = build_statute_score_sql(statute_filters, params, "c.id")
 
-    # target 層篩選條件（用 joined CTE 的欄位名）
     target_where = ""
     target_filters = []
     if doc_types:
@@ -447,120 +448,135 @@ def fetch_target_rankings(
         WITH src AS (
             SELECT UNNEST(%(source_ids)s::bigint[]) AS source_id
         ),
-        scored AS (
+        -- 判決引用：計算 score，並將 target 映射到 canonical_id
+        scored_decisions AS (
             SELECT
                 c.source_id,
-                c.target_id,
+                COALESCE(td.canonical_id, c.target_id) AS canonical_id,
+                ({keyword_score_sql})                   AS kw_score,
+                ({statute_score_sql})                   AS st_score
+            FROM citations c
+            JOIN src s        ON s.source_id = c.source_id
+            JOIN decisions td ON td.id       = c.target_id
+        ),
+        -- 非裁判引用：計算 score
+        scored_auth AS (
+            SELECT
+                c.source_id,
                 c.target_authority_id,
                 ({keyword_score_sql})  AS kw_score,
-                ({statute_score_sql})  AS st_score,
-                ({keyword_score_sql}) + ({statute_score_sql}) AS score
+                ({statute_score_sql})  AS st_score
             FROM citations c
             JOIN src s ON s.source_id = c.source_id
+            WHERE c.target_authority_id IS NOT NULL
         ),
-        deduped AS (
-            SELECT DISTINCT ON (
-                source_id,
-                COALESCE(target_id, -1),
-                COALESCE(target_authority_id, -1)
-            ) *
-            FROM scored
-            ORDER BY source_id,
-                     COALESCE(target_id, -1),
-                     COALESCE(target_authority_id, -1),
-                     score DESC
+        -- 同 (source, canonical) 保留最高分
+        deduped_decisions AS (
+            SELECT DISTINCT ON (source_id, canonical_id)
+                source_id, canonical_id,
+                kw_score, st_score, kw_score + st_score AS score
+            FROM scored_decisions
+            ORDER BY source_id, canonical_id, (kw_score + st_score) DESC
         ),
-        ranked AS (
+        -- 同 (source, authority) 保留最高分
+        deduped_auth AS (
+            SELECT DISTINCT ON (source_id, target_authority_id)
+                source_id, target_authority_id,
+                kw_score, st_score, kw_score + st_score AS score
+            FROM scored_auth
+            ORDER BY source_id, target_authority_id, (kw_score + st_score) DESC
+        ),
+        -- 按 canonical_id 聚合
+        ranked_decisions AS (
             SELECT
-                target_id,
+                canonical_id,
+                COUNT(*)       AS matched_citation_count,
+                SUM(score)     AS score,
+                SUM(kw_score)  AS keyword_score_sum,
+                SUM(st_score)  AS statute_score_sum
+            FROM deduped_decisions
+            GROUP BY canonical_id
+        ),
+        -- 按 authority 聚合
+        ranked_auth AS (
+            SELECT
                 target_authority_id,
                 COUNT(*)       AS matched_citation_count,
                 SUM(score)     AS score,
                 SUM(kw_score)  AS keyword_score_sum,
                 SUM(st_score)  AS statute_score_sum
-            FROM deduped
-            GROUP BY target_id, target_authority_id
+            FROM deduped_auth
+            GROUP BY target_authority_id
+        ),
+        -- 每個 canonical 群的聚合 doc_type（涵蓋所有 sibling）
+        canonical_doc_types AS (
+            SELECT
+                d.canonical_id,
+                CASE
+                  WHEN COUNT(DISTINCT d.doc_type) FILTER (WHERE d.doc_type IS NOT NULL) > 1 THEN '裁判'
+                  ELSE MAX(d.doc_type)
+                END AS doc_type
+            FROM decisions d
+            WHERE d.canonical_id IN (SELECT canonical_id FROM ranked_decisions)
+            GROUP BY d.canonical_id
         ),
         joined AS (
+            -- 判決 branch（以 canonical 為代表）
             SELECT
-                r.target_id,
-                r.target_authority_id,
-                r.matched_citation_count,
-                r.score,
-                r.keyword_score_sum,
-                r.statute_score_sum,
-                (
-                    SELECT COUNT(DISTINCT source_id)
-                    FROM citations c2
-                    WHERE c2.target_id = r.target_id
-                       OR c2.target_authority_id = r.target_authority_id
-                )                               AS total_citation_count,
-                COALESCE(td.root_norm, a.root_norm) AS court,
-                ({COURT_LEVEL_SQL})             AS court_level,
-                td.unit_norm,
-                td.jyear,
-                td.jcase_norm,
-                td.jno,
-                COALESCE(a.display,
-                         td.jyear::TEXT || '年度' || td.jcase_norm || '字第' || td.jno::TEXT || '號'
-                )                               AS display_title,
-                COALESCE(td.doc_type, a.doc_type) AS doc_type
-            FROM ranked r
-            LEFT JOIN decisions td    ON td.id = r.target_id
-            LEFT JOIN authorities a   ON a.id = r.target_authority_id
-        ),
-        -- 同案號多個 target_id（不同 doc_type）時，合計 citation count，
-        -- 取 matched_citation_count 最高的 target_id 為代表（最有可能有全文）
-        decisions_windowed AS (
-            SELECT
-                target_id,
-                target_authority_id,
-                matched_citation_count          AS orig_matched,
-                SUM(matched_citation_count) OVER w AS matched_citation_count,
-                SUM(total_citation_count)   OVER w AS total_citation_count,
-                SUM(score)                  OVER w AS score,
-                SUM(keyword_score_sum)      OVER w AS keyword_score_sum,
-                SUM(statute_score_sum)      OVER w AS statute_score_sum,
-                CASE WHEN MIN(doc_type) OVER w IS DISTINCT FROM MAX(doc_type) OVER w THEN '裁判'
-                     ELSE MAX(doc_type) OVER w
-                END                             AS doc_type,
-                court,
-                court_level,
-                unit_norm,
-                jyear,
-                jcase_norm,
-                jno,
-                display_title
-            FROM joined
-            WHERE target_id IS NOT NULL
-            WINDOW w AS (
-                PARTITION BY unit_norm, jyear, jcase_norm, jno
-                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-            )
-        ),
-        case_merged AS (
-            SELECT *
-            FROM (
-                SELECT DISTINCT ON (unit_norm, jyear, jcase_norm, jno)
-                    target_id, target_authority_id,
-                    matched_citation_count, total_citation_count,
-                    score, keyword_score_sum, statute_score_sum,
-                    doc_type, court, court_level,
-                    jyear, jcase_norm, jno, display_title
-                FROM decisions_windowed
-                ORDER BY unit_norm, jyear, jcase_norm, jno, orig_matched DESC
-            ) deduped_decisions
+                rd.canonical_id                                    AS target_id,
+                NULL::bigint                                       AS target_authority_id,
+                rd.matched_citation_count,
+                rd.score,
+                rd.keyword_score_sum,
+                rd.statute_score_sum,
+                canonical.total_citation_count,
+                canonical.root_norm                                AS court,
+                CASE canonical.root_norm
+                    WHEN '憲法法庭'       THEN 0
+                    WHEN '最高法院'       THEN 1  WHEN '最高行政法院'       THEN 1
+                    WHEN '高等法院'       THEN 2  WHEN '高等行政法院'       THEN 2  WHEN '智財商業法院' THEN 2
+                    WHEN '地方法院'       THEN 3  WHEN '少家法院'           THEN 3  WHEN '高等行政法院地方庭' THEN 3
+                    WHEN '地方法院簡易庭' THEN 4
+                END                                                AS court_level,
+                canonical.unit_norm,
+                canonical.jyear,
+                canonical.jcase_norm,
+                canonical.jno,
+                canonical.display_title,
+                COALESCE(cdt.doc_type, canonical.doc_type)        AS doc_type
+            FROM ranked_decisions rd
+            JOIN decisions canonical           ON canonical.id    = rd.canonical_id
+            LEFT JOIN canonical_doc_types cdt  ON cdt.canonical_id = rd.canonical_id
             UNION ALL
+            -- 非裁判 branch
             SELECT
-                target_id, target_authority_id,
-                matched_citation_count, total_citation_count,
-                score, keyword_score_sum, statute_score_sum,
-                doc_type, court, court_level,
-                jyear, jcase_norm, jno, display_title
-            FROM joined
-            WHERE target_authority_id IS NOT NULL
+                NULL::bigint                                       AS target_id,
+                ra.target_authority_id,
+                ra.matched_citation_count,
+                ra.score,
+                ra.keyword_score_sum,
+                ra.statute_score_sum,
+                (SELECT COUNT(DISTINCT c.source_id)
+                 FROM citations c WHERE c.target_authority_id = ra.target_authority_id
+                )                                                  AS total_citation_count,
+                a.root_norm                                        AS court,
+                CASE a.root_norm
+                    WHEN '憲法法庭'       THEN 0
+                    WHEN '最高法院'       THEN 1  WHEN '最高行政法院'       THEN 1
+                    WHEN '高等法院'       THEN 2  WHEN '高等行政法院'       THEN 2  WHEN '智財商業法院' THEN 2
+                    WHEN '地方法院'       THEN 3  WHEN '少家法院'           THEN 3  WHEN '高等行政法院地方庭' THEN 3
+                    WHEN '地方法院簡易庭' THEN 4
+                END                                                AS court_level,
+                NULL                                               AS unit_norm,
+                NULL                                               AS jyear,
+                NULL                                               AS jcase_norm,
+                NULL                                               AS jno,
+                a.display                                          AS display_title,
+                a.doc_type
+            FROM ranked_auth ra
+            JOIN authorities a ON a.id = ra.target_authority_id
         )
-        SELECT * FROM case_merged
+        SELECT * FROM joined
         {target_where}
         ORDER BY score DESC, statute_score_sum DESC, keyword_score_sum DESC, court_level ASC
     """
@@ -729,11 +745,10 @@ def fetch_semantic_source_rankings(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("""
             SELECT id,
-                   root_norm                                                  AS court,
+                   root_norm           AS court,
                    doc_type,
-                   decision_date::text                                        AS decision_date,
-                   jyear::text || '年度' || jcase_norm || '字第'
-                       || jno::text || '號'                                   AS display_title
+                   decision_date::text AS decision_date,
+                   display_title
             FROM decisions
             WHERE id = ANY(%(ids)s::bigint[])
         """, {"ids": sorted_dids})
@@ -748,10 +763,9 @@ def fetch_semantic_source_rankings(
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("""
                 SELECT id,
-                       root_norm                                              AS court,
+                       root_norm  AS court,
                        doc_type,
-                       jyear::text || '年度' || jcase_norm || '字第'
-                           || jno::text || '號'                               AS display_title
+                       display_title
                 FROM decisions
                 WHERE id = ANY(%(ids)s::bigint[])
             """, {"ids": list(all_target_ids)})

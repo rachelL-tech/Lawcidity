@@ -197,7 +197,7 @@ _SUB_CLAUSE_RE = re.compile(
 
 # ─── Filter RE ───────────────────────────────────────────────────────────────
 
-_CITE_CLOSING_RE = re.compile(r'意旨|參照|見解|供參|同此')
+_CITE_CLOSING_RE = re.compile(r'意旨|參照|(?<!相關)見解|供參|同此')
 
 _PRIOR_CASE_RE = re.compile(
     # ── 案件結果 ──
@@ -248,8 +248,6 @@ _EVIDENCE_CITE_RE = re.compile(
     r'|光碟'
     # ── 查閱/核閱 ──
     r'|查閱|核閱|調閱'
-    r'|此經'
-    r'|業據'
     # ── 在卷/附卷/存卷 ──
     r'|卷宗(?:可[稽查參])?'
     r'|在卷(?:可[稽查參])?'
@@ -768,37 +766,23 @@ def _clause_window(clean_text: str, match_start: int, match_end: int) -> str:
             idx = pos + len(sep)
     cuts.sort(reverse=True)  # 離 match 最近的在前
     if len(cuts) >= 2:
-        pre_start = pre_start + cuts[1]
+        # 若最近的分隔符是句號或換行，只截到第一個（不跨句）
+        nearest_char = pre[cuts[0] - 1] if cuts[0] > 0 else ''
+        nearest_2 = pre[cuts[0] - 2: cuts[0]] if cuts[0] >= 2 else ''
+        if nearest_char == '。' or nearest_2 == '\r\n':
+            pre_start = pre_start + cuts[0]
+        else:
+            pre_start = pre_start + cuts[1]
     # 0 or 1 個 separator → 用完整 200 字
 
-    # 往後：若第一個 separator 是句號，截到句號；否則截到第二個 separator
-    # 注意：往後不用「、」做截斷點，避免成對案號（A號、B號...可資參照）第一個案號漏收 accept signal
+    # 往後：截到最近的句號（。）或換行（\r）
     post_cap = 200
     raw = clean_text[match_end: match_end + post_cap]
-    _FWD_SEPS = ('，', '；', '。', '\r\n')
-    fwd_cuts: list[int] = []
-    for sep in _FWD_SEPS:
-        idx = 0
-        while True:
-            p = raw.find(sep, idx)
-            if p == -1:
-                break
-            fwd_cuts.append(p)
-            idx = p + len(sep)
-    fwd_cuts.sort()
     end = len(raw)
-    if fwd_cuts:
-        if raw[fwd_cuts[0]] == '。':
-            end = fwd_cuts[0]
-        else:
-            # 第二個 separator 必須是子句分隔符（，/；），不能是句號或換行
-            clause_cuts = [p for p in fwd_cuts[1:] if raw[p] not in ('。', '\r')]
-            if clause_cuts:
-                end = clause_cuts[0]
-            else:
-                # 沒有第二個子句分隔符，截到最近的句號或換行
-                sentence_cuts = [p for p in fwd_cuts if raw[p] in ('。', '\r')]
-                end = sentence_cuts[0] if sentence_cuts else fwd_cuts[0]
+    for sep in ('。', '\r'):
+        idx = raw.find(sep)
+        if idx != -1 and idx < end:
+            end = idx
 
     return clean_text[pre_start: match_end + end]
 

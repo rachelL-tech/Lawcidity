@@ -98,7 +98,16 @@ CREATE TABLE decisions (
   pdf_url       TEXT,
 
   created_at    TIMESTAMPTZ DEFAULT now(),
-  updated_at    TIMESTAMPTZ DEFAULT now()
+  updated_at    TIMESTAMPTZ DEFAULT now(),
+
+  -- ★ 同字號分組用：第一筆插入時 canonical_id = 自身 id，後續同字號不同 doc_type 指向第一筆
+  canonical_id        BIGINT REFERENCES decisions(id),
+  -- ★ 預計算顯示字串，省去各查詢重複 string concat
+  display_title       TEXT GENERATED ALWAYS AS (
+                        jyear::TEXT || '年度' || jcase_norm || '字第' || jno::TEXT || '號'
+                      ) STORED,
+  -- ★ denormalized 被引次數（按 canonical 群計），ingest 結束後批次更新
+  total_citation_count INT NOT NULL DEFAULT 0
 );
 
 -- jid 非空時唯一（正式文書）
@@ -111,6 +120,7 @@ CREATE UNIQUE INDEX decisions_placeholder_uniq
   WHERE jid IS NULL;
 
 CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
+CREATE INDEX decisions_canonical_idx  ON decisions(canonical_id);
 
 -- 現階段不必要的查詢索引（可日後補建）
 -- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);

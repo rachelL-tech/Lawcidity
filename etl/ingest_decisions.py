@@ -237,6 +237,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                     "pdf_url":       jpdf,
                 })
                 row = cur.fetchone()
+            _set_canonical_id(conn, row[0], unit_norm, jyear, jcase_norm, jno, case_type)
             conn.commit()
             return True, row[0]
 
@@ -253,7 +254,8 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
 def _insert_placeholder(conn, unit_norm: str, jyear: int, jcase_norm: str, jno: int,
                          doc_type: Optional[str], case_type: Optional[str],
                          root_norm: Optional[str] = None) -> Optional[int]:
-    """INSERT new placeholder，ON CONFLICT DO UPDATE 確保冪等，回傳 id"""
+    """INSERT new placeholder，ON CONFLICT DO UPDATE 確保冪等，回傳 id。
+    新插入的 row 會自動設 canonical_id（_set_canonical_id 冪等，重複呼叫無副作用）。"""
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -268,8 +270,10 @@ def _insert_placeholder(conn, unit_norm: str, jyear: int, jcase_norm: str, jno: 
                   "jyear": jyear, "jcase_norm": jcase_norm,
                   "jno": jno, "doc_type": doc_type})
             row = cur.fetchone()
-            conn.commit()
-            return row[0]
+        ph_id = row[0]
+        _set_canonical_id(conn, ph_id, unit_norm, jyear, jcase_norm, jno, case_type)
+        conn.commit()
+        return ph_id
     except Exception as e:
         print(f"錯誤：_insert_placeholder 失敗 - {e}")
         conn.rollback()
@@ -277,6 +281,49 @@ def _insert_placeholder(conn, unit_norm: str, jyear: int, jcase_norm: str, jno: 
 
 
 _RESOLVABLE_DOC_TYPES = {'判決', '裁定', '憲判字'}
+
+
+def _set_canonical_id(conn, new_id: int, unit_norm: str, jyear: int,
+                      jcase_norm: str, jno: int,
+                      case_type: Optional[str] = None) -> None:
+    """新 row 設 canonical_id：同字號＋同 case_type 已有 canonical → 指向它；否則自身為 canonical。
+    canonical_id 已設定時不修改（冪等）。"""
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE decisions
+            SET canonical_id = COALESCE(
+                (SELECT canonical_id FROM decisions
+                 WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
+                   AND case_type IS NOT DISTINCT FROM %s
+                   AND id != %s AND canonical_id IS NOT NULL
+                 ORDER BY id LIMIT 1),
+                %s
+            )
+            WHERE id = %s AND canonical_id IS NULL
+        """, (unit_norm, jyear, jcase_norm, jno, case_type, new_id, new_id, new_id))
+
+
+def _recompute_citation_counts(conn) -> int:
+    """重算所有 canonical 行的 total_citation_count，回傳更新筆數。
+    計算邏輯：同一 canonical 群下所有 sibling 的被引 source 去重總計。"""
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH counts AS (
+                SELECT d.canonical_id, COUNT(DISTINCT c.source_id) AS cnt
+                FROM decisions d
+                LEFT JOIN citations c ON c.target_id = d.id
+                WHERE d.canonical_id IS NOT NULL
+                GROUP BY d.canonical_id
+            )
+            UPDATE decisions d
+            SET total_citation_count = COALESCE(counts.cnt, 0)
+            FROM counts
+            WHERE d.id = d.canonical_id
+              AND d.canonical_id = counts.canonical_id
+        """)
+        updated = cur.rowcount
+    conn.commit()
+    return updated
 
 
 def _infer_level(unit_norm: str) -> int:
@@ -359,7 +406,7 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
                 conn.commit()
                 return ph[0]
 
-            # 找不到 → INSERT
+            # 找不到 → INSERT（_insert_placeholder 內部會設 canonical_id）
             return _insert_placeholder(conn, court, jyear, jcase_norm, jno, resolve_doc_type, ct, root_norm)
 
         else:
@@ -684,6 +731,10 @@ def main(folder_path: str):
     if deleted_ids:
         print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
 
+    n_updated = _recompute_citation_counts(conn)
+    if n_updated:
+        print(f"✓ 更新 {n_updated} 筆 canonical total_citation_count")
+
     conn.close()
     print(f"\n完成！成功 {success_count} 筆，失敗 {fail_count} 筆")
     print(f"✓ 已寫入 ingest_log：{folder_name}")
@@ -878,6 +929,10 @@ def main_regen(unit_norm_filter: str = ""):
     conn.commit()
     if deleted_ids:
         print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
+
+    n_updated = _recompute_citation_counts(conn)
+    if n_updated:
+        print(f"✓ 更新 {n_updated} 筆 canonical total_citation_count")
 
     conn.close()
     print(f"\n完成！重跑 {total} 筆")
