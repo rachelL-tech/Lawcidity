@@ -2,14 +2,17 @@
 """
 讀 citation_chunks → Qwen3-Embedding-0.6B @ 512 dims → UPDATE embedding 到 PostgreSQL。
 
-預設跳過已有 embedding 的 chunk（embedding IS NOT NULL），支援中斷續跑。
+優化：
+  (2) batch size 預設 128（原 32）
+  (4) text dedup：相同 chunk_text 只 embed 一次，UPDATE 套用所有相同 row
+      - 以 md5(chunk_text) 為 dedup key 與 checkpoint key
 
 Usage:
   python etl/embed_and_index.py                      # 全量（跳過已有 embedding）
   python etl/embed_and_index.py --reset              # 清空所有 embedding 後重跑
-  python etl/embed_and_index.py --limit 5000          # 只處理前 N 個 unique chunk
+  python etl/embed_and_index.py --limit 5000          # 只處理前 N 個 unique text
   python etl/embed_and_index.py --case-type 刑事      # 只處理特定 case_type
-  python etl/embed_and_index.py --embed-batch 32      # embedding batch size（default: 32）
+  python etl/embed_and_index.py --embed-batch 128     # embedding batch size（default: 128）
 """
 
 import argparse
@@ -41,10 +44,10 @@ def get_db_conn():
     return psycopg.connect(db_url, row_factory=dict_row)
 
 
-def fetch_unique_chunks(conn, *, case_type=None, after=None, limit=None):
+def fetch_unique_texts(conn, *, case_type=None, after_hash=None, limit=None):
     """
-    回傳待 embed 的 unique chunks（embedding IS NULL）。
-    after = (decision_id, chunk_index) — checkpoint 續跑用。
+    以 md5(chunk_text) 去重：相同文字只回傳一次。
+    after_hash = md5 hex string — checkpoint 續跑用。
     """
     where = ["embedding IS NULL"]
     params: dict = {}
@@ -53,26 +56,21 @@ def fetch_unique_chunks(conn, *, case_type=None, after=None, limit=None):
         where.append("case_type = %(case_type)s")
         params["case_type"] = case_type
 
-    if after:
-        where.append(
-            "(decision_id, chunk_index) > (%(after_did)s, %(after_ci)s)"
-        )
-        params["after_did"] = after[0]
-        params["after_ci"] = after[1]
+    if after_hash:
+        where.append("md5(chunk_text) > %(after_hash)s")
+        params["after_hash"] = after_hash
 
     where_sql = "WHERE " + " AND ".join(where)
     limit_sql = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
         SELECT
-            decision_id,
-            chunk_index,
-            MIN(chunk_text) AS chunk_text,
-            MIN(case_type)  AS case_type
+            MIN(chunk_text)        AS chunk_text,
+            md5(MIN(chunk_text))   AS text_hash
         FROM citation_chunks
         {where_sql}
-        GROUP BY decision_id, chunk_index
-        ORDER BY decision_id, chunk_index
+        GROUP BY md5(chunk_text)
+        ORDER BY text_hash
         {limit_sql}
     """
     return conn.execute(sql, params)
@@ -80,18 +78,16 @@ def fetch_unique_chunks(conn, *, case_type=None, after=None, limit=None):
 
 # ── Checkpoint ─────────────────────────────────────────────────────────────
 
-def load_checkpoint() -> tuple | None:
+def load_checkpoint() -> str | None:
     if CHECKPOINT_FILE.exists():
         data = json.loads(CHECKPOINT_FILE.read_text())
-        return (data["decision_id"], data["chunk_index"])
+        return data.get("text_hash")
     return None
 
 
-def save_checkpoint(decision_id: int, chunk_index: int):
+def save_checkpoint(text_hash: str):
     CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CHECKPOINT_FILE.write_text(
-        json.dumps({"decision_id": decision_id, "chunk_index": chunk_index})
-    )
+    CHECKPOINT_FILE.write_text(json.dumps({"text_hash": text_hash}))
 
 
 def clear_checkpoint():
@@ -138,19 +134,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Embed citation_chunks and store to PostgreSQL pgvector"
     )
-    parser.add_argument("--reset",      action="store_true",
+    parser.add_argument("--reset",       action="store_true",
                         help="清空所有 embedding 後重跑（會忽略 checkpoint）")
-    parser.add_argument("--limit",      type=int,
-                        help="最多處理 N 個 unique chunk")
-    parser.add_argument("--case-type",  type=str,
+    parser.add_argument("--limit",       type=int,
+                        help="最多處理 N 個 unique text")
+    parser.add_argument("--case-type",   type=str,
                         help="只處理特定 case_type")
-    parser.add_argument("--embed-batch",type=int, default=32,
-                        help="embedding batch size (default: 32)")
+    parser.add_argument("--embed-batch", type=int, default=128,
+                        help="embedding batch size (default: 128)")
     args = parser.parse_args()
 
     conn = get_db_conn()
 
-    # --reset：清空所有 embedding
     if args.reset:
         print("Resetting all embeddings (UPDATE embedding = NULL)...")
         conn.execute("UPDATE citation_chunks SET embedding = NULL")
@@ -158,38 +153,36 @@ def main():
         clear_checkpoint()
         print("Done.")
 
-    # Checkpoint（--reset 後 checkpoint 已清空）
-    after = load_checkpoint()
-    if after:
-        print(f"Resuming from checkpoint: decision_id={after[0]}, chunk_index={after[1]}")
+    after_hash = load_checkpoint()
+    if after_hash:
+        print(f"Resuming from checkpoint: text_hash > {after_hash[:8]}...")
 
-    # 先查總數（for progress display）
     count_where = "WHERE embedding IS NULL"
     count_params: dict = {}
     if args.case_type:
         count_where += " AND case_type = %(case_type)s"
         count_params["case_type"] = args.case_type
     row = conn.execute(
-        f"SELECT COUNT(DISTINCT (decision_id, chunk_index)) FROM citation_chunks {count_where}",
+        f"SELECT COUNT(DISTINCT md5(chunk_text)) AS cnt FROM citation_chunks {count_where}",
         count_params
     ).fetchone()
-    total_pending = row[0] if row else 0
-    print(f"Pending unique chunks: {total_pending}"
+    total_pending = row["cnt"] if row else 0
+    print(f"Pending unique texts: {total_pending}"
           + (f" (limit: {args.limit})" if args.limit else ""))
 
     model = load_model()
 
-    cursor = fetch_unique_chunks(
-        conn, case_type=args.case_type, after=after, limit=args.limit
+    cursor = fetch_unique_texts(
+        conn, case_type=args.case_type, after_hash=after_hash, limit=args.limit
     )
 
     t0 = time.time()
-    total_updated = 0
+    total_embedded = 0
     errors = 0
     embed_buf: list[dict] = []
 
     def flush(buf: list[dict]):
-        nonlocal total_updated, errors
+        nonlocal total_embedded, errors
         if not buf:
             return
 
@@ -202,26 +195,25 @@ def main():
             return
 
         params = [
-            (vec_to_pg(vec), row["decision_id"], row["chunk_index"])
+            (vec_to_pg(vec), row["chunk_text"])
             for row, vec in zip(buf, vectors)
         ]
         try:
             with conn.cursor() as cur:
                 cur.executemany(
                     "UPDATE citation_chunks SET embedding = %s::vector "
-                    "WHERE decision_id = %s AND chunk_index = %s",
+                    "WHERE chunk_text = %s AND embedding IS NULL",
                     params,
                 )
             conn.commit()
-            total_updated += len(buf)
+            total_embedded += len(buf)
         except Exception as e:
             conn.rollback()
             errors += len(buf)
             print(f"  ERROR: update failed — {e}", file=sys.stderr)
             return
 
-        last = buf[-1]
-        save_checkpoint(last["decision_id"], last["chunk_index"])
+        save_checkpoint(buf[-1]["text_hash"])
 
     for row in cursor:
         embed_buf.append(dict(row))
@@ -231,13 +223,12 @@ def main():
             embed_buf.clear()
 
             elapsed = time.time() - t0
-            rate = total_updated / elapsed if elapsed > 0 else 0
-            pct = total_updated / total_pending * 100 if total_pending else 0
-            eta = (total_pending - total_updated) / rate if rate > 0 else 0
-            print(f"  updated={total_updated}/{total_pending} ({pct:.1f}%), "
-                  f"errors={errors}, {rate:.0f} chunks/s, ETA {eta:.0f}s")
+            rate = total_embedded / elapsed if elapsed > 0 else 0
+            pct = total_embedded / total_pending * 100 if total_pending else 0
+            eta = (total_pending - total_embedded) / rate if rate > 0 else 0
+            print(f"  embedded={total_embedded}/{total_pending} ({pct:.1f}%), "
+                  f"errors={errors}, {rate:.1f} texts/s, ETA {eta:.0f}s")
 
-    # Final flush
     flush(embed_buf)
     embed_buf.clear()
 
@@ -245,9 +236,9 @@ def main():
     elapsed = time.time() - t0
 
     print(f"\n--- 完成 ---")
-    print(f"Updated: {total_updated}, Errors: {errors}")
+    print(f"Unique texts embedded: {total_embedded}, Errors: {errors}")
     if elapsed > 0:
-        print(f"Time: {elapsed:.1f}s ({total_updated/elapsed:.1f} chunks/s)")
+        print(f"Time: {elapsed:.1f}s ({total_embedded/elapsed:.1f} texts/s)")
     if not errors:
         clear_checkpoint()
         print("\n下一步：執行 HNSW index（見 sql/002_pgvector_migration.sql 步驟 4）")

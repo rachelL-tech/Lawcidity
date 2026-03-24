@@ -156,28 +156,28 @@ def embed_st_model(model_name: str, texts: list[str],
                         show_progress_bar=True, normalize_embeddings=True)
 
 
-def embed_voyage(texts: list[str]) -> np.ndarray:
-    try:
-        import voyageai
-    except ImportError:
-        print("ERROR: pip install voyageai")
-        sys.exit(1)
+def embed_gemini(texts: list[str]) -> np.ndarray:
+    from google import genai
 
-    api_key = os.environ.get("VOYAGE_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("ERROR: VOYAGE_API_KEY not set in .env")
+        print("ERROR: GEMINI_API_KEY not set in .env")
         sys.exit(1)
 
-    client = voyageai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key)
     embeddings = []
-    batch_size = 8  # stay within 10K TPM free tier limit
+    batch_size = 20
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        result = client.embed(batch, model="voyage-multilingual-2")
-        embeddings.extend(result.embeddings)
-        print(f"  Voyage: {min(i + batch_size, len(texts))}/{len(texts)}")
+        result = client.models.embed_content(
+            model="text-embedding-004",
+            contents=batch,
+        )
+        for emb in result.embeddings:
+            embeddings.append(emb.values)
+        print(f"  Gemini: {min(i + batch_size, len(texts))}/{len(texts)}")
         if i + batch_size < len(texts):
-            time.sleep(21)  # 3 RPM limit = 1 request per 20s
+            time.sleep(1)
 
     return np.array(embeddings)
 
@@ -238,26 +238,47 @@ def run_evaluation():
         print(f"  Saved to cache: {cache_file}")
         return emb
 
-    # Embed with 3 models (cached)
-    print("\n[1/3] Qwen/Qwen3-Embedding-0.6B @ 1024")
-    emb_qwen3_06b = cached_embed("qwen3-06b", lambda: embed_st_model(
+    def truncate_and_normalize(emb: np.ndarray, dim: int) -> np.ndarray:
+        t = emb[:, :dim].astype(np.float32)
+        norms = np.linalg.norm(t, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return t / norms
+
+    def truncate_and_normalize(emb: np.ndarray, dim: int) -> np.ndarray:
+        t = emb[:, :dim].astype(np.float32)
+        norms = np.linalg.norm(t, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return t / norms
+
+    # Load full 1024-dim embeddings (cached) as base for truncation
+    print("\n[base] Qwen/Qwen3-Embedding-0.6B @ 1024 (base for truncation)")
+    emb_1024 = cached_embed("qwen3-06b", lambda: embed_st_model(
         "Qwen/Qwen3-Embedding-0.6B", all_texts))
 
-    print("\n[2/3] Qwen/Qwen3-Embedding-0.6B @ 512")
-    emb_qwen3_06b_512 = cached_embed("qwen3-06b-512", lambda: embed_st_model(
-        "Qwen/Qwen3-Embedding-0.6B", all_texts, truncate_dim=512))
+    print("\n[1/4] Qwen3-0.6B @ 512 (truncated)")
+    emb_512 = cached_embed("qwen3-06b-512",
+                           lambda: truncate_and_normalize(emb_1024, 512))
 
-    print("\n[3/3] voyage-multilingual-2")
-    emb_voyage = cached_embed("voyage", lambda: embed_voyage(all_texts))
+    print("\n[2/4] Qwen3-0.6B @ 256 (truncated)")
+    emb_256 = cached_embed("qwen3-06b-256",
+                           lambda: truncate_and_normalize(emb_1024, 256))
+
+    print("\n[3/4] Qwen3-0.6B @ 128 (truncated)")
+    emb_128 = cached_embed("qwen3-06b-128",
+                           lambda: truncate_and_normalize(emb_1024, 128))
+
+    print("\n[4/4] Gemini text-embedding-004")
+    emb_gemini = cached_embed("gemini", lambda: embed_gemini(all_texts))
 
     n_q = len(queries)
     all_embs = {
-        "qwen3-06b":     emb_qwen3_06b,
-        "qwen3-06b-512": emb_qwen3_06b_512,
-        "voyage":        emb_voyage,
+        "q-512":  emb_512,
+        "q-256":  emb_256,
+        "q-128":  emb_128,
+        "gemini": emb_gemini,
     }
-    labels = ["qwen3-06b", "qwen3-06b-512", "voyage"]
-    gaps   = {k: [] for k in labels}
+    labels = ["q-512", "q-256", "q-128", "gemini"]
+    gaps    = {k: [] for k in labels}
     recalls = {k: [] for k in labels}
 
     print("\n" + "=" * 80)
@@ -299,18 +320,18 @@ def run_evaluation():
         print(f"    Query: {target['query'][:75]}...")
         print(f"    Related: {n_related}  |  Pool: {len(scored)}")
 
-        # Top 10 table (sorted by voyage as reference)
-        print(f"\n    {'Rank':<5} {'q-06b':>7} {'q-512':>7} {'voyage':>7}  Label")
-        print(f"    {'─' * 40}")
-        ref_ranked = ranked["voyage"]
+        # Top 10 table (sorted by gemini as reference)
+        print(f"\n    {'Rank':<5} {'q-512':>7} {'q-256':>7} {'q-128':>7} {'gemini':>7}  Label")
+        print(f"    {'─' * 52}")
+        ref_ranked = ranked["gemini"]
         for rank, r in enumerate(ref_ranked[:10]):
             label = "✓ rel" if r["related"] else "  ---"
-            print(f"    {rank+1:<5} {r['qwen3-06b']:>7.4f} {r['qwen3-06b-512']:>7.4f}"
-                  f" {r['voyage']:>7.4f}  {label}")
-        print(f"    (sorted by voyage score)")
+            print(f"    {rank+1:<5} {r['q-512']:>7.4f} {r['q-256']:>7.4f}"
+                  f" {r['q-128']:>7.4f} {r['gemini']:>7.4f}  {label}")
+        print(f"    (sorted by gemini score)")
 
         # Summary metrics
-        print(f"\n    {'Metric':<16} {'q-06b':>8} {'q-512':>8} {'voyage':>8}")
+        print(f"\n    {'Metric':<16} {'q-512':>8} {'q-256':>8} {'q-128':>8} {'gemini':>8}")
         print(f"    {'─' * 44}")
         for metric_name, get_val in [
             ("avg related",   lambda k: np.mean([r[k] for r in scored if r["related"]])),
@@ -320,13 +341,13 @@ def run_evaluation():
         ]:
             vals = [get_val(k) for k in labels]
             fmt = lambda v: f"{v:>8.4f}" if isinstance(v, float) else f"{v:>8}"
-            print(f"    {metric_name:<16} {fmt(vals[0])} {fmt(vals[1])} {fmt(vals[2])}")
+            print(f"    {metric_name:<16} " + " ".join(fmt(v) for v in vals))
 
     # Overall summary
     print(f"\n{'=' * 90}")
     print("OVERALL SUMMARY")
     print(f"{'=' * 90}")
-    print(f"  {'Metric':<18} {'q-06b':>8} {'q-512':>8} {'voyage':>8}")
+    print(f"  {'Metric':<18} {'q-512':>8} {'q-256':>8} {'q-128':>8} {'gemini':>8}")
     print(f"  {'─' * 46}")
     for metric_name, fn in [
         ("avg gap",      lambda k: np.mean(gaps[k])),
@@ -334,13 +355,14 @@ def run_evaluation():
         ("avg Recall@5", lambda k: np.mean(recalls[k])),
     ]:
         vals = [fn(k) for k in labels]
-        print(f"  {metric_name:<18} {vals[0]:>8.4f} {vals[1]:>8.4f} {vals[2]:>8.4f}")
+        print(f"  {metric_name:<18} " + " ".join(f"{v:>8.4f}" for v in vals))
 
     best = max(labels, key=lambda k: np.mean(gaps[k]))
     names = {
-        "qwen3-06b":     "Qwen3-Embedding-0.6B @ 1024",
-        "qwen3-06b-512": "Qwen3-Embedding-0.6B @ 512",
-        "voyage":        "voyage-multilingual-2",
+        "q-512":  "Qwen3-Embedding-0.6B @ 512",
+        "q-256":  "Qwen3-Embedding-0.6B @ 256",
+        "q-128":  "Qwen3-Embedding-0.6B @ 128",
+        "gemini": "Gemini text-embedding-004",
     }
     print(f"\n  → Winner by avg gap: {names[best]}")
 

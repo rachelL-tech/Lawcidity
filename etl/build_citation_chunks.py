@@ -32,12 +32,15 @@ MAX_CHUNK_LEN = 2000
 # 小節符 pattern（台灣法律文書常見）
 # minor markers 要求行首（\n 或文首），避免句中誤判
 SECTION_RE = re.compile(
-    r'(?:^|\n)[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩]'
-    r'|(?:^|\n)[⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑⒒⒓⒔⒕⒖⒗⒘⒙⒚⒛]'
-    r'|(?:^|\n)[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]'
-    r'|(?:^|\n)[⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽]'
-    r'|\n[一二三四五六七八九十]+、'
-    r'|\n（[一二三四五六七八九十]+）'
+    r'(?:^|\n)[ \t\u3000]*(?:'
+    r'[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩]'
+    r'|[⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑⒒⒓⒔⒕⒖⒗⒘⒙⒚⒛]'
+    r'|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]'
+    r'|[⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽]'
+    r'|[一二三四五六七八九十]+、'
+    r'|[（(][一二三四五六七八九十]+[）)]'
+    r'|[0-9０-９]{1,3}[.、](?![0-9０-９])'
+    r')'
 )
 
 FOOTER_RE = re.compile(r'中\s*華\s*民\s*國')
@@ -90,11 +93,14 @@ def find_reasoning_floor(text: str) -> int:
 
 
 def find_section_markers(text: str) -> list[int]:
-    """找出 text 中所有小節符的 offset（指向 marker 字元本身，不含前導 \\n）。"""
+    """找出 text 中所有小節符的 offset（指向 marker 字元本身，跳過前導 \\n 與空白）。"""
     result = []
     for m in SECTION_RE.finditer(text):
         pos = m.start()
         if text[pos] == '\n':
+            pos += 1
+        # 跳過縮排空白（如「  ㈡次按」的 2 個空格），指向 marker 字元本身
+        while pos < m.end() and text[pos] in ' \t\u3000':
             pos += 1
         result.append(pos)
     return result
