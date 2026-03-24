@@ -5,15 +5,12 @@
 -- 台灣標準時間（Asia/Taipei = UTC+8）
 ALTER DATABASE citations SET timezone = 'Asia/Taipei';
 
--- 中文 substring 搜尋（ILIKE '%關鍵字%'）的效能核心
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
-
 -- =========================
 -- 全 Reset（DROP 舊表 + 重建）
 -- 執行前請確認已連到正確 DB：\c citations
 -- =========================
-DROP TABLE IF EXISTS citation_snippet_statutes CASCADE;
+DROP TABLE IF EXISTS citation_chunks             CASCADE;
+DROP TABLE IF EXISTS citation_snippet_statutes   CASCADE;
 DROP TABLE IF EXISTS decision_reason_statutes    CASCADE;
 DROP TABLE IF EXISTS citations                   CASCADE;
 DROP TABLE IF EXISTS authorities                 CASCADE;
@@ -121,6 +118,8 @@ CREATE UNIQUE INDEX decisions_placeholder_uniq
 
 CREATE INDEX decisions_unit_idx       ON decisions(court_unit_id);
 CREATE INDEX decisions_canonical_idx  ON decisions(canonical_id);
+-- ingest 熱路徑：_set_canonical_id subquery + upsert_target_placeholder jid IS NOT NULL lookup
+CREATE INDEX decisions_case_lookup_idx ON decisions(unit_norm, jyear, jcase_norm, jno);
 
 -- 現階段不必要的查詢索引（可日後補建）
 -- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
@@ -278,3 +277,26 @@ CREATE TABLE ingest_error_log (
 CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
 -- 可選索引（resolved 狀態看板；目前 MVP 預設不建立）
 -- CREATE INDEX ingest_error_log_resolved_idx ON ingest_error_log(resolved);
+
+
+-- =========================
+-- 9) Citation 語意搜尋 chunks
+--    每筆 citation 對應一個 chunk（snippet-adjacent 切法）
+--    由 etl/build_citation_chunks.py 填充
+-- =========================
+CREATE TABLE citation_chunks (
+  id                  BIGSERIAL PRIMARY KEY,
+  decision_id         BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  citation_id         BIGINT NOT NULL REFERENCES citations(id) ON DELETE CASCADE,
+  target_id           BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
+  target_authority_id BIGINT          REFERENCES authorities(id) ON DELETE CASCADE,
+  chunk_index         INT NOT NULL,
+  start_offset        INT NOT NULL,
+  end_offset          INT NOT NULL,
+  chunk_text          TEXT NOT NULL,
+  case_type           TEXT,
+  created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX cc_decision_citation_uniq ON citation_chunks(decision_id, citation_id);
+CREATE INDEX        cc_decision_chunk_idx     ON citation_chunks(decision_id, chunk_index);

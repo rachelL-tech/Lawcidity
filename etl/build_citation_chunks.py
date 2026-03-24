@@ -5,7 +5,7 @@
 此表只存本機 DB，不同步 RDS。後續 index script 讀此表 → embed → 推 OS。
 
 Usage:
-  python etl/build_citation_chunks.py                # 全量處理
+  python etl/build_citation_chunks.py                # 全量處理（會先清空 citation_chunks）
   python etl/build_citation_chunks.py --resume        # 跳過已處理的 decision
   python etl/build_citation_chunks.py --decision-id 12345  # 單一 decision
   python etl/build_citation_chunks.py --batch-size 500     # 每批 commit 500 筆
@@ -198,35 +198,6 @@ def merge_overlapping(items: list[tuple]) -> list[tuple]:
 
 # ── DB ─────────────────────────────────────────────────────────────────────
 
-DDL = """
-CREATE TABLE IF NOT EXISTS citation_chunks (
-  id                  BIGSERIAL PRIMARY KEY,
-  decision_id         BIGINT NOT NULL,
-  citation_id         BIGINT NOT NULL,
-  target_id           BIGINT,
-  target_authority_id BIGINT,
-  chunk_index         INT NOT NULL,
-  start_offset        INT NOT NULL,
-  end_offset          INT NOT NULL,
-  chunk_text          TEXT NOT NULL,
-  case_type           TEXT,
-  created_at          TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS cc_decision_citation_uniq
-  ON citation_chunks(decision_id, citation_id);
-
-CREATE INDEX IF NOT EXISTS cc_decision_chunk_idx
-  ON citation_chunks(decision_id, chunk_index);
-"""
-
-
-def ensure_table(conn):
-    with conn.cursor() as cur:
-        cur.execute(DDL)
-    conn.commit()
-
-
 def get_db_connection():
     db_url = os.environ.get(
         "DATABASE_URL",
@@ -312,7 +283,6 @@ def main():
     args = parser.parse_args()
 
     conn = get_db_connection()
-    ensure_table(conn)
 
     if args.decision_id:
         count = process_decision(conn, args.decision_id)

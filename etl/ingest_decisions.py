@@ -613,7 +613,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
 # =========================
 # 主程式
 # =========================
-def main(folder_path: str):
+def main(folder_path: str, skip_recompute: bool = False):
     """掃描資料夾，匯入所有判決"""
     folder = Path(folder_path)
     if not folder.exists():
@@ -716,24 +716,8 @@ def main(folder_path: str):
         """, (folder_name, success_count, total_citations))
     conn.commit()
 
-    # 清理沒有任何 citation 指向的 placeholder
-    with conn.cursor() as cur:
-        cur.execute("""
-            DELETE FROM decisions
-            WHERE jid IS NULL
-              AND id NOT IN (
-                  SELECT DISTINCT target_id FROM citations WHERE target_id IS NOT NULL
-              )
-            RETURNING id
-        """)
-        deleted_ids = cur.fetchall()
-    conn.commit()
-    if deleted_ids:
-        print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
-
-    n_updated = _recompute_citation_counts(conn)
-    if n_updated:
-        print(f"✓ 更新 {n_updated} 筆 canonical total_citation_count")
+    if not skip_recompute:
+        _recompute_citation_counts(conn)
 
     conn.close()
     print(f"\n完成！成功 {success_count} 筆，失敗 {fail_count} 筆")
@@ -750,7 +734,12 @@ def main_batch(base_dir: str, keyword: str = ""):
     for folder in sorted(folders):
         print(f"\n{'='*40}")
         print(f"處理：{folder.name}")
-        main(str(folder))
+        main(str(folder), skip_recompute=True)
+
+    # 所有資料夾跑完後，統一重算 citation count（避免每個資料夾都跑一次全表掃描）
+    conn = get_db_connection()
+    _recompute_citation_counts(conn)
+    conn.close()
 
     # 印出本次 batch 的錯誤摘要
     conn = get_db_connection()
@@ -915,25 +904,7 @@ def main_regen(unit_norm_filter: str = ""):
         if i % 200 == 0:
             print(f"  進度：{i}/{total}")
 
-    # 清理孤兒 placeholder（stale cleanup 已刪掉指向它們的 citation row）
-    with conn.cursor() as cur:
-        cur.execute("""
-            DELETE FROM decisions
-            WHERE jid IS NULL
-              AND id NOT IN (
-                  SELECT DISTINCT target_id FROM citations WHERE target_id IS NOT NULL
-              )
-            RETURNING id
-        """)
-        deleted_ids = cur.fetchall()
-    conn.commit()
-    if deleted_ids:
-        print(f"✓ 清理 {len(deleted_ids)} 筆孤兒 placeholder")
-
-    n_updated = _recompute_citation_counts(conn)
-    if n_updated:
-        print(f"✓ 更新 {n_updated} 筆 canonical total_citation_count")
-
+    _recompute_citation_counts(conn)
     conn.close()
     print(f"\n完成！重跑 {total} 筆")
 

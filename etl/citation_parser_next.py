@@ -197,7 +197,7 @@ _SUB_CLAUSE_RE = re.compile(
 
 # ─── Filter RE ───────────────────────────────────────────────────────────────
 
-_CITE_CLOSING_RE = re.compile(r'意旨|參照|(?<!相關)見解|供參|同此')
+_CITE_CLOSING_RE = re.compile(r'意旨|參照|見解|供參|同此')
 
 _PRIOR_CASE_RE = re.compile(
     # ── 案件結果 ──
@@ -659,19 +659,19 @@ def _scan_agency_opinions(
 
 # ─── Regex constants ──────────────────────────────────────────────────────────
 
-# 嚴格 accept signal（R002 本院 / R009 地方法院）
-ACCEPT_STRICT_RE = re.compile(
+# accept signal（R002 本院 / R009 地方法院）
+ACCEPT_RE = re.compile(
     r'考諸|參照|同旨|判決意旨|裁定意旨|裁判意旨|同此'
     r'|指明|載明|闡釋|闡示|闡述|明示|係指|揭示'
     r'|可知|參酌|供參'
 )
 
-# 寬鬆 accept signal（R010 authority）
-ACCEPT_RE = re.compile(
-    r'參照|意旨|可參|供參|同旨|見解|同此|揆諸|考諸'
+# accept signal（R010 authority）
+ACCEPT_RE_R010 = re.compile(
+    r'參照|可參|同旨|同此|揆諸|考諸'
     r'|指明|載明|闡釋|闡示|闡述|明示|揭示'
     r'|係指|所謂|係就|係以'
-    r'|可知|參酌|釋明'
+    r'|可知|參酌|供參|釋明'
     r'|判決理由|理由書略以|要旨參|解釋在案|解釋文著有明文|解釋認'
 )
 
@@ -874,7 +874,7 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     """
     Party-claim context check。
 
-    PARTY_CLAIM_RE 命中 → ACCEPT_STRICT_RE rescue（但 _BLOCK_RESCUE_RE 可擋）→ reject
+    PARTY_CLAIM_RE 命中 → ACCEPT_RE rescue（但 _BLOCK_RESCUE_RE 可擋）→ reject
     """
     heading_pos = _prev_heading_pos(ctx.clean_text, c.match_start)
     section_before = ctx.clean_text[heading_pos: c.match_start]
@@ -883,10 +883,10 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     if not pm:
         return None
 
-    # ACCEPT_STRICT_RE rescue，但 _BLOCK_RESCUE_RE 可擋
+    # ACCEPT_RE rescue，但 _BLOCK_RESCUE_RE 可擋
     pre3 = ctx.clean_text[max(0, c.match_start - 3): c.match_start]
     after_sent = _post_sentence(ctx.clean_text, c.match_end)
-    if ACCEPT_STRICT_RE.search(pre3) or ACCEPT_STRICT_RE.search(after_sent):
+    if ACCEPT_RE.search(pre3) or ACCEPT_RE.search(after_sent):
         after_long = _post_sentence(ctx.clean_text, c.match_end, cap=500)
         if not _BLOCK_RESCUE_RE.search(after_long):
             return None
@@ -895,11 +895,11 @@ def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
 
 
 def _r010_authority_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
-    """釋字/憲法法庭需要 ACCEPT_STRICT_RE signal（clause_window 範圍內）。"""
+    """釋字/憲法法庭需要 ACCEPT_RE_R010 signal（clause_window 範圍內）。"""
     if not c.needs_intent_signal:
         return None
     window = _clause_window(ctx.clean_text, c.match_start, c.match_end)
-    if ACCEPT_RE.search(window):
+    if ACCEPT_RE_R010.search(window):
         return None
     return "R010_authority_missing_intent"
 
