@@ -5,6 +5,9 @@
 -- 台灣標準時間（Asia/Taipei = UTC+8）
 ALTER DATABASE citations SET timezone = 'Asia/Taipei';
 
+-- pgvector 擴充（RAG 語意搜尋用）
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- =========================
 -- 全 Reset（DROP 舊表 + 重建）
 -- 執行前請確認已連到正確 DB：\c citations
@@ -238,8 +241,7 @@ CREATE TABLE citation_snippet_statutes (
 );
 
 CREATE UNIQUE INDEX css_uniq            ON citation_snippet_statutes(citation_id, law, article_raw, sub_ref);
--- 可選索引（依 law/article 反查 citation 時使用；目前 MVP 預設不建立）
--- CREATE INDEX        css_law_article_idx ON citation_snippet_statutes(law, article_raw);
+CREATE INDEX        css_law_article_idx ON citation_snippet_statutes(law, article_raw);  -- RAG statute filter
 CREATE INDEX        css_citation_idx    ON citation_snippet_statutes(citation_id);
 
 
@@ -295,8 +297,12 @@ CREATE TABLE citation_chunks (
   end_offset          INT NOT NULL,
   chunk_text          TEXT NOT NULL,
   case_type           TEXT,
+  embedding           vector(512),          -- pgvector 語意向量（由 embed_and_index.py 填充）
   created_at          TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE UNIQUE INDEX cc_decision_citation_uniq ON citation_chunks(decision_id, citation_id);
 CREATE INDEX        cc_decision_chunk_idx     ON citation_chunks(decision_id, chunk_index);
+-- HNSW index 在 embed_and_index.py 跑完後另行執行（見 sql/002_pgvector_migration.sql）
+-- CREATE INDEX cc_embedding_hnsw ON citation_chunks USING hnsw (embedding vector_cosine_ops)
+--   WITH (m = 16, ef_construction = 64);

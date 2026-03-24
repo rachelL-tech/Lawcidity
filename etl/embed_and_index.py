@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """
-讀 citation_chunks → Qwen3-Embedding-0.6B @ 512 dims → bulk index 到 OpenSearch。
+讀 citation_chunks → Qwen3-Embedding-0.6B @ 512 dims → UPDATE embedding 到 PostgreSQL。
 
-每個 unique chunk (decision_id, chunk_index) 對應一筆 OS document。
-_id = "{decision_id}_{chunk_index}"
+預設跳過已有 embedding 的 chunk（embedding IS NOT NULL），支援中斷續跑。
 
 Usage:
-  python etl/embed_and_index.py                      # 全量
-  python etl/embed_and_index.py --resume              # 從上次中斷點繼續
-  python etl/embed_and_index.py --limit 5000          # 只 index 前 N 個 unique chunk
-  python etl/embed_and_index.py --case-type 刑事      # 只 index 特定 case_type
-  python etl/embed_and_index.py --recreate-index      # 刪掉舊 index 重建
-  python etl/embed_and_index.py --embed-batch 32      # embedding batch size
-  python etl/embed_and_index.py --index-batch 200     # OS bulk 每批筆數
-
-需要 SSH tunnel（若 OS 在遠端）：
-  ssh -L 9200:localhost:9200 ubuntu@<OS-EC2-IP>
+  python etl/embed_and_index.py                      # 全量（跳過已有 embedding）
+  python etl/embed_and_index.py --reset              # 清空所有 embedding 後重跑
+  python etl/embed_and_index.py --limit 5000          # 只處理前 N 個 unique chunk
+  python etl/embed_and_index.py --case-type 刑事      # 只處理特定 case_type
+  python etl/embed_and_index.py --embed-batch 32      # embedding batch size（default: 32）
 """
 
 import argparse
@@ -24,7 +18,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import numpy as np
 import psycopg
@@ -33,89 +26,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
-INDEX_NAME = "citation_chunks_v1"
 DIMS = 512
 CHECKPOINT_FILE = Path("scripts/embed_and_index_checkpoint.json")
-
-# Qwen3 instruction prefix（document 端不用 instruction，query 端才用）
-EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
-
-
-# ── Index mapping ──────────────────────────────────────────────────────────
-
-INDEX_MAPPING = {
-    "settings": {
-        "index": {
-            "knn": True,
-            "knn.algo_param.ef_search": 100,
-        }
-    },
-    "mappings": {
-        "properties": {
-            "decision_id":           {"type": "long"},
-            "case_type":             {"type": "keyword"},
-            "target_ids":            {"type": "long"},
-            "target_authority_ids":  {"type": "long"},
-            "chunk_index":           {"type": "integer"},
-            "start_offset":          {"type": "integer"},
-            "end_offset":            {"type": "integer"},
-            "embedding": {
-                "type": "knn_vector",
-                "dimension": DIMS,
-                "method": {
-                    "name":       "hnsw",
-                    "space_type": "cosinesimil",
-                    "engine":     "lucene",
-                    "parameters": {"ef_construction": 128, "m": 16},
-                },
-            },
-        }
-    },
-}
-
-
-# ── OpenSearch client ──────────────────────────────────────────────────────
-
-def build_os_client():
-    try:
-        from opensearchpy import OpenSearch
-    except ImportError:
-        print("ERROR: pip install opensearch-py")
-        sys.exit(1)
-
-    url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").strip()
-    parsed = urlparse(url)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 9200
-    use_ssl = scheme == "https"
-
-    username = os.environ.get("OPENSEARCH_USERNAME", "admin").strip()
-    password = os.environ.get("OPENSEARCH_PASSWORD", "").strip()
-
-    kwargs = {
-        "hosts": [{"host": host, "port": port}],
-        "http_auth": (username, password) if password else None,
-        "use_ssl": use_ssl,
-        "verify_certs": False,
-    }
-    if use_ssl:
-        kwargs["ssl_assert_hostname"] = False
-
-    return OpenSearch(**kwargs)
-
-
-def ensure_index(os_client, recreate: bool):
-    if recreate and os_client.indices.exists(index=INDEX_NAME):
-        os_client.indices.delete(index=INDEX_NAME)
-        print(f"Deleted existing index: {INDEX_NAME}")
-
-    if not os_client.indices.exists(index=INDEX_NAME):
-        os_client.indices.create(index=INDEX_NAME, body=INDEX_MAPPING)
-        print(f"Created index: {INDEX_NAME} (dim={DIMS})")
-    else:
-        count = os_client.count(index=INDEX_NAME)["count"]
-        print(f"Index {INDEX_NAME} exists ({count} docs)")
+MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────
@@ -128,12 +41,12 @@ def get_db_conn():
     return psycopg.connect(db_url, row_factory=dict_row)
 
 
-def fetch_chunks(conn, *, case_type: str | None, after: tuple | None, limit: int | None):
+def fetch_unique_chunks(conn, *, case_type=None, after=None, limit=None):
     """
-    回傳 unique chunks iterator。
-    after = (decision_id, chunk_index) — resume 用，跳過已處理的。
+    回傳待 embed 的 unique chunks（embedding IS NULL）。
+    after = (decision_id, chunk_index) — checkpoint 續跑用。
     """
-    where = []
+    where = ["embedding IS NULL"]
     params: dict = {}
 
     if case_type:
@@ -147,21 +60,15 @@ def fetch_chunks(conn, *, case_type: str | None, after: tuple | None, limit: int
         params["after_did"] = after[0]
         params["after_ci"] = after[1]
 
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    where_sql = "WHERE " + " AND ".join(where)
     limit_sql = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
         SELECT
             decision_id,
             chunk_index,
-            MIN(start_offset)   AS start_offset,
-            MIN(end_offset)     AS end_offset,
-            MIN(chunk_text)     AS chunk_text,
-            MIN(case_type)      AS case_type,
-            array_agg(DISTINCT target_id)
-                FILTER (WHERE target_id IS NOT NULL)            AS target_ids,
-            array_agg(DISTINCT target_authority_id)
-                FILTER (WHERE target_authority_id IS NOT NULL)  AS target_authority_ids
+            MIN(chunk_text) AS chunk_text,
+            MIN(case_type)  AS case_type
         FROM citation_chunks
         {where_sql}
         GROUP BY decision_id, chunk_index
@@ -194,9 +101,6 @@ def clear_checkpoint():
 
 # ── Embedding ──────────────────────────────────────────────────────────────
 
-MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
-
-
 def load_model():
     try:
         from mlx_embeddings.utils import load as mlx_load
@@ -223,95 +127,98 @@ def embed_batch(model_pair, texts: list[str]) -> np.ndarray:
     return embeds / norms
 
 
+def vec_to_pg(vec: np.ndarray) -> str:
+    """numpy vector → pgvector 文字格式 '[x1,x2,...]'"""
+    return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--resume",        action="store_true", help="從 checkpoint 繼續")
-    parser.add_argument("--recreate-index",action="store_true", help="刪掉舊 index 重建")
-    parser.add_argument("--limit",         type=int,            help="最多處理 N 個 unique chunk")
-    parser.add_argument("--case-type",     type=str,            help="只處理特定 case_type")
-    parser.add_argument("--embed-batch",   type=int, default=32,help="embedding batch size (default: 32)")
-    parser.add_argument("--index-batch",   type=int, default=200,help="OS bulk batch size (default: 200)")
+    parser = argparse.ArgumentParser(
+        description="Embed citation_chunks and store to PostgreSQL pgvector"
+    )
+    parser.add_argument("--reset",      action="store_true",
+                        help="清空所有 embedding 後重跑（會忽略 checkpoint）")
+    parser.add_argument("--limit",      type=int,
+                        help="最多處理 N 個 unique chunk")
+    parser.add_argument("--case-type",  type=str,
+                        help="只處理特定 case_type")
+    parser.add_argument("--embed-batch",type=int, default=32,
+                        help="embedding batch size (default: 32)")
     args = parser.parse_args()
 
-    # OS
-    os_client = build_os_client()
-    try:
-        info = os_client.info()
-        print(f"OpenSearch: {info['version']['number']} @ {os.environ.get('OPENSEARCH_URL','localhost:9200')}")
-    except Exception as e:
-        print(f"ERROR: 無法連到 OpenSearch — {e}")
-        print("提示：若 OS 在遠端，先開 SSH tunnel：ssh -L 9200:localhost:9200 ubuntu@<EC2-IP>")
-        sys.exit(1)
-
-    ensure_index(os_client, recreate=args.recreate_index)
-
-    # Checkpoint
-    after = None
-    if args.resume:
-        after = load_checkpoint()
-        if after:
-            print(f"Resume from checkpoint: decision_id={after[0]}, chunk_index={after[1]}")
-        else:
-            print("No checkpoint found, starting from beginning")
-    elif not args.recreate_index:
-        clear_checkpoint()
-
-    # DB + model
     conn = get_db_conn()
+
+    # --reset：清空所有 embedding
+    if args.reset:
+        print("Resetting all embeddings (UPDATE embedding = NULL)...")
+        conn.execute("UPDATE citation_chunks SET embedding = NULL")
+        conn.commit()
+        clear_checkpoint()
+        print("Done.")
+
+    # Checkpoint（--reset 後 checkpoint 已清空）
+    after = load_checkpoint()
+    if after:
+        print(f"Resuming from checkpoint: decision_id={after[0]}, chunk_index={after[1]}")
+
+    # 先查總數（for progress display）
+    count_where = "WHERE embedding IS NULL"
+    count_params: dict = {}
+    if args.case_type:
+        count_where += " AND case_type = %(case_type)s"
+        count_params["case_type"] = args.case_type
+    row = conn.execute(
+        f"SELECT COUNT(DISTINCT (decision_id, chunk_index)) FROM citation_chunks {count_where}",
+        count_params
+    ).fetchone()
+    total_pending = row[0] if row else 0
+    print(f"Pending unique chunks: {total_pending}"
+          + (f" (limit: {args.limit})" if args.limit else ""))
+
     model = load_model()
 
-    cursor = fetch_chunks(conn, case_type=args.case_type, after=after, limit=args.limit)
-
-    # Bulk indexing helpers
-    try:
-        from opensearchpy import helpers as os_helpers
-    except ImportError:
-        print("ERROR: pip install opensearch-py")
-        sys.exit(1)
+    cursor = fetch_unique_chunks(
+        conn, case_type=args.case_type, after=after, limit=args.limit
+    )
 
     t0 = time.time()
-    total_indexed = 0
+    total_updated = 0
     errors = 0
-    embed_buf: list[dict] = []   # buffer of chunk rows
-    last_checkpoint = after
+    embed_buf: list[dict] = []
 
     def flush(buf: list[dict]):
-        nonlocal total_indexed, errors
+        nonlocal total_updated, errors
         if not buf:
             return
 
         texts = [r["chunk_text"] for r in buf]
-        vectors = embed_batch(model, texts)
-
-        actions = []
-        for row, vec in zip(buf, vectors):
-            doc = {
-                "decision_id":          row["decision_id"],
-                "case_type":            row["case_type"],
-                "target_ids":           row["target_ids"] or [],
-                "target_authority_ids": row["target_authority_ids"] or [],
-                "chunk_index":          row["chunk_index"],
-                "start_offset":         row["start_offset"],
-                "end_offset":           row["end_offset"],
-                "embedding":            vec.tolist(),
-            }
-            actions.append({
-                "_index": INDEX_NAME,
-                "_id":    f"{row['decision_id']}_{row['chunk_index']}",
-                "_source": doc,
-            })
-
         try:
-            ok, errs = os_helpers.bulk(os_client, actions, raise_on_error=False)
-            total_indexed += ok
-            if errs:
-                errors += len(errs)
-                print(f"  WARN: {len(errs)} bulk errors in batch", file=sys.stderr)
+            vectors = embed_batch(model, texts)
         except Exception as e:
             errors += len(buf)
-            print(f"  ERROR: bulk failed — {e}", file=sys.stderr)
+            print(f"  ERROR: embed failed — {e}", file=sys.stderr)
+            return
+
+        params = [
+            (vec_to_pg(vec), row["decision_id"], row["chunk_index"])
+            for row, vec in zip(buf, vectors)
+        ]
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "UPDATE citation_chunks SET embedding = %s::vector "
+                    "WHERE decision_id = %s AND chunk_index = %s",
+                    params,
+                )
+            conn.commit()
+            total_updated += len(buf)
+        except Exception as e:
+            conn.rollback()
+            errors += len(buf)
+            print(f"  ERROR: update failed — {e}", file=sys.stderr)
+            return
 
         last = buf[-1]
         save_checkpoint(last["decision_id"], last["chunk_index"])
@@ -324,9 +231,11 @@ def main():
             embed_buf.clear()
 
             elapsed = time.time() - t0
-            rate = total_indexed / elapsed if elapsed > 0 else 0
-            print(f"  indexed={total_indexed}, errors={errors}, "
-                  f"{rate:.0f} chunks/s")
+            rate = total_updated / elapsed if elapsed > 0 else 0
+            pct = total_updated / total_pending * 100 if total_pending else 0
+            eta = (total_pending - total_updated) / rate if rate > 0 else 0
+            print(f"  updated={total_updated}/{total_pending} ({pct:.1f}%), "
+                  f"errors={errors}, {rate:.0f} chunks/s, ETA {eta:.0f}s")
 
     # Final flush
     flush(embed_buf)
@@ -336,10 +245,12 @@ def main():
     elapsed = time.time() - t0
 
     print(f"\n--- 完成 ---")
-    print(f"Indexed: {total_indexed}, Errors: {errors}")
-    print(f"Time: {elapsed:.1f}s ({total_indexed/elapsed:.0f} chunks/s)")
+    print(f"Updated: {total_updated}, Errors: {errors}")
+    if elapsed > 0:
+        print(f"Time: {elapsed:.1f}s ({total_updated/elapsed:.1f} chunks/s)")
     if not errors:
         clear_checkpoint()
+        print("\n下一步：執行 HNSW index（見 sql/002_pgvector_migration.sql 步驟 4）")
 
 
 if __name__ == "__main__":
