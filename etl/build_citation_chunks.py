@@ -37,6 +37,7 @@ SECTION_RE = re.compile(
     r'|(?:^|\n)[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]'
     r'|(?:^|\n)[⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽]'
     r'|\n[一二三四五六七八九十]+、'
+    r'|\n（[一二三四五六七八九十]+）'
 )
 
 FOOTER_RE = re.compile(r'中\s*華\s*民\s*國')
@@ -47,17 +48,44 @@ REASONING_RE = re.compile(
 )
 DISPOSITION_RE = re.compile(r'\n\s*主\s*文\s*\n')
 
+# 當事人欄（裁定等無理由/主文標題的文書用）
+# 比對格式：\n  原  告  王小明\n
+# 用 (?<=\n) lookbehind 而非消耗 \n，避免原告/被告等連續行只 match 第一行
+PARTIES_RE = re.compile(
+    r'(?<=\n)[ \t\u3000]*(?:原\s*告|被\s*告|上\s{0,2}訴\s{0,2}人|被\s*上\s*訴\s*人|'
+    r'抗\s*告\s*人|相\s*對\s*人|聲\s*請\s*人|再\s*抗\s*告\s*人|'
+    r'受\s*刑\s*人|債\s*務\s*人|債\s*權\s*人|異\s*議\s*人)[^\n]*\n'
+)
+
 
 # ── Chunking 邏輯 ─────────────────────────────────────────────────────────
 
 def find_reasoning_floor(text: str) -> int:
-    """找出理由段標題之後的位置，作為 chunk_start 下限。找不到則 fallback 到主文，再找不到回傳 0。"""
+    """找出理由段標題之後的位置，作為 chunk_start 下限。
+    fallback 順序：理由標題 → 主文 → 當事人欄末行（裁定等短文書）→ 0
+    """
     m = REASONING_RE.search(text)
     if m:
         return m.end()
     m = DISPOSITION_RE.search(text)
     if m:
         return m.end()
+    # 裁定等無標題文書：找當事人欄最後一行，限搜索前 20% 或前 600 字
+    search_limit = min(len(text), max(600, len(text) // 5))
+    last_party = None
+    for m in PARTIES_RE.finditer(text, 0, search_limit):
+        last_party = m
+    if last_party:
+        # 跳過接續行（僅有縮排 + 名字，無角色關鍵字，例如「　　　彭春嬌」）
+        pos = last_party.end()
+        continuation = re.compile(r'[ \t\u3000]+[^\n]*\r?\n')
+        while pos < search_limit:
+            m = continuation.match(text, pos)
+            if m:
+                pos = m.end()
+            else:
+                break
+        return pos
     return 0
 
 
@@ -126,8 +154,8 @@ def find_chunk_bounds(text: str, match_start: int, match_end: int,
         must_start = min(must_start, s_start)
         must_end = max(must_end, s_end)
 
-    # 2. 嘗試用小節符
-    before = [m for m in markers if m < must_start]
+    # 2. 嘗試用小節符（含 must_start 本身，避免 snippet 以小節符開頭時往前退一格）
+    before = [m for m in markers if m <= must_start]
     chunk_start = before[-1] if before else 0
 
     after = [m for m in markers if m > must_end]
@@ -142,24 +170,25 @@ def find_chunk_bounds(text: str, match_start: int, match_end: int,
     budget_before = max(budget_before // 2, 50)
 
     period_search_from = max(0, must_start - budget_before)
-    period_pos = text.rfind('。', period_search_from, must_start)
+    period_pos = text.find('。', period_search_from, must_start)  # 最遠的句號（最多 context）
     if period_pos >= 0:
         chunk_start = period_pos + 1
     else:
         chunk_start = max(0, must_start - budget_before)
 
-    # 5. 後端：從 must_end 往後找最近的。或小節符
+    # 5. 後端：從 must_end 往後找最遠的。或小節符
     remaining = MAX_CHUNK_LEN - (must_end - chunk_start)
+    budget_end = must_end + remaining
     if remaining > 0:
-        after_close = [m for m in after if m <= must_end + remaining]
+        after_close = [m for m in after if m <= budget_end]
         if after_close:
-            chunk_end = after_close[0]
+            chunk_end = after_close[0]  # 最近的小節符
         else:
-            period_after = text.find('。', must_end, must_end + remaining)
+            period_after = text.rfind('。', must_end, budget_end)  # 最遠的句號（最多 context）
             if period_after >= 0:
                 chunk_end = period_after + 1
             else:
-                chunk_end = min(len(text), must_end + remaining)
+                chunk_end = min(len(text), budget_end)
     else:
         chunk_end = must_end
 
@@ -271,6 +300,19 @@ def process_decision(conn, decision_id: int) -> int:
     return count
 
 
+def _parse_year_month(ym: str) -> tuple[str, str]:
+    """'202501' → ('2025-01-01', '2025-02-01')"""
+    if len(ym) != 6 or not ym.isdigit():
+        raise ValueError(f"--year-month 格式應為 YYYYMM，例如 202501，got: {ym}")
+    year, month = int(ym[:4]), int(ym[4:])
+    date_from = f"{year:04d}-{month:02d}-01"
+    if month == 12:
+        date_to = f"{year + 1:04d}-01-01"
+    else:
+        date_to = f"{year:04d}-{month + 1:02d}-01"
+    return date_from, date_to
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="從 citations 的 match_start/end 切出 snippet-adjacent chunks")
@@ -278,6 +320,8 @@ def main():
                         help="跳過已有 citation_chunks 的 decision")
     parser.add_argument("--decision-id", type=int,
                         help="只處理指定 decision_id")
+    parser.add_argument("--year-month", type=str,
+                        help="只處理指定月份的 decision（格式：YYYYMM，例如 202501）")
     parser.add_argument("--batch-size", type=int, default=200,
                         help="每幾筆 decision commit 一次 (default: 200)")
     args = parser.parse_args()
@@ -291,9 +335,18 @@ def main():
         conn.close()
         return
 
+    # 月份 filter
+    date_filter = ""
+    query_params: dict = {}
+    if args.year_month:
+        date_from, date_to = _parse_year_month(args.year_month)
+        date_filter = "AND d.decision_date >= %(date_from)s AND d.decision_date < %(date_to)s"
+        query_params = {"date_from": date_from, "date_to": date_to}
+        print(f"月份 filter：{date_from} ~ {date_to}")
+
     # 全量：找所有有 positioned citations 的 source decisions
     if args.resume:
-        source_query = """
+        source_query = f"""
             SELECT DISTINCT c.source_id
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
@@ -302,6 +355,29 @@ def main():
               AND NOT EXISTS (
                   SELECT 1 FROM citation_chunks cc WHERE cc.decision_id = c.source_id
               )
+              {date_filter}
+            ORDER BY c.source_id
+        """
+    elif args.year_month:
+        # 月份模式：不 TRUNCATE 整張表，只刪除該月份的舊 chunks
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM citation_chunks
+                WHERE decision_id IN (
+                    SELECT id FROM decisions
+                    WHERE decision_date >= %(date_from)s AND decision_date < %(date_to)s
+                )
+            """, query_params)
+            deleted = cur.rowcount
+        conn.commit()
+        print(f"已清除該月份舊 chunks：{deleted} rows")
+        source_query = f"""
+            SELECT DISTINCT c.source_id
+            FROM citations c
+            JOIN decisions d ON d.id = c.source_id
+            WHERE c.match_start IS NOT NULL
+              AND d.clean_text IS NOT NULL
+              {date_filter}
             ORDER BY c.source_id
         """
     else:
@@ -318,7 +394,7 @@ def main():
             ORDER BY c.source_id
         """
 
-    sources = conn.execute(source_query).fetchall()
+    sources = conn.execute(source_query, query_params).fetchall()
     total = len(sources)
     print(f"待處理: {total} decisions")
 

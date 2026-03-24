@@ -2,7 +2,7 @@
 # 說明：OpenSearch 以 security+password 模式啟動；搜尋 analyzer 由 index settings 定義（ngram）。
 services:
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: lawcidity-db
     restart: unless-stopped
     environment:
