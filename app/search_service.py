@@ -588,7 +588,7 @@ def fetch_target_rankings(
 
 # ── 語意搜尋 ─────────────────────────────────────────────────────────
 
-CHUNK_INDEX_NAME = "citation_chunks_v1"
+CHUNK_INDEX_NAME = "chunks_v1"
 QWEN3_QUERY_INSTRUCTION = "Instruct: 給定法律查詢，找出引用相關判決的法院判決段落\nQuery: "
 
 MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
@@ -671,7 +671,7 @@ def semantic_chunk_search(
     case_type: str | None,
     k: int = 200,
 ) -> list[dict[str, Any]]:
-    """Embed query → knn on citation_chunks_v1 → return scored chunk hits."""
+    """Embed query → knn on chunks_v1 → return scored chunk hits."""
     vecs = _embed_texts([QWEN3_QUERY_INSTRUCTION + query])
     vec = vecs[0]
 

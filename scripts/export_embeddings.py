@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Export / restore citation_chunks embeddings as JSONL.
+Export / restore chunks embeddings as JSONL.
 
 Usage:
   # Export existing embeddings to file
@@ -36,7 +36,7 @@ def cmd_export(out_path: Path):
     conn = get_db_conn()
 
     total = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM citation_chunks WHERE embedding IS NOT NULL"
+        "SELECT COUNT(*) AS cnt FROM chunks WHERE embedding IS NOT NULL"
     ).fetchone()["cnt"]
     print(f"Rows with embedding: {total}")
 
@@ -46,7 +46,7 @@ def cmd_export(out_path: Path):
 
     cursor = conn.execute("""
         SELECT id, decision_id, chunk_index, chunk_type, embedding::text AS emb
-        FROM citation_chunks
+        FROM chunks
         WHERE embedding IS NOT NULL
         ORDER BY id
     """)
@@ -90,13 +90,13 @@ def cmd_restore(in_path: Path, use_natural_key: bool = False):
 
     if use_natural_key:
         update_sql = """
-            UPDATE citation_chunks SET embedding = %s::vector
+            UPDATE chunks SET embedding = %s::vector
             WHERE decision_id = %s AND chunk_index = %s AND chunk_type = %s
         """
         def make_params(rec):
             return (rec["emb"], rec["decision_id"], rec["chunk_index"], rec["chunk_type"])
     else:
-        update_sql = "UPDATE citation_chunks SET embedding = %s::vector WHERE id = %s"
+        update_sql = "UPDATE chunks SET embedding = %s::vector WHERE id = %s"
         def make_params(rec):
             return (rec["emb"], rec["id"])
 
@@ -129,7 +129,7 @@ def cmd_restore(in_path: Path, use_natural_key: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export/restore citation_chunks embeddings")
+    parser = argparse.ArgumentParser(description="Export/restore chunks embeddings")
     sub = parser.add_subparsers(dest="cmd")
 
     p_export = sub.add_parser("export", help="Export embeddings to JSONL")

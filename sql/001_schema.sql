@@ -12,7 +12,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- 全 Reset（DROP 舊表 + 重建）
 -- 執行前請確認已連到正確 DB：\c citations
 -- =========================
-DROP TABLE IF EXISTS citation_chunks             CASCADE;
+DROP TABLE IF EXISTS chunks                      CASCADE;
 DROP TABLE IF EXISTS citation_snippet_statutes   CASCADE;
 DROP TABLE IF EXISTS decision_reason_statutes    CASCADE;
 DROP TABLE IF EXISTS citations                   CASCADE;
@@ -282,11 +282,11 @@ CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
 
 
 -- =========================
--- 9) Citation 語意搜尋 chunks
---    每筆 citation 對應一個 chunk（snippet-adjacent 切法）
---    由 etl/build_citation_chunks.py 填充
+-- 9) 語意搜尋 chunks
+--    chunk_type = 'citation_context'  : 引用前後文脈絡（由 etl/build_citation_chunks.py 填充）
+--    chunk_type = 'supreme_reasoning' : 最高法院理由段（由 etl/build_supreme_chunks.py 填充）
 -- =========================
-CREATE TABLE citation_chunks (
+CREATE TABLE chunks (
   id                  BIGSERIAL PRIMARY KEY,
   decision_id         BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
   citation_id         BIGINT          REFERENCES citations(id) ON DELETE CASCADE,
@@ -297,16 +297,16 @@ CREATE TABLE citation_chunks (
   end_offset          INT NOT NULL,
   chunk_text          TEXT NOT NULL,
   case_type           TEXT,
-  chunk_type          TEXT NOT NULL DEFAULT 'citation',  -- 'citation' | 'supreme'
+  chunk_type          TEXT NOT NULL DEFAULT 'citation_context',  -- 'citation_context' | 'supreme_reasoning'
   embedding           vector(1024),         -- pgvector 語意向量（voyage-law-2，由 embed_and_index.py 填充）
   created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE UNIQUE INDEX cc_decision_citation_uniq ON citation_chunks(decision_id, citation_id)
-  WHERE chunk_type = 'citation';
-CREATE UNIQUE INDEX cc_supreme_uniq ON citation_chunks(decision_id, chunk_index)
-  WHERE chunk_type = 'supreme';
-CREATE INDEX        cc_decision_chunk_idx     ON citation_chunks(decision_id, chunk_index);
+CREATE UNIQUE INDEX cc_decision_citation_uniq ON chunks(decision_id, citation_id)
+  WHERE chunk_type = 'citation_context';
+CREATE UNIQUE INDEX cc_supreme_uniq ON chunks(decision_id, chunk_index)
+  WHERE chunk_type = 'supreme_reasoning';
+CREATE INDEX        cc_decision_chunk_idx     ON chunks(decision_id, chunk_index);
 -- HNSW index 在 embed_and_index.py 跑完後另行執行（見 sql/002_pgvector_migration.sql）
--- CREATE INDEX cc_embedding_hnsw ON citation_chunks USING hnsw (embedding vector_cosine_ops)
+-- CREATE INDEX cc_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)
 --   WITH (m = 16, ef_construction = 64);

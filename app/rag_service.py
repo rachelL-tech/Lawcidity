@@ -74,7 +74,7 @@ def _path_a_knn(
 
     return conn.execute(f"""
         SELECT {CHUNK_SELECT}
-        FROM citation_chunks cc
+        FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
         WHERE {" AND ".join(where)}
         ORDER BY cc.embedding <=> %s::vector
@@ -102,10 +102,10 @@ def _path_b_statutes(
     # B1: citation chunks via citation_snippet_statutes
     b1_rows = conn.execute(f"""
         SELECT {CHUNK_SELECT}
-        FROM citation_chunks cc
+        FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
         WHERE cc.embedding IS NOT NULL
-          AND cc.chunk_type = 'citation'
+          AND cc.chunk_type = 'citation_context'
           AND cc.citation_id IN (
               SELECT DISTINCT citation_id
               FROM citation_snippet_statutes
@@ -117,10 +117,10 @@ def _path_b_statutes(
     # B2: supreme chunks via decision_reason_statutes
     b2_rows = conn.execute(f"""
         SELECT {CHUNK_SELECT}
-        FROM citation_chunks cc
+        FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
         WHERE cc.embedding IS NOT NULL
-          AND cc.chunk_type = 'supreme'
+          AND cc.chunk_type = 'supreme_reasoning'
           AND cc.decision_id IN (
               SELECT DISTINCT decision_id
               FROM decision_reason_statutes

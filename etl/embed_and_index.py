@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-讀 citation_chunks → voyage-law-2 @ 1024 dims → UPDATE embedding 到 PostgreSQL。
+讀 chunks → voyage-law-2 @ 1024 dims → UPDATE embedding 到 PostgreSQL。
 
 優化：
   (2) batch size 預設 128
@@ -86,7 +86,7 @@ def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, lim
         SELECT
             MIN(cc.chunk_text)        AS chunk_text,
             md5(MIN(cc.chunk_text))   AS text_hash
-        FROM citation_chunks cc
+        FROM chunks cc
         {join_sql}
         {where_sql}
         GROUP BY md5(cc.chunk_text)
@@ -149,7 +149,7 @@ def vec_to_pg(vec: np.ndarray) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description=f"Embed citation_chunks via {VOYAGE_MODEL} and store to PostgreSQL pgvector"
+        description=f"Embed chunks via {VOYAGE_MODEL} and store to PostgreSQL pgvector"
     )
     parser.add_argument("--reset",       action="store_true",
                         help="清空所有 embedding 後重跑（會忽略 checkpoint）")
@@ -167,7 +167,7 @@ def main():
 
     if args.reset:
         print("Resetting all embeddings (UPDATE embedding = NULL)...")
-        conn.execute("UPDATE citation_chunks SET embedding = NULL")
+        conn.execute("UPDATE chunks SET embedding = NULL")
         conn.commit()
         clear_checkpoint()
         print("Done.")
@@ -190,7 +190,7 @@ def main():
         count_params["date_from"] = datetime.date(year, mon, 1)
         count_params["date_to"] = datetime.date(year + mon // 12, mon % 12 + 1, 1)
     row = conn.execute(
-        f"SELECT COUNT(DISTINCT md5(cc.chunk_text)) AS cnt FROM citation_chunks cc {count_join} {count_where}",
+        f"SELECT COUNT(DISTINCT md5(cc.chunk_text)) AS cnt FROM chunks cc {count_join} {count_where}",
         count_params
     ).fetchone()
     total_pending = row["cnt"] if row else 0
@@ -230,7 +230,7 @@ def main():
         try:
             with conn.cursor() as cur:
                 cur.executemany(
-                    "UPDATE citation_chunks SET embedding = %s::vector "
+                    "UPDATE chunks SET embedding = %s::vector "
                     "WHERE chunk_text = %s AND embedding IS NULL",
                     params,
                 )

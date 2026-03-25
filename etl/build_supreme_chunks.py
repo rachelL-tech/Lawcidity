@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-最高法院 / 最高行政法院判決全文切 chunk，寫入 citation_chunks（chunk_type='supreme'）。
+最高法院 / 最高行政法院判決全文切 chunk，寫入 chunks（chunk_type='supreme_reasoning'）。
 
-與 build_citation_chunks.py 不同：
+與 build_chunks.py 不同：
   - 不需要 citation 錨點，直接切理由段全文
   - 起始位置：「得心證之理由」>「本院判斷」>「惟查」>「經查」>「理由」標題
-  - chunk_type = 'supreme'
+  - chunk_type = 'supreme_reasoning'
 
 Usage:
   python etl/build_supreme_chunks.py                      # 全量
@@ -34,7 +34,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 MAX_CHUNK_LEN = 2000
 
-# 小節符 pattern（與 build_citation_chunks.py 共用）
+# 小節符 pattern（與 build_chunks.py 共用）
 SECTION_RE = re.compile(
     r'(?:^|\n)[ \t\u3000]*(?:'
     r'[㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩]'
@@ -234,12 +234,12 @@ def process_decision(conn, decision: dict) -> int:
 
     with conn.cursor() as cur:
         cur.executemany("""
-            INSERT INTO citation_chunks
+            INSERT INTO chunks
                 (decision_id, chunk_index, start_offset, end_offset,
                  chunk_text, case_type, chunk_type)
             VALUES (%s, %s, %s, %s, %s, %s, 'supreme')
             ON CONFLICT (decision_id, chunk_index)
-                WHERE chunk_type = 'supreme'
+                WHERE chunk_type = 'supreme_reasoning'
             DO UPDATE SET
                 start_offset = EXCLUDED.start_offset,
                 end_offset   = EXCLUDED.end_offset,
@@ -298,8 +298,8 @@ def main():
         if month_from:
             print(f"Deleting supreme chunks for {args.month}...")
             conn.execute("""
-                DELETE FROM citation_chunks
-                WHERE chunk_type = 'supreme'
+                DELETE FROM chunks
+                WHERE chunk_type = 'supreme_reasoning'
                   AND decision_id IN (
                       SELECT id FROM decisions
                       WHERE root_norm IN ('最高法院', '最高行政法院')
@@ -309,7 +309,7 @@ def main():
             """, {"month_from": month_from, "month_to": month_to})
         else:
             print("Deleting existing supreme chunks...")
-            conn.execute("DELETE FROM citation_chunks WHERE chunk_type = 'supreme'")
+            conn.execute("DELETE FROM chunks WHERE chunk_type = 'supreme_reasoning'")
         conn.commit()
 
     # 查詢最高法院 + 最高行政法院
@@ -319,8 +319,8 @@ def main():
     if args.resume:
         extra.append("""
             d.id NOT IN (
-                SELECT DISTINCT decision_id FROM citation_chunks
-                WHERE chunk_type = 'supreme'
+                SELECT DISTINCT decision_id FROM chunks
+                WHERE chunk_type = 'supreme_reasoning'
             )
         """)
 

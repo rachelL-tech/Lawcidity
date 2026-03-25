@@ -220,6 +220,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                         %(doc_type)s, %(decision_date)s, %(title)s,
                         %(clean_text)s, %(pdf_url)s
                     )
+                    ON CONFLICT (jid) WHERE jid IS NOT NULL DO NOTHING
                     RETURNING id
                 """, {
                     "unit_norm":     unit_norm,
@@ -237,6 +238,11 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                     "pdf_url":       jpdf,
                 })
                 row = cur.fetchone()
+            if row is None:
+                # 並發 insert 被 unique constraint 擋下，另一個 process 搶先插入
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM decisions WHERE jid = %s", (jid,))
+                    row = cur.fetchone()
             _set_canonical_id(conn, row[0], unit_norm, jyear, jcase_norm, jno, case_type)
             conn.commit()
             return True, row[0]

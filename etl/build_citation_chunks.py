@@ -5,10 +5,10 @@
 此表只存本機 DB，不同步 RDS。後續 index script 讀此表 → embed → 推 OS。
 
 Usage:
-  python etl/build_citation_chunks.py                # 全量處理（會先清空 citation_chunks）
-  python etl/build_citation_chunks.py --resume        # 跳過已處理的 decision
-  python etl/build_citation_chunks.py --decision-id 12345  # 單一 decision
-  python etl/build_citation_chunks.py --batch-size 500     # 每批 commit 500 筆
+  python etl/build_chunks.py                # 全量處理（會先清空 chunks）
+  python etl/build_chunks.py --resume        # 跳過已處理的 decision
+  python etl/build_chunks.py --decision-id 12345  # 單一 decision
+  python etl/build_chunks.py --batch-size 500     # 每批 commit 500 筆
 """
 
 import argparse
@@ -244,7 +244,7 @@ def get_db_connection():
 # ── 處理邏輯 ───────────────────────────────────────────────────────────────
 
 def process_decision(conn, decision_id: int) -> int:
-    """處理一篇 decision，寫入 citation_chunks。回傳寫入筆數。"""
+    """處理一篇 decision，寫入 chunks。回傳寫入筆數。"""
     d = conn.execute(
         "SELECT id, case_type, clean_text "
         "FROM decisions WHERE id = %s", (decision_id,)
@@ -287,7 +287,7 @@ def process_decision(conn, decision_id: int) -> int:
             chunk_text = text[cs:ce]
             for c in chunk_cites:
                 cur.execute("""
-                    INSERT INTO citation_chunks
+                    INSERT INTO chunks
                         (decision_id, citation_id, target_id, target_authority_id,
                          chunk_index, start_offset, end_offset, chunk_text, case_type)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -323,7 +323,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="從 citations 的 match_start/end 切出 snippet-adjacent chunks")
     parser.add_argument("--resume", action="store_true",
-                        help="跳過已有 citation_chunks 的 decision")
+                        help="跳過已有 chunks 的 decision")
     parser.add_argument("--decision-id", type=int,
                         help="只處理指定 decision_id")
     parser.add_argument("--year-month", type=str,
@@ -359,7 +359,7 @@ def main():
             WHERE c.match_start IS NOT NULL
               AND d.clean_text IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM citation_chunks cc WHERE cc.decision_id = c.source_id
+                  SELECT 1 FROM chunks cc WHERE cc.decision_id = c.source_id
               )
               {date_filter}
             ORDER BY c.source_id
@@ -368,7 +368,7 @@ def main():
         # 月份模式：不 TRUNCATE 整張表，只刪除該月份的舊 chunks
         with conn.cursor() as cur:
             cur.execute("""
-                DELETE FROM citation_chunks
+                DELETE FROM chunks
                 WHERE decision_id IN (
                     SELECT id FROM decisions
                     WHERE decision_date >= %(date_from)s AND decision_date < %(date_to)s
@@ -389,7 +389,7 @@ def main():
     else:
         # 全量重建：先清空
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE citation_chunks")
+            cur.execute("TRUNCATE chunks")
         conn.commit()
         source_query = """
             SELECT DISTINCT c.source_id
