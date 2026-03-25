@@ -165,3 +165,48 @@ class DecisionDetail(BaseModel):
     clean_text: str | None
     total_citation_count: int
     statutes: list[DecisionStatute]
+
+
+# ── POST /search/rag ──────────────────────────────────────────────────────────
+
+class RagStatuteFilter(BaseModel):
+    law: str
+    article: str
+
+
+class RagSearchRequest(BaseModel):
+    query: str
+    case_type: str | None = None
+    statutes: list[RagStatuteFilter] = []
+    boost: float = 0.15
+    authority_boost: float = 0.05
+    top: int = 20
+
+
+class RagResultTarget(BaseModel):
+    id: int
+    display_title: str
+    root_norm: str
+    total_citation_count: int
+
+
+class RagResultItem(BaseModel):
+    type: str                   # "citation" | "supreme" | "supreme+citation"
+    decision_id: int
+    root_norm: str
+    display_title: str
+    doc_type: str | None
+    decision_date: str | None
+    case_type: str | None
+    score: float
+    sim: float
+    statute_hit: bool
+    chunk_count: int
+    chunk_types: list[str]
+    best_chunk_text: str
+    targets: list[RagResultTarget]
+
+
+class RagSearchResponse(BaseModel):
+    total: int
+    results: list[RagResultItem]

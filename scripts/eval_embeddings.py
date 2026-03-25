@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Embedding model comparison: sentence-transformers vs Gemini
-for legal text semantic search.
+Embedding model comparison for legal text semantic search.
 
 Usage:
   # Step 1: Select targets and generate test data
@@ -182,6 +181,28 @@ def embed_gemini(texts: list[str]) -> np.ndarray:
     return np.array(embeddings)
 
 
+def embed_voyage(texts: list[str], model_name: str) -> np.ndarray:
+    import voyageai
+
+    api_key = os.environ.get("VOYAGE_API_KEY")
+    if not api_key:
+        print("ERROR: VOYAGE_API_KEY not set in .env")
+        sys.exit(1)
+
+    vo = voyageai.Client(api_key=api_key)
+    embeddings = []
+    batch_size = 8
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        result = vo.embed(batch, model=model_name)
+        embeddings.extend(result.embeddings)
+        print(f"  {model_name}: {min(i + batch_size, len(texts))}/{len(texts)}")
+        if i + batch_size < len(texts):
+            time.sleep(1)
+
+    return np.array(embeddings)
+
+
 # ── Evaluation ────────────────────────────────────────────────────────
 
 def cosine_sim(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -244,40 +265,35 @@ def run_evaluation():
         norms[norms == 0] = 1
         return t / norms
 
-    def truncate_and_normalize(emb: np.ndarray, dim: int) -> np.ndarray:
-        t = emb[:, :dim].astype(np.float32)
-        norms = np.linalg.norm(t, axis=1, keepdims=True)
-        norms[norms == 0] = 1
-        return t / norms
+    def _load_qwen_512():
+        # Try truncation from cached 1024-dim base first
+        base_cache = cache_dir / "qwen3-06b.npy"
+        if base_cache.exists():
+            emb_1024 = np.load(base_cache)
+            return truncate_and_normalize(emb_1024, 512)
+        # Otherwise use sentence-transformers
+        emb_1024 = embed_st_model("Qwen/Qwen3-Embedding-0.6B", all_texts)
+        np.save(cache_dir / "qwen3-06b.npy", emb_1024)
+        return truncate_and_normalize(emb_1024, 512)
 
-    # Load full 1024-dim embeddings (cached) as base for truncation
-    print("\n[base] Qwen/Qwen3-Embedding-0.6B @ 1024 (base for truncation)")
-    emb_1024 = cached_embed("qwen3-06b", lambda: embed_st_model(
-        "Qwen/Qwen3-Embedding-0.6B", all_texts))
+    print("\n[1/3] Qwen3-0.6B @ 512")
+    emb_q512 = cached_embed("qwen3-06b-512", _load_qwen_512)
 
-    print("\n[1/4] Qwen3-0.6B @ 512 (truncated)")
-    emb_512 = cached_embed("qwen3-06b-512",
-                           lambda: truncate_and_normalize(emb_1024, 512))
+    print("\n[2/3] voyage-law-2")
+    emb_vlaw = cached_embed("voyage-law-2",
+                            lambda: embed_voyage(all_texts, "voyage-law-2"))
 
-    print("\n[2/4] Qwen3-0.6B @ 256 (truncated)")
-    emb_256 = cached_embed("qwen3-06b-256",
-                           lambda: truncate_and_normalize(emb_1024, 256))
-
-    print("\n[3/4] Qwen3-0.6B @ 128 (truncated)")
-    emb_128 = cached_embed("qwen3-06b-128",
-                           lambda: truncate_and_normalize(emb_1024, 128))
-
-    print("\n[4/4] Gemini text-embedding-004")
-    emb_gemini = cached_embed("gemini", lambda: embed_gemini(all_texts))
+    print("\n[3/3] voyage-4-large")
+    emb_v4l = cached_embed("voyage-4-large",
+                           lambda: embed_voyage(all_texts, "voyage-4-large"))
 
     n_q = len(queries)
     all_embs = {
-        "q-512":  emb_512,
-        "q-256":  emb_256,
-        "q-128":  emb_128,
-        "gemini": emb_gemini,
+        "q-512":   emb_q512,
+        "v-law-2": emb_vlaw,
+        "v-4-lg":  emb_v4l,
     }
-    labels = ["q-512", "q-256", "q-128", "gemini"]
+    labels = ["q-512", "v-law-2", "v-4-lg"]
     gaps    = {k: [] for k in labels}
     recalls = {k: [] for k in labels}
 
@@ -320,19 +336,20 @@ def run_evaluation():
         print(f"    Query: {target['query'][:75]}...")
         print(f"    Related: {n_related}  |  Pool: {len(scored)}")
 
-        # Top 10 table (sorted by gemini as reference)
-        print(f"\n    {'Rank':<5} {'q-512':>7} {'q-256':>7} {'q-128':>7} {'gemini':>7}  Label")
-        print(f"    {'─' * 52}")
-        ref_ranked = ranked["gemini"]
+        # Top 10 table (sorted by first model as reference)
+        header_cols = " ".join(f"{k:>8}" for k in labels)
+        print(f"\n    {'Rank':<5} {header_cols}  Label")
+        print(f"    {'─' * (5 + 9 * len(labels) + 7)}")
+        ref_ranked = ranked[labels[0]]
         for rank, r in enumerate(ref_ranked[:10]):
             label = "✓ rel" if r["related"] else "  ---"
-            print(f"    {rank+1:<5} {r['q-512']:>7.4f} {r['q-256']:>7.4f}"
-                  f" {r['q-128']:>7.4f} {r['gemini']:>7.4f}  {label}")
-        print(f"    (sorted by gemini score)")
+            vals = " ".join(f"{r[k]:>8.4f}" for k in labels)
+            print(f"    {rank+1:<5} {vals}  {label}")
+        print(f"    (sorted by {labels[0]} score)")
 
         # Summary metrics
-        print(f"\n    {'Metric':<16} {'q-512':>8} {'q-256':>8} {'q-128':>8} {'gemini':>8}")
-        print(f"    {'─' * 44}")
+        print(f"\n    {'Metric':<16} {header_cols}")
+        print(f"    {'─' * (16 + 9 * len(labels))}")
         for metric_name, get_val in [
             ("avg related",   lambda k: np.mean([r[k] for r in scored if r["related"]])),
             ("avg unrelated", lambda k: np.mean([r[k] for r in scored if not r["related"]])),
@@ -344,11 +361,12 @@ def run_evaluation():
             print(f"    {metric_name:<16} " + " ".join(fmt(v) for v in vals))
 
     # Overall summary
+    header_cols = " ".join(f"{k:>8}" for k in labels)
     print(f"\n{'=' * 90}")
     print("OVERALL SUMMARY")
     print(f"{'=' * 90}")
-    print(f"  {'Metric':<18} {'q-512':>8} {'q-256':>8} {'q-128':>8} {'gemini':>8}")
-    print(f"  {'─' * 46}")
+    print(f"  {'Metric':<18} {header_cols}")
+    print(f"  {'─' * (18 + 9 * len(labels))}")
     for metric_name, fn in [
         ("avg gap",      lambda k: np.mean(gaps[k])),
         ("min gap",      lambda k: np.min(gaps[k])),
@@ -360,9 +378,8 @@ def run_evaluation():
     best = max(labels, key=lambda k: np.mean(gaps[k]))
     names = {
         "q-512":  "Qwen3-Embedding-0.6B @ 512",
-        "q-256":  "Qwen3-Embedding-0.6B @ 256",
-        "q-128":  "Qwen3-Embedding-0.6B @ 128",
-        "gemini": "Gemini text-embedding-004",
+        "v-law-2": "voyage-law-2",
+        "v-4-lg":  "voyage-4-large",
     }
     print(f"\n  → Winner by avg gap: {names[best]}")
 

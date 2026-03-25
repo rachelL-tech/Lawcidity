@@ -114,7 +114,7 @@ export default function SearchResultsPage() {
               <span className="text-red-500">{error}</span>
             ) : results !== null ? (
               <>
-                找到 <span className="font-medium text-gray-800">{total}</span> 筆熱門實務見解
+                找到 <span className="font-medium text-gray-800">{total}</span> 筆相關實務見解
               </>
             ) : null}
           </div>
@@ -125,8 +125,8 @@ export default function SearchResultsPage() {
               <span className="text-gray-400">排序依據：</span>
               {[
                 { value: "relevance", label: "命中率" },
-                { value: "matched_citation_count", label: "引用數" },
-                // { value: "total_citation_count", label: "總引用數" },
+                { value: "matched_citation_count", label: "被提及次數" },
+                { value: "total_citation_count", label: "熱門程度" },
               ].map(({ value, label }) => (
                 <button
                   key={value}

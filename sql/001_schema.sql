@@ -289,7 +289,7 @@ CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
 CREATE TABLE citation_chunks (
   id                  BIGSERIAL PRIMARY KEY,
   decision_id         BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
-  citation_id         BIGINT NOT NULL REFERENCES citations(id) ON DELETE CASCADE,
+  citation_id         BIGINT          REFERENCES citations(id) ON DELETE CASCADE,
   target_id           BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
   target_authority_id BIGINT          REFERENCES authorities(id) ON DELETE CASCADE,
   chunk_index         INT NOT NULL,
@@ -297,11 +297,15 @@ CREATE TABLE citation_chunks (
   end_offset          INT NOT NULL,
   chunk_text          TEXT NOT NULL,
   case_type           TEXT,
-  embedding           vector(512),          -- pgvector 語意向量（由 embed_and_index.py 填充）
+  chunk_type          TEXT NOT NULL DEFAULT 'citation',  -- 'citation' | 'supreme'
+  embedding           vector(1024),         -- pgvector 語意向量（voyage-law-2，由 embed_and_index.py 填充）
   created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE UNIQUE INDEX cc_decision_citation_uniq ON citation_chunks(decision_id, citation_id);
+CREATE UNIQUE INDEX cc_decision_citation_uniq ON citation_chunks(decision_id, citation_id)
+  WHERE chunk_type = 'citation';
+CREATE UNIQUE INDEX cc_supreme_uniq ON citation_chunks(decision_id, chunk_index)
+  WHERE chunk_type = 'supreme';
 CREATE INDEX        cc_decision_chunk_idx     ON citation_chunks(decision_id, chunk_index);
 -- HNSW index 在 embed_and_index.py 跑完後另行執行（見 sql/002_pgvector_migration.sql）
 -- CREATE INDEX cc_embedding_hnsw ON citation_chunks USING hnsw (embedding vector_cosine_ops)

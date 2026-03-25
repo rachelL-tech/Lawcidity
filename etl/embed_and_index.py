@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-讀 citation_chunks → Qwen3-Embedding-0.6B @ 512 dims → UPDATE embedding 到 PostgreSQL。
+讀 citation_chunks → voyage-law-2 @ 1024 dims → UPDATE embedding 到 PostgreSQL。
 
 優化：
-  (2) batch size 預設 128（原 32）
+  (2) batch size 預設 128
   (4) text dedup：相同 chunk_text 只 embed 一次，UPDATE 套用所有相同 row
       - 以 md5(chunk_text) 為 dedup key 與 checkpoint key
+
+注意：DB schema 須為 vector(1024)，執行前請先跑 sql/003_voyage_migration.sql。
 
 Usage:
   python etl/embed_and_index.py                      # 全量（跳過已有 embedding）
   python etl/embed_and_index.py --reset              # 清空所有 embedding 後重跑
   python etl/embed_and_index.py --limit 5000          # 只處理前 N 個 unique text
   python etl/embed_and_index.py --case-type 刑事      # 只處理特定 case_type
+  python etl/embed_and_index.py --month 2024-01       # 只處理特定月份的判決
   python etl/embed_and_index.py --embed-batch 128     # embedding batch size（default: 128）
 """
 
@@ -29,9 +32,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
-DIMS = 512
+DIMS = 1024
+VOYAGE_MODEL = "voyage-law-2"
 CHECKPOINT_FILE = Path("scripts/embed_and_index_checkpoint.json")
-MLX_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────
@@ -44,20 +47,36 @@ def get_db_conn():
     return psycopg.connect(db_url, row_factory=dict_row)
 
 
-def fetch_unique_texts(conn, *, case_type=None, after_hash=None, limit=None):
+def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, limit=None):
     """
     以 md5(chunk_text) 去重：相同文字只回傳一次。
     after_hash = md5 hex string — checkpoint 續跑用。
+    month = 'YYYY-MM' — 只處理該月份判決的 chunks。
     """
-    where = ["embedding IS NULL"]
+    where = ["cc.embedding IS NULL"]
     params: dict = {}
+    join_sql = ""
 
     if case_type:
-        where.append("case_type = %(case_type)s")
+        where.append("cc.case_type = %(case_type)s")
         params["case_type"] = case_type
 
+    if month:
+        try:
+            year, mon = int(month[:4]), int(month[5:7])
+        except (ValueError, IndexError):
+            raise ValueError(f"--month 格式錯誤，應為 YYYY-MM，收到：{month!r}")
+        import datetime
+        date_from = datetime.date(year, mon, 1)
+        # 下個月第一天
+        date_to = datetime.date(year + mon // 12, mon % 12 + 1, 1)
+        join_sql = "JOIN decisions d ON d.id = cc.decision_id"
+        where.append("d.decision_date >= %(date_from)s AND d.decision_date < %(date_to)s")
+        params["date_from"] = date_from
+        params["date_to"] = date_to
+
     if after_hash:
-        where.append("md5(chunk_text) > %(after_hash)s")
+        where.append("md5(cc.chunk_text) > %(after_hash)s")
         params["after_hash"] = after_hash
 
     where_sql = "WHERE " + " AND ".join(where)
@@ -65,11 +84,12 @@ def fetch_unique_texts(conn, *, case_type=None, after_hash=None, limit=None):
 
     sql = f"""
         SELECT
-            MIN(chunk_text)        AS chunk_text,
-            md5(MIN(chunk_text))   AS text_hash
-        FROM citation_chunks
+            MIN(cc.chunk_text)        AS chunk_text,
+            md5(MIN(cc.chunk_text))   AS text_hash
+        FROM citation_chunks cc
+        {join_sql}
         {where_sql}
-        GROUP BY md5(chunk_text)
+        GROUP BY md5(cc.chunk_text)
         ORDER BY text_hash
         {limit_sql}
     """
@@ -97,27 +117,24 @@ def clear_checkpoint():
 
 # ── Embedding ──────────────────────────────────────────────────────────────
 
-def load_model():
+def load_voyage_client():
     try:
-        from mlx_embeddings.utils import load as mlx_load
+        import voyageai
     except ImportError:
-        print("ERROR: pip install mlx-embeddings")
+        print("ERROR: pip install voyageai")
         sys.exit(1)
-    print(f"Loading {MLX_MODEL} (truncate_dim={DIMS})...")
-    model, tokenizer = mlx_load(MLX_MODEL)
-    return model, tokenizer
+
+    api_key = os.environ.get("VOYAGE_API_KEY")
+    if not api_key:
+        print("ERROR: VOYAGE_API_KEY not set in .env")
+        sys.exit(1)
+
+    return voyageai.Client(api_key=api_key)
 
 
-def embed_batch(model_pair, texts: list[str]) -> np.ndarray:
-    import mlx.core as mx
-    model, tokenizer = model_pair
-    encoded = [tokenizer.encode(t, max_length=512, truncation=True) for t in texts]
-    max_len = max(len(e) for e in encoded)
-    pad_id = tokenizer.pad_token_id or 0
-    padded = [e + [pad_id] * (max_len - len(e)) for e in encoded]
-    mask = [[1] * len(e) + [0] * (max_len - len(e)) for e in encoded]
-    out = model(mx.array(padded), attention_mask=mx.array(mask))
-    embeds = np.array(out.text_embeds)[:, :DIMS]
+def embed_batch(client, texts: list[str]) -> np.ndarray:
+    result = client.embed(texts, model=VOYAGE_MODEL)
+    embeds = np.array(result.embeddings, dtype=np.float32)
     norms = np.linalg.norm(embeds, axis=1, keepdims=True)
     norms[norms == 0] = 1
     return embeds / norms
@@ -132,7 +149,7 @@ def vec_to_pg(vec: np.ndarray) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Embed citation_chunks and store to PostgreSQL pgvector"
+        description=f"Embed citation_chunks via {VOYAGE_MODEL} and store to PostgreSQL pgvector"
     )
     parser.add_argument("--reset",       action="store_true",
                         help="清空所有 embedding 後重跑（會忽略 checkpoint）")
@@ -140,8 +157,10 @@ def main():
                         help="最多處理 N 個 unique text")
     parser.add_argument("--case-type",   type=str,
                         help="只處理特定 case_type")
-    parser.add_argument("--embed-batch", type=int, default=128,
-                        help="embedding batch size (default: 128)")
+    parser.add_argument("--month",       type=str,
+                        help="只處理特定月份判決的 chunks，格式 YYYY-MM")
+    parser.add_argument("--embed-batch", type=int, default=64,
+                        help="embedding batch size (default: 64)")
     args = parser.parse_args()
 
     conn = get_db_conn()
@@ -157,23 +176,33 @@ def main():
     if after_hash:
         print(f"Resuming from checkpoint: text_hash > {after_hash[:8]}...")
 
-    count_where = "WHERE embedding IS NULL"
+    count_join = ""
+    count_where = "WHERE cc.embedding IS NULL"
     count_params: dict = {}
     if args.case_type:
-        count_where += " AND case_type = %(case_type)s"
+        count_where += " AND cc.case_type = %(case_type)s"
         count_params["case_type"] = args.case_type
+    if args.month:
+        import datetime
+        year, mon = int(args.month[:4]), int(args.month[5:7])
+        count_join = "JOIN decisions d ON d.id = cc.decision_id"
+        count_where += " AND d.decision_date >= %(date_from)s AND d.decision_date < %(date_to)s"
+        count_params["date_from"] = datetime.date(year, mon, 1)
+        count_params["date_to"] = datetime.date(year + mon // 12, mon % 12 + 1, 1)
     row = conn.execute(
-        f"SELECT COUNT(DISTINCT md5(chunk_text)) AS cnt FROM citation_chunks {count_where}",
+        f"SELECT COUNT(DISTINCT md5(cc.chunk_text)) AS cnt FROM citation_chunks cc {count_join} {count_where}",
         count_params
     ).fetchone()
     total_pending = row["cnt"] if row else 0
     print(f"Pending unique texts: {total_pending}"
           + (f" (limit: {args.limit})" if args.limit else ""))
+    print(f"Model: {VOYAGE_MODEL} @ {DIMS} dims")
 
-    model = load_model()
+    client = load_voyage_client()
 
     cursor = fetch_unique_texts(
-        conn, case_type=args.case_type, after_hash=after_hash, limit=args.limit
+        conn, case_type=args.case_type, month=args.month,
+        after_hash=after_hash, limit=args.limit
     )
 
     t0 = time.time()
@@ -188,7 +217,7 @@ def main():
 
         texts = [r["chunk_text"] for r in buf]
         try:
-            vectors = embed_batch(model, texts)
+            vectors = embed_batch(client, texts)
         except Exception as e:
             errors += len(buf)
             print(f"  ERROR: embed failed — {e}", file=sys.stderr)
@@ -241,7 +270,7 @@ def main():
         print(f"Time: {elapsed:.1f}s ({total_embedded/elapsed:.1f} texts/s)")
     if not errors:
         clear_checkpoint()
-        print("\n下一步：執行 HNSW index（見 sql/002_pgvector_migration.sql 步驟 4）")
+        print("\n下一步：執行 HNSW index（見 sql/003_voyage_migration.sql）")
 
 
 if __name__ == "__main__":
