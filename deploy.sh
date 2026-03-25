@@ -3,12 +3,12 @@ set -euo pipefail
 
 echo "=== Lawcidity Deploy ==="
 
-if [ ! -f .env.prod ]; then
-    echo "ERROR: .env.prod not found. Copy .env.prod.example to .env.prod and fill in values."
+if [ ! -f .env ]; then
+    echo "ERROR: .env not found. Create .env and fill in values."
     exit 1
 fi
 
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 
 echo ""
 docker compose -f docker-compose.prod.yml ps
