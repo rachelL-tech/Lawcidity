@@ -85,13 +85,17 @@ CHUNK_SELECT = """
 """
 
 
-def path_a_knn(conn, vec_str: str, *, case_type: str | None, limit: int) -> list[dict]:
+def path_a_knn(conn, vec_str: str, *, case_type: str | None, limit: int,
+               chunk_type: str | None = None) -> list[dict]:
     """Path A: 純語意 HNSW knn。"""
     where = ["cc.embedding IS NOT NULL"]
     params: list = [vec_str]
     if case_type:
         where.append("cc.case_type = %s")
         params.append(case_type)
+    if chunk_type:
+        where.append("cc.chunk_type = %s")
+        params.append(chunk_type)
     params.extend([vec_str, limit])
 
     return conn.execute(f"""
@@ -183,11 +187,10 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
     # Score each chunk
     for c in chunks.values():
         sim = 1 - float(c["distance"])
-        # statute hit: citation chunk 的 citation_id 命中，或 supreme chunk 的 decision_id 命中
         stat_hit = False
-        if c["chunk_type"] == "citation" and c.get("citation_id") in statute_cit_ids:
+        if c["chunk_type"] == "citation_context" and c.get("citation_id") in statute_cit_ids:
             stat_hit = True
-        elif c["chunk_type"] == "supreme" and c["decision_id"] in statute_decision_ids:
+        elif c["chunk_type"] == "supreme_reasoning" and c["decision_id"] in statute_decision_ids:
             stat_hit = True
         elif c.get("from_statute"):
             stat_hit = True
@@ -206,9 +209,9 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
         best = max(dec_chunks, key=lambda x: x["score"])
         chunk_types = set(c["chunk_type"] for c in dec_chunks)
 
-        if "supreme" in chunk_types and "citation" in chunk_types:
+        if "supreme_reasoning" in chunk_types and "citation_context" in chunk_types:
             result_type = "supreme+citation"
-        elif "supreme" in chunk_types:
+        elif "supreme_reasoning" in chunk_types:
             result_type = "supreme"
         else:
             result_type = "citation"
@@ -216,7 +219,7 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
         # Collect targets from citation chunks
         targets = []
         for c in dec_chunks:
-            if c["chunk_type"] == "citation" and c.get("target_id"):
+            if c["chunk_type"] == "citation_context" and c.get("target_id"):
                 targets.append(c["target_id"])
 
         # Authority boost (for citation chunks, use target's citation count)
@@ -249,16 +252,20 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
 # ── Main ──────────────────────────────────────────────────────────────
 
 def search(query: str, *, case_type: str | None, statutes: list[tuple[str, str]],
-           boost: float, authority_boost: float, top: int):
+           boost: float, authority_boost: float, top: int,
+           supreme_only: bool = False):
     vec = embed_query(query)
     vec_str = vec_to_pg(vec)
 
     db_url = os.environ.get("DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/citations")
 
+    chunk_type_filter = "supreme_reasoning" if supreme_only else None
+
     with psycopg.connect(db_url, row_factory=dict_row) as conn:
         # Path A: HNSW knn
-        knn_rows = path_a_knn(conn, vec_str, case_type=case_type, limit=50)
+        knn_rows = path_a_knn(conn, vec_str, case_type=case_type, limit=50,
+                               chunk_type=chunk_type_filter)
 
         # Path B: statute brute-force
         statute_rows = path_b_statutes(conn, vec_str, statutes, case_type=case_type)
@@ -325,6 +332,8 @@ def main():
                         help="authority citation count boost (default: 0.05)")
     parser.add_argument("--top", type=int, default=20,
                         help="results to show (default: 20)")
+    parser.add_argument("--supreme-only", action="store_true",
+                        help="只召回 supreme_reasoning chunks（驗證最高法院覆蓋率）")
     args = parser.parse_args()
 
     statutes = parse_statutes(args.statutes) if args.statutes else []
@@ -339,6 +348,7 @@ def main():
     results = search(
         args.query, case_type=args.case_type, statutes=statutes,
         boost=args.boost, authority_boost=args.authority_boost, top=args.top,
+        supreme_only=args.supreme_only,
     )
 
     # Header

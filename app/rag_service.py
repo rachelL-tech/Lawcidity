@@ -166,9 +166,9 @@ def _merge_and_aggregate(
     for c in chunks.values():
         sim = 1 - float(c["distance"])
         stat_hit = False
-        if c["chunk_type"] == "citation" and c.get("citation_id") in statute_cit_ids:
+        if c["chunk_type"] == "citation_context" and c.get("citation_id") in statute_cit_ids:
             stat_hit = True
-        elif c["chunk_type"] == "supreme" and c["decision_id"] in statute_decision_ids:
+        elif c["chunk_type"] == "supreme_reasoning" and c["decision_id"] in statute_decision_ids:
             stat_hit = True
         elif c.get("from_statute"):
             stat_hit = True
@@ -187,16 +187,16 @@ def _merge_and_aggregate(
         best = max(dec_chunks, key=lambda x: x["score"])
         chunk_types = set(c["chunk_type"] for c in dec_chunks)
 
-        if "supreme" in chunk_types and "citation" in chunk_types:
+        if "supreme_reasoning" in chunk_types and "citation_context" in chunk_types:
             result_type = "supreme+citation"
-        elif "supreme" in chunk_types:
+        elif "supreme_reasoning" in chunk_types:
             result_type = "supreme"
         else:
             result_type = "citation"
 
         targets = []
         for c in dec_chunks:
-            if c["chunk_type"] == "citation" and c.get("target_id"):
+            if c["chunk_type"] == "citation_context" and c.get("target_id"):
                 targets.append(c["target_id"])
 
         auth_score = 0
