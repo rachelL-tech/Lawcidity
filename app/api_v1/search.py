@@ -19,8 +19,6 @@ from app.search_service import (
     parse_case_types,
     search_source_ids_opensearch,
     fetch_target_rankings,
-    semantic_chunk_search,
-    fetch_semantic_source_rankings,
 )
 from app.api_v1.schemas import (
     SearchRequest,
@@ -29,10 +27,6 @@ from app.api_v1.schemas import (
     SearchContext,
     StatuteFilter,
     RerankRequest,
-    SemanticSearchRequest,
-    SemanticSearchResponse,
-    SemanticSourceItem,
-    SemanticTarget,
     RagSearchRequest,
     RagSearchResponse,
     RagResultItem,
