@@ -139,40 +139,6 @@ def search(req: SearchRequest):
         ),
     )
 
-
-@router.post("/search/semantic", response_model=SemanticSearchResponse)
-def search_semantic(req: SemanticSearchRequest):
-    try:
-        chunks = semantic_chunk_search(
-            query=req.query,
-            case_type=req.case_type,
-            k=req.k,
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"語意搜尋失敗：{e}")
-
-    with get_conn() as conn:
-        all_results = fetch_semantic_source_rankings(conn, chunks)
-
-    total = len(all_results)
-    start = (req.page - 1) * req.page_size
-    page_results = all_results[start:start + req.page_size]
-
-    return SemanticSearchResponse(
-        total=total,
-        page=req.page,
-        page_size=req.page_size,
-        results=[
-            SemanticSourceItem(
-                **{**r, "cited_targets": [SemanticTarget(**t) for t in r["cited_targets"]]}
-            )
-            for r in page_results
-        ],
-    )
-
-
 @router.post("/search/rag", response_model=RagSearchResponse)
 def search_rag(req: RagSearchRequest):
     statutes = [(s.law, s.article) for s in req.statutes]
