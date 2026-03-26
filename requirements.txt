@@ -4,4 +4,6 @@ pydantic>=2.0.0
 uvicorn>=0.29.0
 opensearch-py>=2.5.0
 python-dotenv
+numpy
+voyageai
 pytest>=9.0.0
