@@ -229,11 +229,14 @@ def main():
         ]
         try:
             with conn.cursor() as cur:
-                cur.executemany(
-                    "UPDATE chunks SET embedding = %s::vector "
-                    "WHERE chunk_text = %s AND embedding IS NULL",
-                    params,
-                )
+                cur.execute("CREATE TEMP TABLE IF NOT EXISTS _embed_batch "
+                            "(vec text, txt text) ON COMMIT DELETE ROWS")
+                cur.executemany("INSERT INTO _embed_batch VALUES (%s, %s)", params)
+                cur.execute("""
+                    UPDATE chunks SET embedding = b.vec::vector
+                    FROM _embed_batch b
+                    WHERE chunks.chunk_text = b.txt AND chunks.embedding IS NULL
+                """)
             conn.commit()
             total_embedded += len(buf)
         except Exception as e:
