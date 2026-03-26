@@ -1,5 +1,5 @@
 FROM opensearchproject/opensearch:2.18.0
 
-RUN /usr/share/opensearch/bin/opensearch-plugin remove opensearch-knn \
-    && /usr/share/opensearch/bin/opensearch-plugin remove opensearch-neural-search \
-    && /usr/share/opensearch/bin/opensearch-plugin remove opensearch-ml
+RUN /usr/share/opensearch/bin/opensearch-plugin remove opensearch-neural-search \
+    && /usr/share/opensearch/bin/opensearch-plugin remove opensearch-ml \
+    && /usr/share/opensearch/bin/opensearch-plugin remove opensearch-knn
