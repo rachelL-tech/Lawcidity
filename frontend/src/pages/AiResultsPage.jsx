@@ -205,9 +205,9 @@ function AnalysisContent({ text }) {
 }
 
 function parseAnalysis(text) {
-  // 統一處理 <cite> 和 <statute> 標記
+  // 統一處理 <h3>、<cite> 和 <statute> 標記
   const regex =
-    /<cite\s+type="(source|target|supreme)"\s+id="(\d+)">(.*?)<\/cite>|<statute\s+law="([^"]+)"\s+article="([^"]+)">(.*?)<\/statute>/g;
+    /<h3>(.*?)<\/h3>|<cite\s+type="(source|target|supreme)"\s+id="(\d+)">(.*?)<\/cite>|<statute\s+law="([^"]+)"\s+article="([^"]+)">(.*?)<\/statute>/g;
 
   const result = [];
   let lastIndex = 0;
@@ -220,11 +220,18 @@ function parseAnalysis(text) {
       );
     }
 
-    if (match[1]) {
+    if (match[1] !== undefined && match[2] === undefined) {
+      // <h3>
+      result.push(
+        <h3 key={`h3-${match.index}`} className="text-base font-semibold text-gray-900 mt-6 mb-2 pb-1 border-b border-brand-border">
+          {match[1]}
+        </h3>
+      );
+    } else if (match[2]) {
       // <cite>
-      const type = match[1];
-      const id = match[2];
-      const label = match[3];
+      const type = match[2];
+      const id = match[3];
+      const label = match[4];
       result.push(
         <CiteTag key={`cite-${match.index}`} type={type} id={id}>
           {label}
@@ -232,9 +239,9 @@ function parseAnalysis(text) {
       );
     } else {
       // <statute>
-      const law = match[4];
-      const article = match[5];
-      const label = match[6];
+      const law = match[5];
+      const article = match[6];
+      const label = match[7];
       result.push(
         <StatuteTag key={`stat-${match.index}`} law={law} article={article}>
           {label}
@@ -313,15 +320,19 @@ function CiteTag({ type, id, children }) {
 function TargetCiteTag({ id, children }) {
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState(null);
+  const [fetching, setFetching] = useState(false);
 
   async function handleClick() {
-    setOpen(!open);
-    if (!info) {
+    setOpen((prev) => !prev);
+    if (!info && !fetching) {
+      setFetching(true);
       try {
         const data = await fetchDecision(Number(id));
         setInfo(data);
       } catch {
         setInfo({ error: true });
+      } finally {
+        setFetching(false);
       }
     }
   }
@@ -341,11 +352,13 @@ function TargetCiteTag({ id, children }) {
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
-      {open && info && (
+      {open && (
         <div className="absolute top-full left-0 mt-1 z-50 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
-          {info.error ? (
+          {fetching ? (
+            <p className="text-gray-400">載入中…</p>
+          ) : info?.error ? (
             <p className="text-red-500">載入失敗</p>
-          ) : (
+          ) : info ? (
             <>
               <p className="font-medium mb-1">{info.case_ref}</p>
               <p className="text-gray-500 mb-2">被引用 {info.total_citation_count} 次</p>
@@ -368,7 +381,7 @@ function TargetCiteTag({ id, children }) {
                 查看判決全文
               </Link>
             </>
-          )}
+          ) : null}
         </div>
       )}
     </span>
@@ -402,24 +415,20 @@ function RagSourceCard({ item }) {
                   : "bg-brand-light text-brand"
               }`}
             >
-              {item.type === "citation"
-                ? "引用"
-                : item.type === "supreme"
-                  ? "最高法院"
-                  : "最高+引用"}
+              {item.root_norm}
             </span>
             <Link
               to={`/decisions/${item.decision_id}`}
               className="text-sm font-medium text-gray-800 hover:text-brand truncate"
             >
-              {item.root_norm} {item.display_title}
+              {item.display_title.startsWith(item.root_norm)
+                ? item.display_title.slice(item.root_norm.length).trim()
+                : item.display_title}
             </Link>
           </div>
           <div className="text-xs text-gray-400">
             相似度: {(item.sim * 100).toFixed(1)}%
             {item.statute_hit && " · 法條命中"}
-            {item.targets?.length > 0 &&
-              ` · 引用 ${item.targets.length} 判決`}
           </div>
         </div>
         <button
@@ -437,13 +446,12 @@ function RagSourceCard({ item }) {
           {item.targets?.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
               {item.targets.map((t) => (
-                <Link
+                <span
                   key={t.id}
-                  to={`/decisions/${t.id}`}
-                  className="text-xs px-2 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-600 hover:text-brand"
+                  className="text-xs px-2 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-600"
                 >
                   {t.display_title} ({t.total_citation_count}次)
-                </Link>
+                </span>
               ))}
             </div>
           )}

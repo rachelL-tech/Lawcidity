@@ -208,6 +208,7 @@ def analyze_generate(req: GenerateRequest):
                     display_title=t["display_title"],
                     root_norm=t["root_norm"],
                     total_citation_count=t["total_citation_count"],
+                    target_type=t.get("target_type", "decision"),
                 )
                 for t in r["targets"]
             ],

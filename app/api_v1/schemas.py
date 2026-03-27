@@ -172,6 +172,7 @@ class RagResultTarget(BaseModel):
     display_title: str
     root_norm: str
     total_citation_count: int
+    target_type: str = "decision"   # "decision" | "authority"
 
 
 class RagResultItem(BaseModel):

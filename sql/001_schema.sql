@@ -142,6 +142,7 @@ CREATE TABLE authorities (
   root_norm  TEXT NOT NULL,    -- 來源機關聚合（如：最高法院、司法院、高等法院）
   ref_key    TEXT NOT NULL,    -- 自然鍵
   display    TEXT,             -- 顯示用完整名稱
+  total_citation_count INTEGER NOT NULL DEFAULT 0,
 
   created_at TIMESTAMPTZ DEFAULT now(),
 

@@ -194,10 +194,14 @@ def _merge_and_aggregate(
         else:
             result_type = "citation"
 
-        targets = []
+        target_decision_ids = []
+        target_authority_ids = []
         for c in dec_chunks:
-            if c["chunk_type"] == "citation_context" and c.get("target_id"):
-                targets.append(c["target_id"])
+            if c["chunk_type"] == "citation_context":
+                if c.get("target_id"):
+                    target_decision_ids.append(c["target_id"])
+                elif c.get("target_authority_id"):
+                    target_authority_ids.append(c["target_authority_id"])
 
         auth_score = 0
         if authority_boost > 0 and best.get("total_citation_count", 0) > 0:
@@ -217,7 +221,9 @@ def _merge_and_aggregate(
             "chunk_count": len(dec_chunks),
             "chunk_types": sorted(chunk_types),
             "best_chunk_text": best["chunk_text"],
-            "target_ids": sorted(set(targets)) if targets else [],
+            "best_chunk_type": best["chunk_type"],   # "citation_context" | "supreme_reasoning"
+            "target_ids": sorted(set(target_decision_ids)) if target_decision_ids else [],
+            "target_authority_ids": sorted(set(target_authority_ids)) if target_authority_ids else [],
         })
 
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -291,23 +297,41 @@ def rag_search(
         boost=boost, authority_boost=authority_boost, top=top,
     )
 
-    # Enrich target display info
-    all_target_ids = set()
+    # Enrich target display info (decisions + authorities)
+    all_decision_ids = set()
+    all_authority_ids = set()
     for r in results:
-        all_target_ids.update(r.get("target_ids", []))
+        all_decision_ids.update(r.get("target_ids", []))
+        all_authority_ids.update(r.get("target_authority_ids", []))
 
-    target_info: dict[int, dict] = {}
-    if all_target_ids:
-        target_rows = conn.execute("""
+    decision_info: dict[int, dict] = {}
+    if all_decision_ids:
+        rows = conn.execute("""
             SELECT id, display_title, root_norm, total_citation_count
             FROM decisions WHERE id = ANY(%s)
-        """, (list(all_target_ids),)).fetchall()
-        target_info = {r["id"]: dict(r) for r in target_rows}
+        """, (list(all_decision_ids),)).fetchall()
+        decision_info = {r["id"]: dict(r) | {"target_type": "decision"} for r in rows}
+
+    auth_info: dict[int, dict] = {}
+    if all_authority_ids:
+        rows = conn.execute("""
+            SELECT id, display AS display_title, root_norm, total_citation_count
+            FROM authorities WHERE id = ANY(%s)
+        """, (list(all_authority_ids),)).fetchall()
+        auth_info = {
+            r["id"]: {"id": r["id"], "display_title": r["display_title"],
+                      "root_norm": r["root_norm"],
+                      "total_citation_count": r["total_citation_count"],
+                      "target_type": "authority"}
+            for r in rows
+        }
 
     for r in results:
-        r["targets"] = [
-            target_info.get(tid, {"id": tid, "display_title": str(tid), "root_norm": "", "total_citation_count": 0})
-            for tid in r.get("target_ids", [])
+        targets = [
+            decision_info[tid] for tid in r.get("target_ids", []) if tid in decision_info
+        ] + [
+            auth_info[aid] for aid in r.get("target_authority_ids", []) if aid in auth_info
         ]
+        r["targets"] = targets
 
     return results
