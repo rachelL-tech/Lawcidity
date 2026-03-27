@@ -210,3 +210,34 @@ class RagResultItem(BaseModel):
 class RagSearchResponse(BaseModel):
     total: int
     results: list[RagResultItem]
+
+
+# ── POST /analyze ────────────────────────────────────────────────────────────
+
+class AnalyzeStatute(BaseModel):
+    law: str
+    article: str
+
+
+class AnalyzeRequest(BaseModel):
+    text: str
+
+
+class AnalyzeResponse(BaseModel):
+    issues: list[str]
+    statutes: list[AnalyzeStatute]
+
+
+# ── POST /analyze/generate ───────────────────────────────────────────────────
+
+class GenerateRequest(BaseModel):
+    query: str
+    issues: list[str] = []
+    statutes: list[AnalyzeStatute] = []
+    case_type: str | None = None
+    top: int = 10
+
+
+class GenerateResponse(BaseModel):
+    analysis: str
+    rag_results: list[RagResultItem]

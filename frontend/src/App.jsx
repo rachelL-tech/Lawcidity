@@ -3,6 +3,7 @@ import Navbar from "./components/Navbar";
 import HomePage from "./pages/HomePage";
 import SearchResultsPage from "./pages/SearchResultsPage";
 import DecisionPage from "./pages/DecisionPage";
+import AiResultsPage from "./pages/AiResultsPage";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={<SearchResultsPage />} />
           <Route path="/decisions/:id" element={<DecisionPage />} />
+          <Route path="/ai-results" element={<AiResultsPage />} />
         </Routes>
         <footer className="text-center text-sm text-gray-400 py-6">
           © 2026 Lawcidity 法澄. All Rights Reserved.

@@ -69,3 +69,13 @@ export function fetchDecision(id) {
 export function fetchLaws(q) {
   return get(`/laws?q=${encodeURIComponent(q)}`);
 }
+
+// POST /api/v1/analyze — Gemini 爭點/法條提取
+export function analyze(text) {
+  return post("/analyze", { text });
+}
+
+// POST /api/v1/analyze/generate — RAG + Gemini 全文分析
+export function analyzeGenerate(req) {
+  return post("/analyze/generate", req);
+}

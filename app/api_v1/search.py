@@ -31,8 +31,14 @@ from app.api_v1.schemas import (
     RagSearchResponse,
     RagResultItem,
     RagResultTarget,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AnalyzeStatute,
+    GenerateRequest,
+    GenerateResponse,
 )
 from app.rag_service import rag_search
+from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
 router = APIRouter()
 
@@ -181,6 +187,87 @@ def search_rag(req: RagSearchRequest):
             for r in results
         ],
     )
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+def analyze(req: AnalyzeRequest):
+    """Gemini 爭點 / 法條提取。"""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text 不可為空")
+    try:
+        result = extract_issues_and_statutes(req.text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gemini 分析失敗：{e}")
+
+    return AnalyzeResponse(
+        issues=result.get("issues", []),
+        statutes=[
+            AnalyzeStatute(law=s.get("law", ""), article=s.get("article", ""))
+            for s in result.get("statutes", [])
+        ],
+    )
+
+
+@router.post("/analyze/generate", response_model=GenerateResponse)
+def analyze_generate(req: GenerateRequest):
+    """RAG 搜尋 + Gemini 全文分析。"""
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query 不可為空")
+
+    statutes = [(s.law, s.article) for s in req.statutes]
+
+    with get_conn() as conn:
+        try:
+            rag_results = rag_search(
+                conn,
+                req.query,
+                case_type=req.case_type,
+                statutes=statutes,
+                top=req.top,
+            )
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+    # 轉成 dict 給 Gemini
+    try:
+        analysis_text = generate_analysis(
+            query=req.query,
+            issues=req.issues,
+            statutes=[{"law": s.law, "article": s.article} for s in req.statutes],
+            rag_results=rag_results,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gemini 生成失敗：{e}")
+
+    items = [
+        RagResultItem(
+            type=r["type"],
+            decision_id=r["decision_id"],
+            root_norm=r["root_norm"],
+            display_title=r["display_title"],
+            doc_type=r["doc_type"],
+            decision_date=r["decision_date"],
+            case_type=r["case_type"],
+            score=r["score"],
+            sim=r["sim"],
+            statute_hit=r["statute_hit"],
+            chunk_count=r["chunk_count"],
+            chunk_types=r["chunk_types"],
+            best_chunk_text=r["best_chunk_text"],
+            targets=[
+                RagResultTarget(
+                    id=t["id"],
+                    display_title=t["display_title"],
+                    root_norm=t["root_norm"],
+                    total_citation_count=t["total_citation_count"],
+                )
+                for t in r["targets"]
+            ],
+        )
+        for r in rag_results
+    ]
+
+    return GenerateResponse(analysis=analysis_text, rag_results=items)
 
 
 @router.post("/search/rerank", response_model=SearchResponse)
