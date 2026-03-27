@@ -1,7 +1,7 @@
 """
 Gemini 爭點/法條提取 + RAG 全文分析。
 
-使用 google-genai SDK，呼叫 Gemini 2.0 Flash。
+使用 google-genai SDK，呼叫 Gemini 2.5 Flash。
 """
 
 import json
@@ -83,7 +83,6 @@ ANALYZE_PROMPT = """\
 {statutes}
 
 ## 檢索到的相關判決段落
-
 {chunks}
 
 ## 撰寫要求

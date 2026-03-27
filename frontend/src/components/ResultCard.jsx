@@ -74,7 +74,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
           {/* 右側：引用次數 + 展開箭頭 */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-sm text-gray-500">
-              被 <span className="font-semibold text-gray-700">{item.matched_citation_count}</span> 則命中裁判提及
+              被 <span className="font-semibold text-gray-700">{item.matched_citation_count}</span> 則符合搜尋的裁判提及
             </span>
             <span
               className={`text-brand transition-transform duration-200 ${

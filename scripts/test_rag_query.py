@@ -372,8 +372,6 @@ def main():
 
         # Show chunk preview
         preview = r["best_chunk_text"].replace("\n", " ").replace("\r", "")
-        if len(preview) > 120:
-            preview = preview[:118] + ".."
         print(f"      {preview}")
         print()
 

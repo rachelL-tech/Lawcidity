@@ -8,6 +8,12 @@ import { analyzeGenerate, fetchDecision } from "../lib/api";
  * 左側：原始 query + 已選爭點 / 法條
  * 右側：Gemini 全文分析（含 citation tags）+ RAG 來源判決列表
  */
+const CACHE_KEY = "ai_results_cache";
+
+function getCacheKey(query, issues, statutes) {
+  return JSON.stringify({ query, issues, statutes });
+}
+
 export default function AiResultsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -20,6 +26,22 @@ export default function AiResultsPage() {
 
   useEffect(() => {
     if (!query) return;
+
+    // 先嘗試從 sessionStorage 讀 cache
+    const cacheKey = getCacheKey(query, issues, statutes);
+    try {
+      const raw = sessionStorage.getItem(CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (cached.key === cacheKey) {
+          setAnalysis(cached.analysis);
+          setRagResults(cached.rag_results);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch { /* cache miss */ }
+
     setLoading(true);
     setError(null);
 
@@ -32,6 +54,14 @@ export default function AiResultsPage() {
       .then((data) => {
         setAnalysis(data.analysis);
         setRagResults(data.rag_results);
+        // 寫入 sessionStorage
+        try {
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+            key: cacheKey,
+            analysis: data.analysis,
+            rag_results: data.rag_results,
+          }));
+        } catch { /* storage full, ignore */ }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));

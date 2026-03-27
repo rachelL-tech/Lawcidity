@@ -167,22 +167,6 @@ class DecisionDetail(BaseModel):
     statutes: list[DecisionStatute]
 
 
-# ── POST /search/rag ──────────────────────────────────────────────────────────
-
-class RagStatuteFilter(BaseModel):
-    law: str
-    article: str
-
-
-class RagSearchRequest(BaseModel):
-    query: str
-    case_type: str | None = None
-    statutes: list[RagStatuteFilter] = []
-    boost: float = 0.15
-    authority_boost: float = 0.05
-    top: int = 20
-
-
 class RagResultTarget(BaseModel):
     id: int
     display_title: str
@@ -205,11 +189,6 @@ class RagResultItem(BaseModel):
     chunk_types: list[str]
     best_chunk_text: str
     targets: list[RagResultTarget]
-
-
-class RagSearchResponse(BaseModel):
-    total: int
-    results: list[RagResultItem]
 
 
 # ── POST /analyze ────────────────────────────────────────────────────────────
