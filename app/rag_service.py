@@ -2,7 +2,7 @@
 RAG 雙路合併搜尋 + decision 聚合。
 
 流程：
-1. Query → Voyage API embed
+1. Issues（爭點）→ Voyage API embed（無 issues 時 fallback 到 query）
 2. Path A: IVFFlat ANN knn → top 50 chunks（純語意召回，有排序+LIMIT）
 3. Path B: 法條搜尋 chunk.id → sequential scan 計算每個向量距離後，無排序、全數回傳
 4. 合併 A ∪ B → chunk_id 去重 → chunk 計分（sim + statute boost）→ 聚合到 decision → top N
@@ -230,6 +230,7 @@ def rag_search(
     conn: psycopg.Connection,
     query: str,
     *,
+    issues: list[str] | None = None,
     case_type: str | None = None,
     statutes: list[tuple[str, str]] | None = None,
     boost: float = 0.15,
@@ -240,7 +241,8 @@ def rag_search(
 
     Args:
         conn: PostgreSQL connection
-        query: 案情描述
+        query: 案情描述（issues 為空時 fallback）
+        issues: 爭點列表（優先用於 embedding 檢索，語意與 chunks 更接近）
         case_type: 民事/刑事/行政
         statutes: [(law, article), ...] e.g. [("民法", "184"), ("民法", "195")]
         boost: statute match boost
@@ -251,7 +253,9 @@ def rag_search(
     """
     statutes = statutes or []
 
-    vec = embed_query(query)
+    # issues 串接作為搜尋文字，語意與法律論述 chunks 更接近；無 issues 時 fallback 到 query
+    search_text = "；".join(issues) if issues else query
+    vec = embed_query(search_text)
     vec_str = _vec_to_pg(vec)
 
     # Path A: HNSW knn

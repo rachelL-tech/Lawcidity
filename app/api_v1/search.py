@@ -169,6 +169,7 @@ def analyze_generate(req: GenerateRequest):
             rag_results = rag_search(
                 conn,
                 req.query,
+                issues=req.issues,
                 case_type=req.case_type,
                 statutes=statutes,
                 top=req.top,
