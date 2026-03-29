@@ -1,6 +1,8 @@
 services:
   fastapi:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
     container_name: lawcidity-api
     restart: unless-stopped
     environment:
@@ -17,7 +19,9 @@ services:
       - "8000"
 
   nginx:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.nginx
     container_name: lawcidity-nginx
     restart: unless-stopped
     ports:
