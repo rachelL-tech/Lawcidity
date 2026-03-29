@@ -3,12 +3,11 @@ RAG 雙路合併搜尋 + decision 聚合。
 
 流程：
 1. Query → Voyage API embed
-2. Path A: HNSW knn → top 50 chunks
-3. Path B: statute filter → brute-force 向量排序
-4. 合併 A ∪ B → 去重 → chunk 計分 → 聚合到 decision
+2. Path A: IVFFlat ANN knn → top 50 chunks（純語意召回，有排序+LIMIT）
+3. Path B: 法條搜尋 chunk.id → sequential scan 計算每個向量距離後，無排序、全數回傳
+4. 合併 A ∪ B → chunk_id 去重 → chunk 計分（sim + statute boost）→ 聚合到 decision → top N
 """
 
-import math
 import os
 from collections import defaultdict
 
@@ -137,14 +136,15 @@ def _path_b_statutes(
 def _merge_and_aggregate(
     knn_rows: list[dict], statute_rows: list[dict],
     statute_cit_ids: set[int], statute_decision_ids: set[int],
-    *, boost: float, authority_boost: float, top: int,
+    *, boost: float, top: int,
 ) -> list[dict]:
     """合併雙路結果 → chunk 計分 → 聚合到 decision。"""
-    # Dedup chunks by (decision_id, chunk_index)
-    chunks: dict[tuple, dict] = {}
+    # Dedup chunks by chunk_id（PK）
+    # 同一 chunk 被 Path A / Path B 雙路撈到時合併 flag；不同 citation 的 chunk 各自保留
+    chunks: dict[int, dict] = {}
     for r in knn_rows:
         r = dict(r)
-        key = (r["decision_id"], r["chunk_index"])
+        key = r["chunk_id"]
         if key not in chunks:
             r["from_knn"] = True
             r["from_statute"] = False
@@ -154,7 +154,7 @@ def _merge_and_aggregate(
 
     for r in statute_rows:
         r = dict(r) if not isinstance(r, dict) else r
-        key = (r["decision_id"], r["chunk_index"])
+        key = r["chunk_id"]
         if key not in chunks:
             r["from_knn"] = False
             r["from_statute"] = True
@@ -169,8 +169,6 @@ def _merge_and_aggregate(
         if c["chunk_type"] == "citation_context" and c.get("citation_id") in statute_cit_ids:
             stat_hit = True
         elif c["chunk_type"] == "supreme_reasoning" and c["decision_id"] in statute_decision_ids:
-            stat_hit = True
-        elif c.get("from_statute"):
             stat_hit = True
 
         c["sim"] = sim
@@ -203,10 +201,6 @@ def _merge_and_aggregate(
                 elif c.get("target_authority_id"):
                     target_authority_ids.append(c["target_authority_id"])
 
-        auth_score = 0
-        if authority_boost > 0 and best.get("total_citation_count", 0) > 0:
-            auth_score = authority_boost * math.log(1 + best["total_citation_count"])
-
         results.append({
             "decision_id": decision_id,
             "type": result_type,
@@ -215,7 +209,7 @@ def _merge_and_aggregate(
             "doc_type": best["doc_type"],
             "decision_date": str(best["decision_date"]) if best.get("decision_date") else None,
             "case_type": best["case_type"],
-            "score": best["score"] + auth_score,
+            "score": best["score"],
             "sim": best["sim"],
             "statute_hit": any(c["statute_hit"] for c in dec_chunks),
             "chunk_count": len(dec_chunks),
@@ -239,7 +233,6 @@ def rag_search(
     case_type: str | None = None,
     statutes: list[tuple[str, str]] | None = None,
     boost: float = 0.15,
-    authority_boost: float = 0.05,
     top: int = 20,
 ) -> list[dict]:
     """
@@ -251,7 +244,6 @@ def rag_search(
         case_type: 民事/刑事/行政
         statutes: [(law, article), ...] e.g. [("民法", "184"), ("民法", "195")]
         boost: statute match boost
-        authority_boost: authority citation count boost
         top: 回傳筆數
 
     Returns:
@@ -268,33 +260,20 @@ def rag_search(
     # Path B: statute brute-force
     statute_rows = _path_b_statutes(conn, vec_str, statutes, case_type=case_type)
 
-    # 預查 statute hit 的 citation_ids 和 decision_ids
-    statute_cit_ids: set[int] = set()
-    statute_decision_ids: set[int] = set()
-    if statutes:
-        values_sql = ",".join(["(%s,%s)"] * len(statutes))
-        stat_params: list = []
-        for law, article in statutes:
-            stat_params.extend([law, article])
-
-        cit_rows = conn.execute(f"""
-            SELECT DISTINCT citation_id
-            FROM citation_snippet_statutes
-            WHERE (law, article_raw) IN ({values_sql})
-        """, stat_params).fetchall()
-        statute_cit_ids = {r["citation_id"] for r in cit_rows}
-
-        dec_rows = conn.execute(f"""
-            SELECT DISTINCT decision_id
-            FROM decision_reason_statutes
-            WHERE (law, article_raw) IN ({values_sql})
-        """, stat_params).fetchall()
-        statute_decision_ids = {r["decision_id"] for r in dec_rows}
+    # 從 Path B 結果直接推導，不另打 SQL
+    statute_cit_ids: set[int] = {
+        r["citation_id"] for r in statute_rows
+        if r.get("chunk_type") == "citation_context" and r.get("citation_id")
+    }
+    statute_decision_ids: set[int] = {
+        r["decision_id"] for r in statute_rows
+        if r.get("chunk_type") == "supreme_reasoning"
+    }
 
     # Merge + aggregate
     results = _merge_and_aggregate(
         knn_rows, statute_rows, statute_cit_ids, statute_decision_ids,
-        boost=boost, authority_boost=authority_boost, top=top,
+        boost=boost, top=top,
     )
 
     # Enrich target display info (decisions + authorities)

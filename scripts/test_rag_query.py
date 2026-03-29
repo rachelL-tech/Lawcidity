@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import math
 import os
 import sys
 from collections import defaultdict
@@ -159,14 +158,13 @@ def path_b_statutes(conn, vec_str: str, statutes: list[tuple[str, str]],
 
 def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
                         statute_cit_ids: set[int], statute_decision_ids: set[int],
-                        *, boost: float, authority_boost: float,
-                        top: int) -> list[dict]:
+                        *, boost: float, top: int) -> list[dict]:
     """合併雙路結果 → chunk 計分 → 聚合到 decision。"""
-    # Dedup chunks by (decision_id, chunk_index)
-    chunks: dict[tuple, dict] = {}
+    # Dedup chunks by chunk_id（PK）
+    chunks: dict[int, dict] = {}
     for r in knn_rows:
         r = dict(r)
-        key = (r["decision_id"], r["chunk_index"])
+        key = r["chunk_id"]
         if key not in chunks:
             r["from_knn"] = True
             r["from_statute"] = False
@@ -176,7 +174,7 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
 
     for r in statute_rows:
         r = dict(r) if not isinstance(r, dict) else r
-        key = (r["decision_id"], r["chunk_index"])
+        key = r["chunk_id"]
         if key not in chunks:
             r["from_knn"] = False
             r["from_statute"] = True
@@ -191,8 +189,6 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
         if c["chunk_type"] == "citation_context" and c.get("citation_id") in statute_cit_ids:
             stat_hit = True
         elif c["chunk_type"] == "supreme_reasoning" and c["decision_id"] in statute_decision_ids:
-            stat_hit = True
-        elif c.get("from_statute"):
             stat_hit = True
 
         c["sim"] = sim
@@ -216,16 +212,10 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
         else:
             result_type = "citation"
 
-        # Collect targets from citation chunks
         targets = []
         for c in dec_chunks:
             if c["chunk_type"] == "citation_context" and c.get("target_id"):
                 targets.append(c["target_id"])
-
-        # Authority boost (for citation chunks, use target's citation count)
-        auth_score = 0
-        if authority_boost > 0 and best.get("total_citation_count", 0) > 0:
-            auth_score = authority_boost * math.log(1 + best["total_citation_count"])
 
         results.append({
             "decision_id": decision_id,
@@ -235,7 +225,7 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
             "doc_type": best["doc_type"],
             "decision_date": best.get("decision_date"),
             "case_type": best["case_type"],
-            "score": best["score"] + auth_score,
+            "score": best["score"],
             "sim": best["sim"],
             "distance": best["distance"],
             "statute_hit": any(c["statute_hit"] for c in dec_chunks),
@@ -252,7 +242,7 @@ def merge_and_aggregate(knn_rows: list[dict], statute_rows: list[dict],
 # ── Main ──────────────────────────────────────────────────────────────
 
 def search(query: str, *, case_type: str | None, statutes: list[tuple[str, str]],
-           boost: float, authority_boost: float, top: int,
+           boost: float, top: int,
            supreme_only: bool = False):
     vec = embed_query(query)
     vec_str = vec_to_pg(vec)
@@ -270,28 +260,15 @@ def search(query: str, *, case_type: str | None, statutes: list[tuple[str, str]]
         # Path B: statute brute-force
         statute_rows = path_b_statutes(conn, vec_str, statutes, case_type=case_type)
 
-        # 預查 statute hit 的 citation_ids 和 decision_ids
-        statute_cit_ids: set[int] = set()
-        statute_decision_ids: set[int] = set()
-        if statutes:
-            values_sql = ",".join(["(%s,%s)"] * len(statutes))
-            stat_params: list = []
-            for law, article in statutes:
-                stat_params.extend([law, article])
-
-            cit_rows = conn.execute(f"""
-                SELECT DISTINCT citation_id
-                FROM citation_snippet_statutes
-                WHERE (law, article_raw) IN ({values_sql})
-            """, stat_params).fetchall()
-            statute_cit_ids = {r["citation_id"] for r in cit_rows}
-
-            dec_rows = conn.execute(f"""
-                SELECT DISTINCT decision_id
-                FROM decision_reason_statutes
-                WHERE (law, article_raw) IN ({values_sql})
-            """, stat_params).fetchall()
-            statute_decision_ids = {r["decision_id"] for r in dec_rows}
+        # 從 Path B 結果直接推導，不另打 SQL
+        statute_cit_ids: set[int] = {
+            r["citation_id"] for r in statute_rows
+            if r.get("chunk_type") == "citation_context" and r.get("citation_id")
+        }
+        statute_decision_ids: set[int] = {
+            r["decision_id"] for r in statute_rows
+            if r.get("chunk_type") == "supreme_reasoning"
+        }
 
         # Fetch target info for display
         target_info: dict[int, dict] = {}
@@ -310,7 +287,7 @@ def search(query: str, *, case_type: str | None, statutes: list[tuple[str, str]]
     # Merge + aggregate
     results = merge_and_aggregate(
         knn_rows, statute_rows, statute_cit_ids, statute_decision_ids,
-        boost=boost, authority_boost=authority_boost, top=top,
+        boost=boost, top=top,
     )
 
     # Enrich target display info
@@ -328,8 +305,6 @@ def main():
     parser.add_argument("--statutes", help="法條 filter，格式：民法:184,民法:195")
     parser.add_argument("--boost", type=float, default=0.15,
                         help="statute match boost (default: 0.15)")
-    parser.add_argument("--authority-boost", type=float, default=0.05,
-                        help="authority citation count boost (default: 0.05)")
     parser.add_argument("--top", type=int, default=20,
                         help="results to show (default: 20)")
     parser.add_argument("--supreme-only", action="store_true",
@@ -347,7 +322,7 @@ def main():
 
     results = search(
         args.query, case_type=args.case_type, statutes=statutes,
-        boost=args.boost, authority_boost=args.authority_boost, top=args.top,
+        boost=args.boost, top=args.top,
         supreme_only=args.supreme_only,
     )
 
