@@ -6,4 +6,5 @@ opensearch-py>=2.5.0
 python-dotenv
 numpy
 voyageai
+google-genai
 pytest>=9.0.0
