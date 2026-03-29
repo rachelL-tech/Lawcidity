@@ -5,12 +5,10 @@ services:
       dockerfile: Dockerfile.fastapi
     container_name: lawcidity-api
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
       OPENSEARCH_URL: https://opensearch:9200
-      OPENSEARCH_INDEX: ${OPENSEARCH_INDEX:-decisions_v2}
-      OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME:-admin}
-      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
       OPENSEARCH_VERIFY_CERTS: "false"
     depends_on:
       opensearch:
