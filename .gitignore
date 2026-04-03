@@ -19,9 +19,10 @@ data/raw/
 data/downloads/
 *.rar
 
-# Claude
+# Claude and Codex
 /.agents/
 /.claude/
+/.codex/
 /.worktrees/
 /docs/
 AGENTS.md

@@ -2,7 +2,7 @@
 RAG 雙路合併搜尋 + decision 聚合。
 
 流程：
-1. Issues（爭點）→ Voyage API embed（無 issues 時 fallback 到 query）
+1. Raw factual query → Voyage API embed
 2. Path A: IVFFlat ANN knn → top 50 chunks（純語意召回，有排序+LIMIT）
 3. Path B: 法條搜尋 chunk.id → sequential scan 計算每個向量距離後，無排序、全數回傳
 4. 合併 A ∪ B → chunk_id 去重 → chunk 計分（sim + statute boost）→ 聚合到 decision → top N
@@ -253,8 +253,10 @@ def rag_search(
     """
     statutes = statutes or []
 
-    # issues 串接作為搜尋文字，語意與法律論述 chunks 更接近；無 issues 時 fallback 到 query
-    search_text = "；".join(issues) if issues else query
+    # Main representation uses the user's raw factual query.
+    # Issues remain available for later auxiliary retrieval or reranking work,
+    # but should not replace fact-pattern retrieval at the main query stage.
+    search_text = query
     vec = embed_query(search_text)
     vec_str = _vec_to_pg(vec)
 
