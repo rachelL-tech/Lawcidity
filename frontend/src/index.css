@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap");
 @import "tailwindcss";
 
 @keyframes blink {
@@ -9,6 +10,15 @@
   animation: blink 0.8s infinite;
 }
 
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@utility animate-fade-in-up {
+  animation: fade-in-up 0.7s ease-out both;
+}
+
 @theme {
   --color-brand: #C84B11;
   --color-brand-light: #FDF0E8;
@@ -16,4 +26,11 @@
   --color-page-bg: #FEF6F0;
   --color-highlight: #FFDCC8;
   --color-highlight-statute: #D1FAE5;
+  --color-brand-dark: #9A3A0D;
+  --color-text-primary: #2D1810;
+  --color-text-secondary: #6B5347;
+  --color-card-bg: #FFFFFF;
+  --color-divider: #E8D5C8;
+  --font-display: "Instrument Serif", serif;
+  --font-body: "DM Sans", sans-serif;
 }

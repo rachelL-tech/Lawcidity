@@ -9,8 +9,8 @@ export default function ModeToggle({ mode, onChange }) {
     <div className="relative inline-flex p-1 rounded-full bg-brand-light border border-brand-border">
       {/* - 中間層：會滑動的主色滑塊 bg-brand，transition-all duration-300 讓它看起來像「滑過去」 */}
       <span
-        className={`absolute top-1 bottom-1 w-1/2 rounded-full bg-brand transition-all duration-300 ${
-          mode === "keyword" ? "left-1" : "left-1/2"
+        className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-brand transition-all duration-300 ${
+          mode === "keyword" ? "left-1" : "left-[50%]"
         }`}
       />
       {/* - 最上層：兩個可點擊文字按鈕，relative z-10 讓按鈕文字蓋在滑塊上面 */}

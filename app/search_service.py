@@ -93,6 +93,100 @@ def build_statute_score_sql(
     return " + ".join(parts)
 
 
+def build_statute_hits_cte_sql(
+    statute_filters: list[tuple[str, str | None, str | None]],
+    params: dict[str, Any],
+    source_alias: str = "c",
+) -> dict[str, str]:
+    """建立 search ranking 專用的 statute score CTE + JOIN SQL。
+
+    將本次查詢的法條條件先聚合成 citation_id -> st_score，再 LEFT JOIN 回主查詢，
+    避免在大查詢內重複執行 correlated EXISTS。
+    """
+    if not statute_filters:
+        return {
+            "cte_sql": "",
+            "join_sql": "",
+            "score_sql": "0",
+        }
+
+    filter_rows: list[str] = []
+    for idx, (law, article, sub_ref) in enumerate(statute_filters):
+        law_key = f"st_law_{idx}"
+        article_key = f"st_article_{idx}"
+        sub_ref_key = f"st_sub_ref_{idx}"
+        params[law_key] = law
+        params[article_key] = article
+        if sub_ref is not None:
+            params[sub_ref_key] = sub_ref
+            filter_rows.append(
+                "SELECT "
+                f"{idx} AS filter_id, "
+                f"%({law_key})s::text AS law, "
+                f"%({article_key})s::text AS article_raw, "
+                f"%({sub_ref_key})s::text AS sub_ref"
+            )
+        else:
+            filter_rows.append(
+                "SELECT "
+                f"{idx} AS filter_id, "
+                f"%({law_key})s::text AS law, "
+                f"%({article_key})s::text AS article_raw, "
+                "NULL::text AS sub_ref"
+            )
+
+    filters_sql = "\n            UNION ALL\n            ".join(filter_rows)
+    return {
+        "cte_sql": f"""
+        statute_filter_inputs AS (
+            {filters_sql}
+        ),
+        statute_hits AS (
+            SELECT
+                css.citation_id,
+                COUNT(DISTINCT fi.filter_id) AS st_score
+            FROM citation_snippet_statutes css
+            JOIN statute_filter_inputs fi
+              ON fi.law = css.law
+             AND fi.article_raw = css.article_raw
+             AND (
+                 fi.sub_ref IS NULL
+                 OR css.sub_ref = fi.sub_ref
+             )
+            GROUP BY css.citation_id
+        ),
+        """,
+        "join_sql": f"LEFT JOIN statute_hits sh ON sh.citation_id = {source_alias}.id",
+        "score_sql": "COALESCE(sh.st_score, 0)",
+    }
+
+
+def build_base_citations_cte_sql(
+    keyword_score_sql: str,
+    statute_score_sql: str,
+    statute_join_sql: str,
+) -> str:
+    """建立 ranking 共用的 citations base CTE。
+
+    將 citations 掃描、keyword score、statute score 集中在同一層，
+    後續 decision / authority branch 只做分流與聚合。
+    """
+    join_sql = f"\n            {statute_join_sql}" if statute_join_sql else ""
+    return f"""
+        base_citations AS (
+            SELECT
+                c.id,
+                c.source_id,
+                c.target_id,
+                c.target_authority_id,
+                {keyword_score_sql} AS kw_score,
+                {statute_score_sql} AS st_score
+            FROM citations c
+            JOIN src s ON s.source_id = c.source_id{join_sql}
+        ),
+    """
+
+
 # ── 參數解析 ──────────────────────────────────────────────────────────
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:
@@ -431,7 +525,12 @@ def fetch_target_rankings(
 
     params: dict[str, Any] = {"source_ids": source_ids}
     keyword_score_sql = build_keyword_score_sql(query_terms, params, "c.snippet")
-    statute_score_sql = build_statute_score_sql(statute_filters, params, "c.id")
+    statute_hits_sql = build_statute_hits_cte_sql(statute_filters, params, "c")
+    base_citations_cte_sql = build_base_citations_cte_sql(
+        keyword_score_sql=keyword_score_sql,
+        statute_score_sql=statute_hits_sql["score_sql"],
+        statute_join_sql=statute_hits_sql["join_sql"],
+    )
 
     target_where = ""
     target_filters = []
@@ -444,31 +543,39 @@ def fetch_target_rankings(
     if target_filters:
         target_where = "WHERE " + " AND ".join(target_filters)
 
-    sql = f"""
-        WITH src AS (
+    cte_parts = [
+        """
+        src AS (
             SELECT UNNEST(%(source_ids)s::bigint[]) AS source_id
-        ),
+        )
+        """.strip()
+    ]
+    if statute_hits_sql["cte_sql"]:
+        cte_parts.append(statute_hits_sql["cte_sql"].strip().rstrip(","))
+    cte_parts.append(base_citations_cte_sql.strip().rstrip(","))
+    with_clause = ",\n        ".join(cte_parts)
+
+    sql = f"""
+        WITH {with_clause},
         -- 判決引用：計算 score，並將 target 映射到 canonical_id
         scored_decisions AS (
             SELECT
-                c.source_id,
-                COALESCE(td.canonical_id, c.target_id) AS canonical_id,
-                ({keyword_score_sql})                   AS kw_score,
-                ({statute_score_sql})                   AS st_score
-            FROM citations c
-            JOIN src s        ON s.source_id = c.source_id
-            JOIN decisions td ON td.id       = c.target_id
+                bc.source_id,
+                COALESCE(td.canonical_id, bc.target_id) AS canonical_id,
+                bc.kw_score,
+                bc.st_score
+            FROM base_citations bc
+            JOIN decisions td ON td.id = bc.target_id
         ),
         -- 非裁判引用：計算 score
         scored_auth AS (
             SELECT
-                c.source_id,
-                c.target_authority_id,
-                ({keyword_score_sql})  AS kw_score,
-                ({statute_score_sql})  AS st_score
-            FROM citations c
-            JOIN src s ON s.source_id = c.source_id
-            WHERE c.target_authority_id IS NOT NULL
+                bc.source_id,
+                bc.target_authority_id,
+                bc.kw_score,
+                bc.st_score
+            FROM base_citations bc
+            WHERE bc.target_authority_id IS NOT NULL
         ),
         -- 同 (source, canonical) 保留最高分
         deduped_decisions AS (

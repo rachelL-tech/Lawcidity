@@ -1,0 +1,65 @@
+{
+  "nav": {
+    "overview": "Project Overview",
+    "demo": "Demo",
+    "github": "GitHub"
+  },
+  "hero": {
+    "eyebrow": "AI-Assisted Legal Search Project",
+    "headline": "I built Lawcidity, an AI-assisted legal search project using Taiwanese court decisions.",
+    "subheadline": "Turning unstructured court decisions into a usable search product.",
+    "supporting": "A case study in search architecture, parser refactoring, embedding evaluation, and AI-assisted development.",
+    "cta_overview": "Read Project Overview",
+    "cta_demo": "Try Demo",
+    "cta_github": "View on GitHub"
+  },
+  "trust": {
+    "lawyer": "Taiwan-qualified lawyer",
+    "dataset": "Public court decisions, 2025-01 to 2026-01",
+    "scale": "12GB PostgreSQL corpus including indexes"
+  },
+  "why_hard": {
+    "heading": "Why This Problem Is Hard",
+    "intro": "Court decisions are difficult to search reliably because their structure varies across judges, case types, and writing styles.",
+    "card1_title": "Inconsistent formats",
+    "card1_body": "Important references may be abbreviated, omitted, or expressed inconsistently, which makes reliable normalization difficult.",
+    "card2_title": "Citation complexity",
+    "card2_body": "Statutes, case references, and legal issues are hard to parse and connect consistently. Errors here can lead to missed citations and weaker retrieval quality.",
+    "card3_title": "Real-world constraints",
+    "card3_body": "A usable search system must balance retrieval quality, latency, and deployment constraints, not just model performance."
+  },
+  "what_built": {
+    "heading": "What I Built",
+    "intro": "Lawcidity combines parsing, keyword search, and AI-assisted search into a usable interface for exploring Taiwanese court decisions.",
+    "caption": "A simplified view of the system from court decisions to keyword and AI-assisted search.",
+    "step1": "Court decisions",
+    "step2": "Parsing & normalization",
+    "step3": "Indexing",
+    "step4": "Keyword retrieval",
+    "step5": "AI-assisted retrieval",
+    "step6": "Frontend demo"
+  },
+  "decisions": {
+    "heading": "Key Technical Decisions",
+    "intro": "The project was shaped by technical trade-offs across parsing and search workflow design.",
+    "card1_title": "Data normalization",
+    "card1_body": "I defined expected outputs and used iterative validation to refine normalization logic for messy legal texts.",
+    "card2_title": "Parser refactor",
+    "card2_body": "I restructured the citation parser into smaller, traceable functions to make rule-based behavior easier to inspect, test, and debug.",
+    "card3_title": "Retrieval benchmarking",
+    "card3_body": "I compared OpenSearch and PostgreSQL GIN on the same data pool and used the results to guide search architecture decisions.",
+    "card4_title": "Embedding evaluation",
+    "card4_body": "I designed evaluation cases and compared embedding models based on retrieval quality, speed, and deployment constraints."
+  },
+  "contribution": {
+    "heading": "My Contribution",
+    "body": "I led the problem framing, evaluation setup, and key technical decisions. AI tools supported parts of implementation, but I validated outputs and made the final trade-offs."
+  },
+  "final_cta": {
+    "heading": "Explore the Project",
+    "body": "Read the full case study, inspect the architecture, or try the working demo.",
+    "cta_overview": "Read Project Overview",
+    "cta_demo": "Try Demo",
+    "cta_github": "View on GitHub"
+  }
+}

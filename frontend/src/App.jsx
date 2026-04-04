@@ -1,6 +1,8 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Navbar from "./components/Navbar";
-import HomePage from "./pages/HomePage";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import LangLayout from "./components/LangLayout";
+import PortfolioHomePage from "./pages/PortfolioHomePage";
+import OverviewPage from "./pages/OverviewPage";
+import DemoPage from "./pages/DemoPage";
 import SearchResultsPage from "./pages/SearchResultsPage";
 import DecisionPage from "./pages/DecisionPage";
 import AiResultsPage from "./pages/AiResultsPage";
@@ -9,16 +11,19 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-page-bg">
-        <Navbar />
-        {/* Routes 會根據 BrowserRouter 提供的 router context ，判斷符合目前 pathname 的 route component，執行 component 函式，算出這個元件現在需要的資料、邏輯、事件和畫面（讀 props、執行 hooks、宣告一般變數與計算值、宣告事件處理函式、條件判斷、回傳 JSX） ，React 再更新畫面 commit 到 DOM */}
-        <Routes> 
-          <Route path="/" element={<HomePage />} />
-          <Route path="/search" element={<SearchResultsPage />} />
-          <Route path="/decisions/:id" element={<DecisionPage />} />
-          <Route path="/ai-results" element={<AiResultsPage />} />
+        <Routes>
+          <Route path="/" element={<Navigate to="/en" replace />} />
+          <Route path="/:lang" element={<LangLayout />}>
+            <Route index element={<PortfolioHomePage />} />
+            <Route path="overview" element={<OverviewPage />} />
+            <Route path="demo" element={<DemoPage />} />
+            <Route path="search" element={<SearchResultsPage />} />
+            <Route path="decisions/:id" element={<DecisionPage />} />
+            <Route path="ai-results" element={<AiResultsPage />} />
+          </Route>
         </Routes>
-        <footer className="text-center text-sm text-gray-400 py-6">
-          © 2026 Lawcidity 法澄. All Rights Reserved.
+        <footer className="text-center text-sm text-gray-400 py-6 font-body">
+          &copy; 2026 Lawcidity. All Rights Reserved.
         </footer>
       </div>
     </BrowserRouter>
