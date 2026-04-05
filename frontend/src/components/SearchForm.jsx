@@ -82,7 +82,7 @@ export default function SearchForm({ initialReq, onSearch }) {
     <form onSubmit={handleSubmit} className="space-y-4">
       {/* 關鍵字 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">關鍵字</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">關鍵字 Keywords</label>
         <div className="flex gap-2">
           <input
             type="text"
@@ -100,7 +100,7 @@ export default function SearchForm({ initialReq, onSearch }) {
                 setKwInput("");
               }
             }}
-            placeholder="輸入後按 Enter 新增"
+            placeholder="e.g. 行車記錄器, 車禍 — press Enter to add"
             className="border border-brand-border rounded px-3 py-1.5 text-sm flex-1 focus:outline-none focus:border-brand"
           />
         </div>
@@ -119,7 +119,7 @@ export default function SearchForm({ initialReq, onSearch }) {
 
       {/* 法條 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">法條</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">法條 Statutes</label>
         <div className="space-y-2">
           {statutes.map((s, i) => (
             <LawCombobox
@@ -135,13 +135,13 @@ export default function SearchForm({ initialReq, onSearch }) {
           onClick={() => addStatute(setStatutes)}
           className="mt-2 text-sm text-brand hover:underline"
         >
-          + 新增法條
+          + 新增法條 Add statute
         </button>
       </div>
 
       {/* 排除關鍵字 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">排除關鍵字</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">排除關鍵字 Exclude keywords</label>
         <div className="flex gap-2">
           <input
             type="text"
@@ -160,7 +160,7 @@ export default function SearchForm({ initialReq, onSearch }) {
                 setXkwInput("");
               }
             }}
-            placeholder="輸入後按 Enter 新增"
+            placeholder="e.g.民事責任 press Enter to add"
             className="border border-brand-border rounded px-3 py-1.5 text-sm flex-1 focus:outline-none focus:border-brand"
           />
         </div>
@@ -179,7 +179,7 @@ export default function SearchForm({ initialReq, onSearch }) {
 
       {/* 排除法條 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">排除法條</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">排除法條 Exclude statutes</label>
         <div className="space-y-2">
           {excludeStatutes.map((s, i) => (
             <LawCombobox
@@ -195,13 +195,13 @@ export default function SearchForm({ initialReq, onSearch }) {
           onClick={() => addStatute(setExcludeStatutes)}
           className="mt-2 text-sm text-brand hover:underline"
         >
-          + 新增排除法條
+          + 新增排除法條 Add exclude statute
         </button>
       </div>
 
       {/* 案件類型 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">案件類型</label>
+        <label className="block text-sm font-medium text-gray-700 mb-2">案件類型 Case type</label>
         <div className="flex flex-wrap gap-2">
           {CASE_TYPES.map((ct) => (
             <button
@@ -225,7 +225,7 @@ export default function SearchForm({ initialReq, onSearch }) {
         type="submit"
         className="w-full bg-brand text-white py-2.5 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
       >
-        搜尋
+        搜尋 Search
       </button>
     </form>
   );

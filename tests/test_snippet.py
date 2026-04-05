@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest
-from etl.citation_parser_next import (
+from etl.citation_parser import (
     ACCEPT_STRICT_RE as _CITE_INTENT_RE,
     _REASON_SECTION_RE,
     extract_citations_next,
@@ -87,7 +87,7 @@ def test_para_start_with_leading_whitespace():
     )
     start, end = _pos(text, "最高法院100年台上字第1號")
     snip = extract_snippet(text, start, end)
-    # citation_parser_next 從 _SUB_CLAUSE_RE 找到的「按」開始，段落標題不含在內
+    # citation_parser 從 _SUB_CLAUSE_RE 找到的「按」開始，段落標題不含在內
     assert "按不法侵害他人" in snip
     assert "二、" not in snip
 
@@ -104,7 +104,7 @@ def test_arabic_numeral_section_header():
     )
     start, end = _pos(text, "最高法院51年台上字第223號")
     snip = extract_snippet(text, start, end)
-    # citation_parser_next 從 _SUB_CLAUSE_RE 找到的「又」開始
+    # citation_parser 從 _SUB_CLAUSE_RE 找到的「又」開始
     assert "又不法侵害他人" in snip
 
 
@@ -151,7 +151,7 @@ def test_opening_paren_citation_not_para_start():
     )
     start, end = _pos(text, "57年度台抗字第76號")
     snip = extract_snippet(text, start, end)
-    # citation_parser_next 在 \r\n 後截斷，snippet 從同行的引用括號開始
+    # citation_parser 在 \r\n 後截斷，snippet 從同行的引用括號開始
     # 重點：不應把 （最高法院 誤認為段落起頭而過短
     assert "最高法院56年度台抗字第714號" in snip
     assert "57年度台抗字第76號" in snip
@@ -168,7 +168,7 @@ def test_forward_yizhi_paren():
     )
     start, end = _pos(text, "最高法院113年度台上字第999號")
     snip = extract_snippet(text, start, end)
-    # citation_parser_next find_snippet_end 延伸到句號
+    # citation_parser find_snippet_end 延伸到句號
     assert "參照）" in snip
     assert "二、被告行為" not in snip
 
@@ -343,10 +343,10 @@ def test_prior_ruling_summary_citation_temporarily_retained_without_section_filt
     )
     results = extract_citations(text, court_root_norm="最高法院")
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
-    # citation_parser_next R010 要求 ACCEPT_RE signal；
+    # citation_parser R010 要求 ACCEPT_RE signal；
     # 原裁定略以段落內的憲判字無明確 signal → 被 R010 過濾
     assert len(decision_results) == 0, (
-        f"citation_parser_next R010 過濾此段落內無 ACCEPT_RE 的憲判字，但得到：{decision_results}"
+        f"citation_parser R010 過濾此段落內無 ACCEPT_RE 的憲判字，但得到：{decision_results}"
     )
 
 
@@ -547,7 +547,7 @@ def test_closing_quote_para_start():
     )
     start, end = _pos(text, "最高行政法院106年度判字第676號")
     snip = extract_snippet(text, start, end)
-    # citation_parser_next fallback 在 period+1 起始，可能帶入前置 」
+    # citation_parser fallback 在 period+1 起始，可能帶入前置 」
     assert "⑶依上規定" in snip, (
         f"snippet 應包含「⑶依上規定」，實際開頭：{snip[:30]!r}"
     )

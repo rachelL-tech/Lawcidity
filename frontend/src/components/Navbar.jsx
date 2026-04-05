@@ -1,23 +1,48 @@
-import { Link } from "react-router-dom"; // 給 React Router 用的 <a>，點了會切頁但不整頁重載（SPA）
+import { NavLink, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
-export default function Navbar() {
+export default function PortfolioNavbar() {
+  const { t } = useTranslation();
+  const { lang = "en" } = useParams();
+
+  const linkClass = ({ isActive }) =>
+    `text-sm font-body transition-colors ${
+      isActive
+        ? "text-brand font-semibold"
+        : "text-text-secondary hover:text-brand"
+    }`;
+
   return (
-    <nav className="flex items-center justify-between px-6 py-3 bg-white rounded-full shadow-sm mx-4 mt-4">
-      {/* 左邊是 Logo 和網站名稱（點了會回首頁），中間是搜尋框，右邊是使用者圖示（暫時用灰色圓代替） */}
-      <Link to="/" className="flex items-center gap-2 text-brand font-bold text-lg">
-        <span className="w-8 h-8 bg-brand-light rounded-full flex items-center justify-center text-brand">
-          ⚖
-        </span>
-        Lawcidity 法澄
-      </Link>
-      <div className="flex-1 max-w-md mx-8">
-        <input
-          type="text"
-          placeholder="直接查詢裁判字號"
-          className="w-full px-4 py-2 border border-gray-200 rounded-full text-sm focus:outline-none focus:border-brand"
-        />
+    <nav className="sticky top-0 z-50 bg-page-bg/90 backdrop-blur-sm border-b border-divider">
+      <div className="max-w-5xl mx-auto flex items-center justify-between px-6 py-4">
+        <NavLink
+          to={`/${lang}`}
+          end
+          className="flex items-center gap-2 text-brand font-bold text-lg font-body"
+        >
+          <span className="w-8 h-8 bg-brand-light rounded-full flex items-center justify-center text-brand text-sm">
+            &oline;
+          </span>
+          Lawcidity 法澄
+        </NavLink>
+
+        <div className="flex items-center gap-8">
+          <NavLink to={`/${lang}/demo`} className={linkClass}>
+            {t("nav.demo")}
+          </NavLink>
+          <a
+            href="https://github.com/rachelL-tech/Lawcidity"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-body text-text-secondary hover:text-brand transition-colors"
+          >
+            {t("nav.github")}
+          </a>
+          <span className="text-xs text-text-secondary/60 border border-divider rounded px-2 py-1">
+            EN
+          </span>
+        </div>
       </div>
-      <div className="w-8 h-8 bg-gray-200 rounded-full" />
     </nav>
   );
 }

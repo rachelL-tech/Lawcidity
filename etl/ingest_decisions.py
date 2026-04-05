@@ -18,7 +18,7 @@ import re
 import psycopg
 from dotenv import load_dotenv
 from court_parser import parse_court_from_folder, to_generic_root_norm
-from citation_parser_next import extract_citations_next
+from citation_parser import extract_citations_next
 from text_cleaner import clean_judgment_text
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)

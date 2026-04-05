@@ -1,9 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LangLayout from "./components/LangLayout";
-import PortfolioHomePage from "./pages/PortfolioHomePage";
-import OverviewPage from "./pages/OverviewPage";
+import HomePage from "./pages/HomePage";
 import DemoPage from "./pages/DemoPage";
-import SearchResultsPage from "./pages/SearchResultsPage";
+import KeywordResultsPage from "./pages/KeywordResultsPage";
 import DecisionPage from "./pages/DecisionPage";
 import AiResultsPage from "./pages/AiResultsPage";
 
@@ -14,10 +13,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/en" replace />} />
           <Route path="/:lang" element={<LangLayout />}>
-            <Route index element={<PortfolioHomePage />} />
-            <Route path="overview" element={<OverviewPage />} />
+            <Route index element={<HomePage />} />
             <Route path="demo" element={<DemoPage />} />
-            <Route path="search" element={<SearchResultsPage />} />
+            <Route path="search" element={<KeywordResultsPage />} />
             <Route path="decisions/:id" element={<DecisionPage />} />
             <Route path="ai-results" element={<AiResultsPage />} />
           </Route>

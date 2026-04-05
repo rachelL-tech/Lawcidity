@@ -139,8 +139,8 @@ export default function LawCombobox({ value, onChange, onRemove }) {
           onChange={handleLawInput}
           onKeyDown={handleLawKeyDown}
           onBlur={handleBlur}
-          placeholder="法律名稱（必填）"
-          className={`border rounded px-3 py-1.5 text-sm w-48 focus:outline-none ${
+          placeholder="e.g. 刑法 — Law name (required)"
+          className={`border rounded px-3 py-1.5 text-sm w-64 focus:outline-none ${
             hasError ? "border-red-400 focus:border-red-500" : "border-brand-border focus:border-brand"
           }`}
         />
@@ -168,8 +168,8 @@ export default function LawCombobox({ value, onChange, onRemove }) {
         type="text"
         value={value.article || ""}
         onChange={(e) => onChange({ ...value, article: e.target.value || null })}
-        placeholder="條（選填）"
-        className="border border-brand-border rounded px-3 py-1.5 text-sm w-28 focus:outline-none focus:border-brand"
+        placeholder="e.g. 284 — Article"
+        className="border border-brand-border rounded px-3 py-1.5 text-sm w-36 focus:outline-none focus:border-brand"
       />
 
       {/* 項/款/目輸入框：直接把 sub_ref 更新回父元件 */}
@@ -177,8 +177,8 @@ export default function LawCombobox({ value, onChange, onRemove }) {
         type="text"
         value={value.sub_ref || ""}
         onChange={(e) => onChange({ ...value, sub_ref: e.target.value || null })}
-        placeholder="項款目（選填）"
-        className="border border-brand-border rounded px-3 py-1.5 text-sm w-32 focus:outline-none focus:border-brand"
+        placeholder="e.g. 第1項 — Paragraph"
+        className="border border-brand-border rounded px-3 py-1.5 text-sm w-40 focus:outline-none focus:border-brand"
       />
 
       {/* 刪除按鈕：子元件要刪除自己時，通知父元件把這筆移掉 */}
@@ -193,7 +193,7 @@ export default function LawCombobox({ value, onChange, onRemove }) {
     {/* 錯誤提示：法律名稱不在白名單時顯示 */}
     {hasError && (
       <p className="text-xs text-red-500 ml-1">
-        此法律未納入索引，建議以關鍵字搜尋
+        此法律未納入索引，建議以關鍵字搜尋 — Law not indexed, try keyword search instead
       </p>
     )}
   </div>

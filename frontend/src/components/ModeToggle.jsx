@@ -16,20 +16,20 @@ export default function ModeToggle({ mode, onChange }) {
       {/* - 最上層：兩個可點擊文字按鈕，relative z-10 讓按鈕文字蓋在滑塊上面 */}
       <button
         onClick={() => onChange("keyword")}
-        className={`relative z-10 px-6 py-2.5 text-sm font-medium transition-colors ${
+        className={`relative z-10 w-40 py-2.5 text-sm font-medium text-center transition-colors ${
           mode === "keyword" ? "text-white" : "text-brand"
         }`}
       >
-        關鍵字模式
+        Keyword Search
       </button>
 
       <button
         onClick={() => onChange("ai")}
-        className={`relative z-10 px-6 py-2.5 text-sm font-medium transition-colors ${
+        className={`relative z-10 w-40 py-2.5 text-sm font-medium text-center transition-colors ${
           mode === "ai" ? "text-white" : "text-brand"
         }`}
       >
-        AI 長文模式
+        AI Search
       </button>
     </div>
   );

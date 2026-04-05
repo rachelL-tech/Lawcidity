@@ -1,12 +1,12 @@
 # Lawcidity
 
-AI-assisted legal search built on 1.4 million Taiwanese court decisions.
+Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assisted flow that clarifies legal intent before analization.
 
 **🔗 [Live Demo](https://your-domain.com)** — try keyword search or RAG-based retrieval on real court data.
 
 > Try these searches:
-> - **Keyword**: 搜尋「過失致死」＋ 刑法第276條 — see citation-linked rankings
-> - **RAG**: 輸入事實描述 → 確認爭點 → 生成 AI 分析
+> - **Keyword search**: keyword「行車記錄器」「車禍」＋ statute「刑法」「284」 — see citation-linked rankings
+> - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」 → 確認爭點、法條 → 生成 AI 分析
 
 ---
 
@@ -14,13 +14,17 @@ AI-assisted legal search built on 1.4 million Taiwanese court decisions.
 
 <!-- TODO: Replace with actual screenshots/GIFs -->
 
-| Keyword Search | RAG-based Search |
-|---|---|
-| ![keyword search](docs/screenshots/keyword-search.png) | ![rag search](docs/screenshots/rag-search.png) |
+| Keyword Search |
+|---|
+| ![keyword search](docs/screenshots/keyword-search.png) |
 
-| Statute Filtering | AI Analysis |
-|---|---|
-| ![statute filter](docs/screenshots/statute-filter.png) | ![ai analysis](docs/screenshots/ai-analysis.png) |
+| RAG-based Search |
+|---|
+| ![rag search](docs/screenshots/rag-search.png) |
+
+| Decision Detail |
+|---|
+| ![decision detail](docs/screenshots/decision-detail.png) |
 
 ---
 
@@ -59,6 +63,31 @@ AI-assisted legal search built on 1.4 million Taiwanese court decisions.
 | Infrastructure | AWS EC2, RDS, nginx |
 
 **Data source:** [Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/) — public court decisions, 2025-01 to 2026-01.
+
+**Key technology decisions:**
+- **OpenSearch** over PostgreSQL GIN: 27× faster on cited-decision retrieval, less than a third of the index storage
+- **pgvector** over a managed vector DB: co-located with relational data, avoids extra service dependency
+- **Voyage API (voyage-law-2)** over local embedding: legal-domain model with better recall; freed local machine for parallel development; 6–7 chunks/s vs 3.3 chunks/s local
+
+**Project structure:**
+
+```
+lawcidity/
+├── app/                  # FastAPI application (API routes, RAG service, search service)
+├── etl/                  # Data pipeline (citation parser, statute extractor, chunk builders)
+├── scripts/              # Embedding, OpenSearch sync, evaluation
+├── tests/
+│   ├── test_citation_parser.py   # Citation extraction regression tests
+│   ├── test_snippet.py           # Snippet boundary tests
+│   ├── test_search_service.py    # SQL builder unit tests
+│   └── test_doc_type_normalize.py
+├── frontend/             # React + Vite
+│   └── src/
+│       ├── pages/        # HomePage, DemoPage, KeywordResultsPage, AiResultsPage, DecisionPage
+│       └── components/   # SearchForm, AiSearchForm, ModeToggle, LawCombobox, ResultCard, ...
+├── sql/                  # Schema migrations
+└── docker-compose.yml    # Local dev stack
+```
 
 ---
 

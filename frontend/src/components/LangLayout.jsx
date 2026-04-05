@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Outlet, useParams, Navigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import PortfolioNavbar from "./PortfolioNavbar";
+import Navbar from "./Navbar";
 
 const SUPPORTED_LANGS = ["en"];
 
@@ -21,7 +21,7 @@ export default function LangLayout() {
 
   return (
     <>
-      <PortfolioNavbar />
+      <Navbar />
       <Outlet />
     </>
   );

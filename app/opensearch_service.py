@@ -1,5 +1,5 @@
 """
-搜尋業務邏輯層（不知道 HTTP，不依賴 FastAPI）。
+搜尋業務邏輯層（不依賴 FastAPI）。
 
 職責：
 - 參數解析與正規化：dedupe_query_terms、dedupe_statute_filters、build_statute_filters

@@ -42,7 +42,7 @@ def health():
         pass
 
     try:
-        from app.search_service import _get_opensearch_client
+        from app.opensearch_service import _get_opensearch_client
         client = _get_opensearch_client()
         info = client.info()
         os_ok = bool(info)

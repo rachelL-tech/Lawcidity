@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "etl"))
 
-from etl.citation_parser_next import (
+from etl.citation_parser import (
     find_all_candidates,
     make_filter_context,
     _RULES,

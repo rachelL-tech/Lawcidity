@@ -13,7 +13,7 @@
 """
 from fastapi import APIRouter, HTTPException
 from app.db import get_conn
-from app.search_service import (
+from app.opensearch_service import (
     dedupe_query_terms,
     dedupe_statute_filters,
     parse_case_types,

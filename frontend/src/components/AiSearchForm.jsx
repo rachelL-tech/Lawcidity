@@ -61,12 +61,12 @@ export default function AiSearchForm({ onSubmit }) {
       {/* 輸入區 */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          案情事實描述
+          案例事實描述 Describe your case
         </label>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="請輸入完整的案情事實，例如：我是承包商的下包，承包商將工程款債權讓與給我..."
+          placeholder="e.g. 如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？&#10;Describe the facts of your case in Chinese for best results."
           rows={5}
           className="w-full border border-brand-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand resize-y"
         />
@@ -82,14 +82,14 @@ export default function AiSearchForm({ onSubmit }) {
         {loading ? (
           <>
             <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            分析中...
+            分析中 Analyzing...
           </>
         ) : (
           <>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.5V11h3a4 4 0 0 1 4 4v1a2 2 0 0 1-2 2h-1v2a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-2H5a2 2 0 0 1-2-2v-1a4 4 0 0 1 4-4h3V9.5A4 4 0 0 1 8 6a4 4 0 0 1 4-4z"/>
             </svg>
-            AI 分析
+            AI 分析 Analyze
           </>
         )}
       </button>
@@ -104,7 +104,7 @@ export default function AiSearchForm({ onSubmit }) {
           {/* 爭點 */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-2">
-              爭點（請勾選要搜尋的）
+              爭點 Issues (select to search)
             </h3>
             <div className="space-y-2">
               {analysisResult.issues.map((issue, i) => (
@@ -127,7 +127,7 @@ export default function AiSearchForm({ onSubmit }) {
           {/* 法條 */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-2">
-              相關法條
+              相關法條 Related statutes
             </h3>
             <div className="flex flex-wrap gap-2">
               {analysisResult.statutes.map((s, i) => (
@@ -154,7 +154,7 @@ export default function AiSearchForm({ onSubmit }) {
             disabled={selectedIssues.length === 0 && selectedStatutes.length === 0}
             className="w-full bg-brand text-white py-2.5 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
           >
-            搜尋相關判決
+            搜尋相關判決 Search decisions
           </button>
         </div>
       )}

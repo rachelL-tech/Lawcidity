@@ -1,5 +1,5 @@
 """
-tests/test_citation_parser_next.py — citation_parser_next 穩定規則回歸測試
+tests/test_citation_parser.py — citation_parser 穩定規則回歸測試
 """
 import sys
 from pathlib import Path
@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest
-from etl.citation_parser_next import extract_citations_next, find_snippet_start, find_snippet_end
+from etl.citation_parser import extract_citations_next, find_snippet_start, find_snippet_end
 
 
 def _pos(text: str, sub: str) -> tuple[int, int]:

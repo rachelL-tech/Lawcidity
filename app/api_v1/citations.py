@@ -14,7 +14,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from psycopg.rows import dict_row
 from app.db import get_conn
-from app.search_service import (
+from app.opensearch_service import (
     dedupe_query_terms,
     dedupe_statute_filters,
     build_keyword_score_sql,

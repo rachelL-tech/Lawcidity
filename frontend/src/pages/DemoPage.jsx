@@ -69,24 +69,16 @@ export default function DemoPage() {
     <div className="max-w-2xl mx-auto px-4 py-20 font-body">
       {/* Hero */}
       <div className="text-center mb-10">
-        <p className="text-sm font-semibold tracking-widest uppercase text-brand mb-4">
-          Try the Demo
-        </p>
-        <h1 className={`font-bold text-brand mb-3 ${lang === "en" ? "text-3xl" : "text-4xl"}`}>
+        <h1 className={`font-display text-brand mb-3 ${lang === "en" ? "text-4xl" : "text-5xl"}`}>
           {displayed}
           {cursorVisible && <span className={`inline-block w-[3px] h-[1.1em] bg-brand ml-1 align-bottom ${done ? "animate-blink" : ""}`} />}
         </h1>
-        <p className="text-gray-500 text-base">{subtitle}</p>
+        <p className="text-text-secondary text-base">{subtitle}</p>
       </div>
 
       {/* Mode toggle */}
-      <div className="flex flex-col items-center gap-2 mb-8">
+      <div className="flex justify-center mb-8">
         <ModeToggle mode={mode} onChange={setMode} />
-        <p className="text-text-secondary text-sm">
-          {mode === "keyword"
-            ? "輸入關鍵字與法條，搜尋相關實務見解"
-            : "輸入完整案情事實，AI 自動分析爭點與法條"}
-        </p>
       </div>
 
       {/* Search form */}

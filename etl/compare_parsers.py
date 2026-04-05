@@ -2,7 +2,7 @@
 compare_parsers.py — 比較 extract_citations（舊）與 extract_citations_next（新）的輸出差異
 
 「舊」基準：主目錄 /Users/rachel/Desktop/claude/final-project/etl/citation_parser.py
-「新」版本：本 worktree 的 etl/citation_parser_next.py
+「新」版本：本 worktree 的 etl/citation_parser.py
 
 使用方式：
   python etl/compare_parsers.py /Users/rachel/Downloads/202512          # 全量
@@ -41,7 +41,7 @@ def _load_old_extract_citations():
 
 from etl.court_parser import parse_court_from_folder
 from etl.text_cleaner import clean_judgment_text
-from etl.citation_parser_next import extract_citations_next
+from etl.citation_parser import extract_citations_next
 
 extract_citations = _load_old_extract_citations()
 
