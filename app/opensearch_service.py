@@ -187,6 +187,11 @@ def build_base_citations_cte_sql(
     """
 
 
+def build_decision_doc_type_sql(canonical_alias: str = "canonical") -> str:
+    """優先讀取 canonical 層級的 doc_type 衍生欄位，未回填時退回原始 doc_type。"""
+    return f"COALESCE({canonical_alias}.canonical_doc_type, {canonical_alias}.doc_type)"
+
+
 # ── 參數解析 ──────────────────────────────────────────────────────────
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:
@@ -531,6 +536,7 @@ def fetch_target_rankings(
         statute_score_sql=statute_hits_sql["score_sql"],
         statute_join_sql=statute_hits_sql["join_sql"],
     )
+    decision_doc_type_sql = build_decision_doc_type_sql("canonical")
 
     target_where = ""
     target_filters = []
@@ -615,18 +621,6 @@ def fetch_target_rankings(
             FROM deduped_auth
             GROUP BY target_authority_id
         ),
-        -- 每個 canonical 群的聚合 doc_type（涵蓋所有 sibling）
-        canonical_doc_types AS (
-            SELECT
-                d.canonical_id,
-                CASE
-                  WHEN COUNT(DISTINCT d.doc_type) FILTER (WHERE d.doc_type IS NOT NULL) > 1 THEN '裁判'
-                  ELSE MAX(d.doc_type)
-                END AS doc_type
-            FROM decisions d
-            WHERE d.canonical_id IN (SELECT canonical_id FROM ranked_decisions)
-            GROUP BY d.canonical_id
-        ),
         joined AS (
             -- 判決 branch（以 canonical 為代表）
             SELECT
@@ -650,10 +644,9 @@ def fetch_target_rankings(
                 canonical.jcase_norm,
                 canonical.jno,
                 canonical.display_title,
-                COALESCE(cdt.doc_type, canonical.doc_type)        AS doc_type
+                {decision_doc_type_sql}                            AS doc_type
             FROM ranked_decisions rd
             JOIN decisions canonical           ON canonical.id    = rd.canonical_id
-            LEFT JOIN canonical_doc_types cdt  ON cdt.canonical_id = rd.canonical_id
             UNION ALL
             -- 非裁判 branch
             SELECT

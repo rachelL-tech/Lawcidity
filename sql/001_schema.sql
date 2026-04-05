@@ -107,7 +107,9 @@ CREATE TABLE decisions (
                         jyear::TEXT || '年度' || jcase_norm || '字第' || jno::TEXT || '號'
                       ) STORED,
   -- ★ denormalized 被引次數（按 canonical 群計），ingest 結束後批次更新
-  total_citation_count INT NOT NULL DEFAULT 0
+  total_citation_count INT NOT NULL DEFAULT 0,
+  -- ★ canonical 群層級 doc_type 衍生欄位：多種本體時為「裁判」，否則為唯一 doc_type
+  canonical_doc_type  TEXT
 );
 
 -- jid 非空時唯一（正式文書）

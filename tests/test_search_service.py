@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
 
 from app.opensearch_service import (
     build_base_citations_cte_sql,
+    build_decision_doc_type_sql,
     build_statute_hits_cte_sql,
 )
 
@@ -58,3 +59,9 @@ def test_build_base_citations_cte_sql_reuses_citations_scan_and_scores():
     assert "LEFT JOIN statute_hits sh ON sh.citation_id = c.id" in sql
     assert "(c.snippet ILIKE %(kw_0)s)::int AS kw_score" in sql
     assert "COALESCE(sh.st_score, 0) AS st_score" in sql
+
+
+def test_build_decision_doc_type_sql_prefers_canonical_doc_type_column():
+    sql = build_decision_doc_type_sql("canonical")
+
+    assert sql == "COALESCE(canonical.canonical_doc_type, canonical.doc_type)"
