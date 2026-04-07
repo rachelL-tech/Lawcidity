@@ -9,8 +9,8 @@ import { paramsToSearchRequest, searchRequestToParams, searchParamsKey } from ".
 
 // 搜尋結果頁
 // URL 是 state 的唯一來源
-// 搜尋條件改變 → 打 OpenSearch + PG（完整搜尋）
-// doc_types / court_levels / sort / page 改變 → 只打 PG rerank
+// 搜尋條件改變 → 重跑第一階段 source 召回
+// doc_types / court_levels / sort / page 改變 → 只重跑 target rerank
 export default function SearchResultsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -21,18 +21,50 @@ export default function SearchResultsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // 快取 source_ids（OpenSearch 回傳的），供 rerank 用
-  const sourceIdsRef = useRef([]);
+  // 快取後端 search source_ids cache key，供 citations 展開用
+  const searchCacheKeyRef = useRef(null);
   // 記錄上次觸發 OpenSearch 的搜尋條件 key
   const prevSearchKeyRef = useRef("");
 
   // 從 URL 還原目前的搜尋條件
   const req = paramsToSearchRequest(searchParams);
   const currentSearchKey = searchParamsKey(searchParams);
+  const searchCacheStorageKey = currentSearchKey
+    ? `search-cache-key:${currentSearchKey}`
+    : null;
+  const needsTargetRerank =
+    req.doc_types.length > 0 ||
+    req.court_levels.length > 0 ||
+    req.sort !== "relevance";
+
+  function buildRerankRequest(searchCacheKey) {
+    return {
+      search_cache_key: searchCacheKey,
+      keywords: req.keywords,
+      statutes: req.statutes,
+      exclude_keywords: req.exclude_keywords,
+      exclude_statutes: req.exclude_statutes,
+      case_types: req.case_types,
+      doc_types: req.doc_types,
+      court_levels: req.court_levels,
+      sort: req.sort,
+      page: req.page,
+      page_size: req.page_size,
+    };
+  }
 
   // URL 改變時決定要打全量搜尋還是 rerank
   useEffect(() => {
-    const needFullSearch = currentSearchKey !== prevSearchKeyRef.current;
+    const persistedSearchCacheKey = searchCacheStorageKey
+      ? window.sessionStorage.getItem(searchCacheStorageKey)
+      : null;
+    if (persistedSearchCacheKey) {
+      searchCacheKeyRef.current = persistedSearchCacheKey;
+      prevSearchKeyRef.current = currentSearchKey;
+    }
+
+    const needFullSearch =
+      currentSearchKey !== prevSearchKeyRef.current && !persistedSearchCacheKey;
 
     async function fetchResults() {
       setLoading(true);
@@ -40,20 +72,23 @@ export default function SearchResultsPage() {
       try {
         let data;
         if (needFullSearch) {
-          data = await search(req);
-          sourceIdsRef.current = data.source_ids ?? [];
+          const searchData = await search(req);
+          searchCacheKeyRef.current = searchData.search_cache_key ?? null;
           prevSearchKeyRef.current = currentSearchKey;
+          data = needsTargetRerank
+            ? await rerank(buildRerankRequest(searchCacheKeyRef.current))
+            : searchData;
         } else {
-          data = await rerank({
-            source_ids: sourceIdsRef.current,
-            keywords: req.keywords,
-            statutes: req.statutes,
-            doc_types: req.doc_types,
-            court_levels: req.court_levels,
-            sort: req.sort,
-            page: req.page,
-            page_size: req.page_size,
-          });
+          data = await rerank(buildRerankRequest(searchCacheKeyRef.current));
+        }
+        searchCacheKeyRef.current = data.search_cache_key ?? searchCacheKeyRef.current;
+        prevSearchKeyRef.current = currentSearchKey;
+        if (searchCacheStorageKey) {
+          if (searchCacheKeyRef.current) {
+            window.sessionStorage.setItem(searchCacheStorageKey, searchCacheKeyRef.current);
+          } else {
+            window.sessionStorage.removeItem(searchCacheStorageKey);
+          }
         }
         setResults(data.results);
         setTotal(data.total);
@@ -115,7 +150,7 @@ export default function SearchResultsPage() {
               <span className="text-red-500">{error}</span>
             ) : results !== null ? (
               <>
-                找到 <span className="font-medium text-gray-800">{total}</span> 筆相關實務見解
+                為您找到 <span className="font-medium text-gray-800">{total}</span> 筆重要實務裁判，點擊可看詳細見解
               </>
             ) : null}
           </div>
@@ -126,8 +161,7 @@ export default function SearchResultsPage() {
               <span className="text-gray-400">排序依據：</span>
               {[
                 { value: "relevance", label: "命中率" },
-                { value: "matched_citation_count", label: "被提及次數" },
-                { value: "total_citation_count", label: "熱門程度" },
+                { value: "total_citation_count", label: "引用次數" },
               ].map(({ value, label }) => (
                 <button
                   key={value}
@@ -169,6 +203,10 @@ export default function SearchResultsPage() {
                 rank={(req.page - 1) * req.page_size + i + 1}
                 keywords={req.keywords}
                 statutes={req.statutes}
+                excludeKeywords={req.exclude_keywords}
+                excludeStatutes={req.exclude_statutes}
+                caseTypes={req.case_types}
+                searchCacheKey={searchCacheKeyRef.current}
               />
             ))}
           </div>

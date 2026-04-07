@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import Literal
 
 
@@ -14,20 +14,21 @@ class StatuteFilter(BaseModel):
 # ── POST /search ───────────────────────────────────────────────────────────────
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     keywords: list[str] = []
     statutes: list[StatuteFilter] = []
     exclude_keywords: list[str] = []
     exclude_statutes: list[StatuteFilter] = []
     case_types: list[str] = []
-    doc_types: list[str] = []          # 篩選 target 的文書類型（判決/裁定/…）
-    sort: Literal["relevance", "matched_citation_count", "total_citation_count"] = "relevance"
+    sort: Literal["relevance"] = "relevance"
     page: int = 1
     page_size: int = 20
 
     @model_validator(mode="after")
-    def at_least_one(self) -> SearchRequest:
-        if not self.keywords and not self.statutes:
-            raise ValueError("keywords 和 statutes 至少填一個")
+    def keywords_required(self) -> SearchRequest:
+        if not any(keyword.strip() for keyword in self.keywords):
+            raise ValueError("keywords 至少填一個")
         return self
 
 
@@ -41,9 +42,8 @@ class SearchResultItem(BaseModel):
     jno: int | None
     case_ref: str
     doc_type: str | None
-    total_citation_count: int # 不受搜尋條件限制，歷史上被引用的總次數
-    matched_citation_count: int # 符合搜尋條件的 source 數
-    score: float
+    total_citation_count: int # 不受搜尋條件限制，歷史上引用此 target 的 distinct source 數
+    ranked_source_ids: list[int] = []
 
 
 class SearchContext(BaseModel):
@@ -58,20 +58,31 @@ class SearchResponse(BaseModel):
     page: int
     page_size: int
     source_count: int
-    source_ids: list[int]               # 供 rerank 用，避免重打 OpenSearch
+    search_cache_key: str | None = None
     results: list[SearchResultItem]
     search_context: SearchContext
 
 
 class RerankRequest(BaseModel):
-    source_ids: list[int]
+    model_config = ConfigDict(extra="forbid")
+
+    search_cache_key: str | None = None
     keywords: list[str] = []
     statutes: list[StatuteFilter] = []
+    exclude_keywords: list[str] = []
+    exclude_statutes: list[StatuteFilter] = []
+    case_types: list[str] = []
     doc_types: list[str] = []
     court_levels: list[int] = []
-    sort: Literal["relevance", "matched_citation_count", "total_citation_count"] = "relevance"
+    sort: Literal["relevance", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
+
+    @model_validator(mode="after")
+    def keywords_required(self) -> RerankRequest:
+        if not any(keyword.strip() for keyword in self.keywords):
+            raise ValueError("keywords 至少填一個")
+        return self
 
 
 # ── GET /decisions/{id}/citations ──────────────────────────────────────────────
@@ -89,8 +100,6 @@ class CitationSource(BaseModel):
     match_end: int | None
     raw_match: str
     statutes: list[dict]
-    is_matched: bool
-    score: float
 
 
 class CitationTargetInfo(BaseModel):
@@ -103,9 +112,10 @@ class CitationTargetInfo(BaseModel):
 
 class CitationsResponse(BaseModel):
     target: CitationTargetInfo
-    total: int
     matched_total: int
-    sources: list[CitationSource]
+    others_total: int
+    matched_sources: list[CitationSource] | None = None
+    others_sources: list[CitationSource] | None = None
 
 
 # ── POST /search/semantic ──────────────────────────────────────────────────────
@@ -163,7 +173,7 @@ class DecisionDetail(BaseModel):
     decision_date: str | None
     title: str | None
     clean_text: str | None
-    total_citation_count: int
+    total_citation_count: int  # 歷史上引用此 target 的 distinct source 數
     statutes: list[DecisionStatute]
 
 

@@ -32,32 +32,52 @@ async function get(path) {
 
 // 打搜尋 API，req 是搜尋條件物件
 export function search(req) {
-  return post("/search", req);
+  return post("/search", {
+    keywords: req.keywords,
+    statutes: req.statutes,
+    exclude_keywords: req.exclude_keywords,
+    exclude_statutes: req.exclude_statutes,
+    case_types: req.case_types,
+    sort: "relevance",
+    page: req.page,
+    page_size: req.page_size,
+  });
 }
 
-// 只重跑 PG target ranking（不重打 OpenSearch），用於 doc_types / court_levels 篩選
+// 只重跑 target ranking（不重打第一階段 source 召回）
 export function rerank(req) {
-  return post("/search/rerank", req);
+  return post("/search/rerank", {
+    search_cache_key: req.search_cache_key,
+    keywords: req.keywords,
+    statutes: req.statutes,
+    exclude_keywords: req.exclude_keywords,
+    exclude_statutes: req.exclude_statutes,
+    case_types: req.case_types,
+    doc_types: req.doc_types,
+    court_levels: req.court_levels,
+    sort: req.sort,
+    page: req.page,
+    page_size: req.page_size,
+  });
 }
 
-// 把 citations 查詢需要的參數轉成 query string，給 fetchMatchedCitations 和 fetchOtherCitations 用
-function citationParams(keywords, statutes) {
+// 把 citations 查詢需要的參數轉成 query string，給展開 citations preview 用
+function citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds) {
   const p = new URLSearchParams();
   if (keywords.length) p.set("keywords", keywords.join(",")); // keywords=a,b,c 
   if (statutes.length) p.set("statutes", JSON.stringify(statutes));
+  if (excludeKeywords.length) p.set("exclude_keywords", excludeKeywords.join(","));
+  if (excludeStatutes.length) p.set("exclude_statutes", JSON.stringify(excludeStatutes));
+  if (caseTypes.length) p.set("case_types", caseTypes.join(","));
+  if (searchCacheKey) p.set("search_cache_key", searchCacheKey);
+  if (rankedSourceIds?.length) p.set("ranked_source_ids", rankedSourceIds.join(","));
   return p.toString(); // URLSearchParams 是物件，要轉成字串才能放在 URL 後面
 }
 
-// 打 GET /api/v1/{targetType}/{targetId}/citations/matched?...
-export function fetchMatchedCitations(targetType, targetId, keywords, statutes) {
-  const qs = citationParams(keywords, statutes);
-  return get(`/${targetType}/${targetId}/citations/matched?${qs}`);
-}
-
-// 打 GET /api/v1/{targetType}/{targetId}/citations/others?...
-export function fetchOtherCitations(targetType, targetId, keywords, statutes) {
-  const qs = citationParams(keywords, statutes);
-  return get(`/${targetType}/${targetId}/citations/others?${qs}`);
+// 打 GET /api/v1/{targetType}/{targetId}/citations?...
+export function fetchCitations(targetType, targetId, keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds = []) {
+  const qs = citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds);
+  return get(`/${targetType}/${targetId}/citations?${qs}`);
 }
 
 // 打 GET /api/v1/decisions/{id}

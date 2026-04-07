@@ -1,18 +1,30 @@
 import { useState } from "react";
 import DocTypeBadge from "./DocTypeBadge";
 import SnippetCard from "./SnippetCard";
-import { fetchMatchedCitations, fetchOtherCitations } from "../lib/api";
+import { fetchCitations } from "../lib/api";
 
 // 搜尋結果卡片：顯示一筆被參照判決，點擊展開引用來源列表
 // Props:
 //   item: SearchResultItem（從 /search API 回傳）
 //   keywords: string[] — 傳給 SnippetCard 做 highlight
 //   statutes: StatuteFilter[] — 傳給 citations API 篩選 matched
-export default function ResultCard({ item, keywords, statutes, rank }) {
+//   excludeKeywords / excludeStatutes / caseTypes — cache miss 時重建第一階段 source 母體
+//   searchCacheKey: string | null — /search 回傳的 source_ids cache key
+export default function ResultCard({
+  item,
+  keywords,
+  statutes,
+  excludeKeywords,
+  excludeStatutes,
+  caseTypes,
+  rank,
+  searchCacheKey,
+}) {
   const [expanded, setExpanded] = useState(false);
   const [matched, setMatched] = useState(null); // null = 尚未載入
   const [matchedTotal, setMatchedTotal] = useState(null);
   const [others, setOthers] = useState(null);
+  const [othersTotal, setOthersTotal] = useState(null);
   const [loadingCitations, setLoadingCitations] = useState(false);
 
   // 依 target 類型決定 endpoint
@@ -31,13 +43,23 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
     if (matched !== null) return; // 已載入過，不重打
     setLoadingCitations(true);
     try {
-      const [m, o] = await Promise.all([
-        fetchMatchedCitations(targetType, targetId, keywords, statutes),
-        fetchOtherCitations(targetType, targetId, keywords, statutes),
-      ]);
-      setMatched(m.sources ?? []);
-      setMatchedTotal(m.matched_total ?? (m.sources ?? []).length);
-      setOthers(o.sources ?? []);
+      const resp = await fetchCitations(
+        targetType,
+        targetId,
+        keywords,
+        statutes,
+        excludeKeywords,
+        excludeStatutes,
+        caseTypes,
+        searchCacheKey,
+        item.ranked_source_ids ?? [],
+      );
+      const matchedSources = resp.matched_sources ?? [];
+      const otherSources = resp.others_sources ?? [];
+      setMatched(matchedSources);
+      setMatchedTotal(resp.matched_total ?? matchedSources.length);
+      setOthers(otherSources);
+      setOthersTotal(resp.others_total ?? otherSources.length);
     } finally {
       setLoadingCitations(false);
     }
@@ -74,7 +96,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
           {/* 右側：引用次數 + 展開箭頭 */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-sm text-gray-500">
-              被 <span className="font-semibold text-gray-700">{item.matched_citation_count}</span> 則符合搜尋的裁判提及
+              共 <span className="font-semibold text-gray-700">{item.total_citation_count}</span> 筆引用來源
             </span>
             <span
               className={`text-brand transition-transform duration-200 ${
@@ -99,7 +121,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-brand mb-2 flex items-center gap-1">
                 <span>📎</span>
-                符合您的搜尋條件（{matchedTotal ?? matched.length} 筆）
+                完全命中搜尋條件（{matchedTotal ?? matched.length} 筆）
               </h3>
               <div className="space-y-3">
                 {matched.map((c) => (
@@ -114,7 +136,7 @@ export default function ResultCard({ item, keywords, statutes, rank }) {
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
                 <span>📎</span>
-                可能與您的搜尋相關（{others.length} 筆）
+                未完全命中，但引用此裁判（{othersTotal ?? others.length} 筆）
               </h3>
               <div className="space-y-3">
                 {others.map((c) => (

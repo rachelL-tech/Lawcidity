@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# 初始化 OpenSearch ngram 索引（若不存在才建立）。
-# 預設建立 decisions_v3，並使用 bigram（min_gram=max_gram=2）。
+# 初始化 source-target window OpenSearch 索引。
 set -euo pipefail
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-https://localhost:9200}"
 OPENSEARCH_URL="${OPENSEARCH_URL%/}"
-OPENSEARCH_INDEX="${OPENSEARCH_INDEX:-decisions_v3}"
+OPENSEARCH_SOURCE_TARGET_INDEX="${OPENSEARCH_SOURCE_TARGET_INDEX:-source_target_windows_v2}"
 OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-admin}"
 OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
 OPENSEARCH_VERIFY_CERTS="${OPENSEARCH_VERIFY_CERTS:-false}"
@@ -24,21 +23,6 @@ if [[ -z "${OPENSEARCH_PASSWORD}" ]]; then
   exit 1
 fi
 
-if ! [[ "${OPENSEARCH_NGRAM_MIN_GRAM}" =~ ^[0-9]+$ && "${OPENSEARCH_NGRAM_MAX_GRAM}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須為正整數" >&2
-  exit 1
-fi
-
-if (( OPENSEARCH_NGRAM_MIN_GRAM < 1 || OPENSEARCH_NGRAM_MAX_GRAM < 1 )); then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須 >= 1" >&2
-  exit 1
-fi
-
-if (( OPENSEARCH_NGRAM_MIN_GRAM > OPENSEARCH_NGRAM_MAX_GRAM )); then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM 不可大於 OPENSEARCH_NGRAM_MAX_GRAM" >&2
-  exit 1
-fi
-
 CURL_EXTRA=()
 if [[ "${OPENSEARCH_VERIFY_CERTS}" != "true" ]]; then
   CURL_EXTRA+=("-k")
@@ -47,11 +31,11 @@ fi
 AUTH=(-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}")
 HEAD_CODE="$(
   curl "${CURL_EXTRA[@]}" -sS -o /dev/null -w "%{http_code}" "${AUTH[@]}" \
-    "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}"
+    "${OPENSEARCH_URL}/${OPENSEARCH_SOURCE_TARGET_INDEX}"
 )"
 
 if [[ "${HEAD_CODE}" == "200" ]]; then
-  echo "Index already exists: ${OPENSEARCH_INDEX}"
+  echo "Index already exists: ${OPENSEARCH_SOURCE_TARGET_INDEX}"
   exit 0
 fi
 
@@ -65,7 +49,7 @@ INDEX_BODY="$(cat <<JSON
   "settings": {
     "number_of_shards": 1,
     "number_of_replicas": 0,
-    "analysis": { 
+    "analysis": {
       "tokenizer": {
         "zh_ngram_tokenizer": {
           "type": "ngram",
@@ -83,16 +67,17 @@ INDEX_BODY="$(cat <<JSON
     }
   },
   "mappings": {
-    "_source": {
-      "excludes": ["clean_text"]
-    },
     "properties": {
       "source_id": { "type": "long" },
+      "target_id": { "type": "long" },
+      "target_authority_id": { "type": "long" },
+      "target_type": { "type": "keyword" },
+      "target_uid": { "type": "keyword" },
       "case_type": { "type": "keyword" },
-      "clean_text": {
+      "merged_citation_count": { "type": "integer" },
+      "window_text_snippet": {
         "type": "text",
-        "analyzer": "zh_ngram",
-        "norms": false
+        "analyzer": "zh_ngram"
       },
       "statutes": {
         "type": "nested",
@@ -108,8 +93,8 @@ INDEX_BODY="$(cat <<JSON
 JSON
 )"
 
-curl "${CURL_EXTRA[@]}" --fail-with-body -sS "${AUTH[@]}" -X PUT "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}" \
+curl "${CURL_EXTRA[@]}" -sS "${AUTH[@]}" -X PUT "${OPENSEARCH_URL}/${OPENSEARCH_SOURCE_TARGET_INDEX}" \
   -H "Content-Type: application/json" \
   -d "${INDEX_BODY}"
 echo
-echo "Index created: ${OPENSEARCH_INDEX} (ngram ${OPENSEARCH_NGRAM_MIN_GRAM}-${OPENSEARCH_NGRAM_MAX_GRAM})"
+echo "Index created: ${OPENSEARCH_SOURCE_TARGET_INDEX} (ngram ${OPENSEARCH_NGRAM_MIN_GRAM}-${OPENSEARCH_NGRAM_MAX_GRAM})"

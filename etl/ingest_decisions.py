@@ -494,6 +494,16 @@ def upsert_authority(conn, auth_type: str, ref_key: str, display: Optional[str] 
         return None
 
 
+def _get_decision_canonical_id(conn, target_id: int) -> Optional[int]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT canonical_id FROM decisions WHERE id = %s",
+            (target_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 def ingest_citations(conn, source_id: int, clean_text: str,
                      court_root_norm: str = None,
                      source_self_key: Optional[tuple] = None,
@@ -563,34 +573,37 @@ def ingest_citations(conn, source_id: int, clean_text: str,
                             RETURNING id
                         """, (source_id, target, c["raw_match"], c["snippet"]))
                 else:  # decision
+                    target_canonical_id = _get_decision_canonical_id(conn, target)
                     if ms is not None:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet,
+                              (source_id, target_id, target_canonical_id, raw_match, match_start, match_end, snippet,
                                target_case_type, target_doc_type)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (source_id, target_id, match_start) DO UPDATE
                               SET snippet          = EXCLUDED.snippet,
                                   match_end        = EXCLUDED.match_end,
                                   raw_match        = EXCLUDED.raw_match,
+                                  target_canonical_id = EXCLUDED.target_canonical_id,
                                   target_case_type = EXCLUDED.target_case_type,
                                   target_doc_type  = EXCLUDED.target_doc_type
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"],
+                        """, (source_id, target, target_canonical_id, c["raw_match"], ms, c["match_end"], c["snippet"],
                               tct, tdt))
                     else:
                         cur.execute("""
                             INSERT INTO citations
-                              (source_id, target_id, raw_match, match_start, match_end, snippet,
+                              (source_id, target_id, target_canonical_id, raw_match, match_start, match_end, snippet,
                                target_case_type, target_doc_type)
-                            VALUES (%s, %s, %s, NULL, NULL, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, NULL, NULL, %s, %s, %s)
                             ON CONFLICT (source_id, target_id, raw_match)
                               WHERE match_start IS NULL DO UPDATE
                               SET snippet          = EXCLUDED.snippet,
+                                  target_canonical_id = EXCLUDED.target_canonical_id,
                                   target_case_type = EXCLUDED.target_case_type,
                                   target_doc_type  = EXCLUDED.target_doc_type
                             RETURNING id
-                        """, (source_id, target, c["raw_match"], c["snippet"], tct, tdt))
+                        """, (source_id, target, target_canonical_id, c["raw_match"], c["snippet"], tct, tdt))
 
                 row = cur.fetchone()
                 if row:

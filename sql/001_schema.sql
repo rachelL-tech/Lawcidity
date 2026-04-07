@@ -106,7 +106,7 @@ CREATE TABLE decisions (
   display_title       TEXT GENERATED ALWAYS AS (
                         jyear::TEXT || '年度' || jcase_norm || '字第' || jno::TEXT || '號'
                       ) STORED,
-  -- ★ denormalized 被引次數（按 canonical 群計），ingest 結束後批次更新
+  -- ★ denormalized 被引來源數（按 canonical 群計的 distinct source），ingest 結束後批次更新
   total_citation_count INT NOT NULL DEFAULT 0,
   -- ★ canonical 群層級 doc_type 衍生欄位：多種本體時為「裁判」，否則為唯一 doc_type
   canonical_doc_type  TEXT
@@ -144,7 +144,7 @@ CREATE TABLE authorities (
   root_norm  TEXT NOT NULL,    -- 來源機關聚合（如：最高法院、司法院、高等法院）
   ref_key    TEXT NOT NULL,    -- 自然鍵
   display    TEXT,             -- 顯示用完整名稱
-  total_citation_count INTEGER NOT NULL DEFAULT 0,
+  total_citation_count INTEGER NOT NULL DEFAULT 0, -- 歷史上引用此 authority 的 distinct source 數
 
   created_at TIMESTAMPTZ DEFAULT now(),
 
@@ -168,6 +168,7 @@ CREATE TABLE citations (
 
   source_id           BIGINT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
   target_id           BIGINT          REFERENCES decisions(id) ON DELETE CASCADE,
+  target_canonical_id BIGINT          REFERENCES decisions(id),
   target_authority_id BIGINT          REFERENCES authorities(id) ON DELETE CASCADE,
 
   raw_match   TEXT NOT NULL,
@@ -204,6 +205,9 @@ CREATE UNIQUE INDEX citations_null_match_authority_uniq
   WHERE match_start IS NULL;
 
 CREATE INDEX citations_target_idx       ON citations(target_id);
+CREATE INDEX citations_target_canonical_source_idx
+  ON citations(target_canonical_id, source_id)
+  WHERE target_canonical_id IS NOT NULL;
 CREATE INDEX citations_source_match_idx ON citations(source_id, match_start);  -- Phase 2 snippet bridging
 CREATE INDEX citations_authority_idx    ON citations(target_authority_id);
 
