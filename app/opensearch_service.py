@@ -28,6 +28,7 @@ OpenSearch 查詢策略：
 
 import os
 import re
+from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
 
@@ -49,6 +50,7 @@ SOURCE_TARGET_MATCH_NAME_RE = re.compile(
 )
 SOURCE_TARGET_STATUTE_MATCH_NAME_RE = re.compile(r"^st(?P<filter_idx>\d+)$")
 SOURCE_TARGET_STRICT_FILL_THRESHOLD = 200
+SOURCE_TARGET_HOT_TERM_SOURCE_THRESHOLD = 10000
 COURT_LEVEL_MAP = {
     "憲法法庭": 0,
     "最高法院": 1,
@@ -620,6 +622,120 @@ def search_source_target_hits_opensearch(
     return hits
 
 
+def _should_use_target_uid_hot_term_aggregation(
+    source_ids: list[int],
+    query_terms: list[str],
+    statute_filters: list[tuple[str, str | None, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str | None, str | None]],
+) -> bool:
+    return (
+        len(source_ids) >= SOURCE_TARGET_HOT_TERM_SOURCE_THRESHOLD
+        and len(query_terms) == 1
+        and not statute_filters
+        and not exclude_terms
+        and not exclude_statute_filters
+    )
+
+
+def _search_target_uid_counts_opensearch(
+    query_terms: list[str],
+    source_ids: list[int],
+) -> dict[str, dict[str, Any]]:
+    if not source_ids:
+        return {}
+
+    client = _get_opensearch_client()
+    index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
+
+    raw_page_size = (os.environ.get("OPENSEARCH_COMPOSITE_PAGE_SIZE", "1000") or "").strip()
+    raw_source_chunk_size = (
+        os.environ.get("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "5000") or ""
+    ).strip()
+    try:
+        page_size = max(1, int(raw_page_size))
+    except Exception:
+        page_size = 1000
+    try:
+        source_chunk_size = max(1, int(raw_source_chunk_size))
+    except Exception:
+        source_chunk_size = 5000
+
+    counts: dict[str, dict[str, Any]] = {}
+    for source_id_chunk in chunk_source_ids(source_ids, source_chunk_size):
+        bool_query = _build_source_target_relevance_bool_query(
+            query_terms=query_terms,
+            source_ids=source_id_chunk,
+            statute_filters=[],
+            exclude_terms=[],
+            exclude_statute_filters=[],
+            target_ids=[],
+            target_authority_ids=[],
+            minimum_should_match=1,
+        )
+        after_key: dict[str, Any] | None = None
+        while True:
+            composite: dict[str, Any] = {
+                "size": page_size,
+                "sources": [{"target_uid": {"terms": {"field": "target_uid"}}}],
+            }
+            if after_key is not None:
+                composite["after"] = after_key
+
+            body = {
+                "size": 0,
+                "query": {"bool": bool_query},
+                "aggs": {
+                    "targets": {
+                        "composite": composite,
+                        "aggs": {
+                            "ranked_source_ids": {
+                                "terms": {
+                                    "field": "source_id",
+                                    "size": 5,
+                                    "order": {"_key": "asc"},
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+            response = client.search(index=index_name, body=body)
+            agg = (response.get("aggregations") or {}).get("targets") or {}
+            buckets = agg.get("buckets") or []
+            for bucket in buckets:
+                target_uid = (bucket.get("key") or {}).get("target_uid")
+                if not isinstance(target_uid, str) or not target_uid:
+                    continue
+                row = counts.setdefault(
+                    target_uid,
+                    {
+                        "matched_citation_count": 0,
+                        "ranked_source_ids": [],
+                    },
+                )
+                row["matched_citation_count"] += int(bucket.get("doc_count") or 0)
+                merged_source_ids = {
+                    int(source_id)
+                    for source_id in (row.get("ranked_source_ids") or [])
+                }
+                source_buckets = (
+                    (bucket.get("ranked_source_ids") or {}).get("buckets") or []
+                )
+                for source_bucket in source_buckets:
+                    try:
+                        merged_source_ids.add(int(source_bucket.get("key")))
+                    except Exception:
+                        continue
+                row["ranked_source_ids"] = sorted(merged_source_ids)[:5]
+
+            after_key = agg.get("after_key")
+            if not after_key:
+                break
+
+    return counts
+
+
 def _fetch_decision_target_metadata(
     conn: psycopg.Connection,
     target_ids: list[int],
@@ -783,6 +899,76 @@ def aggregate_source_target_hits_to_rankings(
     return rankings
 
 
+def _build_rankings_from_target_uid_counts(
+    conn: psycopg.Connection,
+    target_counts: dict[str, dict[str, Any]],
+    *,
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    if not target_counts:
+        return []
+
+    decision_ids = sorted(
+        int(target_uid.split(":", 1)[1])
+        for target_uid in target_counts
+        if target_uid.startswith("decision:")
+    )
+    authority_ids = sorted(
+        int(target_uid.split(":", 1)[1])
+        for target_uid in target_counts
+        if target_uid.startswith("authority:")
+    )
+    decision_meta = _fetch_decision_target_metadata(conn, decision_ids)
+    authority_meta = _fetch_authority_target_metadata(conn, authority_ids)
+
+    rankings = []
+    for target_uid, stats in target_counts.items():
+        kind, raw_id = target_uid.split(":", 1)
+        meta: dict[str, Any] | None
+        if kind == "decision":
+            meta = decision_meta.get(int(raw_id))
+        else:
+            meta = authority_meta.get(int(raw_id))
+        if not meta:
+            continue
+        if doc_types and meta.get("doc_type") not in doc_types:
+            continue
+        if court_levels and meta.get("court_level") not in court_levels:
+            continue
+
+        rankings.append(
+            {
+                "target_id": meta.get("target_id"),
+                "target_authority_id": meta.get("target_authority_id"),
+                "court": meta.get("court"),
+                "court_level": meta.get("court_level"),
+                "jyear": meta.get("jyear"),
+                "jcase_norm": meta.get("jcase_norm"),
+                "jno": meta.get("jno"),
+                "display_title": meta.get("display_title"),
+                "doc_type": meta.get("doc_type"),
+                "total_citation_count": int(meta.get("total_citation_count") or 0),
+                "matched_citation_count": int(stats.get("matched_citation_count") or 0),
+                "score": 1.0,
+                "ranked_source_ids": sorted(
+                    int(source_id)
+                    for source_id in (stats.get("ranked_source_ids") or [])
+                )[:5],
+            }
+        )
+
+    rankings.sort(
+        key=lambda row: (
+            -(row["matched_citation_count"] or 0),
+            -(row["total_citation_count"] or 0),
+            row["court_level"] if row["court_level"] is not None else 99,
+            _ranking_target_key(row),
+        )
+    )
+    return rankings
+
+
 def _build_rankings_from_hits(
     conn: psycopg.Connection,
     hits: list[dict[str, Any]],
@@ -850,6 +1036,25 @@ def fetch_target_rankings_by_relevance(
     """以 source-target window hits 聚合 target relevance 排行。"""
     if not source_ids:
         return []
+
+    if _should_use_target_uid_hot_term_aggregation(
+        source_ids,
+        query_terms,
+        statute_filters,
+        exclude_terms,
+        exclude_statute_filters,
+    ):
+        target_counts = _search_target_uid_counts_opensearch(
+            query_terms=query_terms,
+            source_ids=source_ids,
+        )
+        if target_counts:
+            return _build_rankings_from_target_uid_counts(
+                conn,
+                target_counts,
+                doc_types=doc_types,
+                court_levels=court_levels,
+            )
 
     strict_hits = search_source_target_hits_opensearch(
         query_terms=query_terms,

@@ -311,6 +311,140 @@ def test_search_source_ids_opensearch_skips_textual_statute_fallback_when_exact_
     assert len(fake_client.calls) == 1
 
 
+def test_fetch_target_rankings_by_relevance_uses_hot_term_aggregation_for_single_keyword_large_source_set(monkeypatch):
+    from app import opensearch_service
+
+    calls = []
+
+    def fake_search_target_uid_counts(*args, **kwargs):
+        calls.append(("agg", args, kwargs))
+        return {
+            "decision:9001": {
+                "matched_citation_count": 12,
+                "ranked_source_ids": [3, 7, 11],
+            }
+        }
+
+    def fake_build_rankings_from_target_uid_counts(conn, target_counts, **kwargs):
+        calls.append(("build", target_counts, kwargs))
+        return [{"target_id": 9001, "matched_citation_count": 12, "score": 1.0}]
+
+    monkeypatch.setattr(
+        opensearch_service,
+        "_search_target_uid_counts_opensearch",
+        fake_search_target_uid_counts,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        opensearch_service,
+        "_build_rankings_from_target_uid_counts",
+        fake_build_rankings_from_target_uid_counts,
+        raising=False,
+    )
+
+    def should_not_call_hits(*args, **kwargs):
+        raise AssertionError("single-keyword hot-term path should not fetch pair hits")
+
+    monkeypatch.setattr(
+        opensearch_service,
+        "search_source_target_hits_opensearch",
+        should_not_call_hits,
+    )
+
+    rankings = fetch_target_rankings_by_relevance(
+        conn=object(),
+        source_ids=list(range(1, 10001)),
+        query_terms=["累犯"],
+        statute_filters=[],
+        exclude_terms=[],
+        exclude_statute_filters=[],
+    )
+
+    assert rankings == [{"target_id": 9001, "matched_citation_count": 12, "score": 1.0}]
+    assert [call[0] for call in calls] == ["agg", "build"]
+    assert calls[1][1] == {
+        "decision:9001": {
+            "matched_citation_count": 12,
+            "ranked_source_ids": [3, 7, 11],
+        }
+    }
+
+
+def test_build_rankings_from_target_uid_counts_orders_by_matched_count_then_total_then_court_level(monkeypatch):
+    from app import opensearch_service
+
+    monkeypatch.setattr(
+        opensearch_service,
+        "_fetch_decision_target_metadata",
+        lambda conn, ids: {
+            9001: {
+                "target_id": 9001,
+                "target_authority_id": None,
+                "court": "高等法院",
+                "court_level": 2,
+                "jyear": 113,
+                "jcase_norm": "上",
+                "jno": 1,
+                "display_title": "A",
+                "doc_type": "判決",
+                "total_citation_count": 30,
+            },
+            9002: {
+                "target_id": 9002,
+                "target_authority_id": None,
+                "court": "最高法院",
+                "court_level": 1,
+                "jyear": 113,
+                "jcase_norm": "台上",
+                "jno": 2,
+                "display_title": "B",
+                "doc_type": "判決",
+                "total_citation_count": 30,
+            },
+            9003: {
+                "target_id": 9003,
+                "target_authority_id": None,
+                "court": "最高法院",
+                "court_level": 1,
+                "jyear": 113,
+                "jcase_norm": "台上",
+                "jno": 3,
+                "display_title": "C",
+                "doc_type": "判決",
+                "total_citation_count": 40,
+            },
+        },
+    )
+    monkeypatch.setattr(opensearch_service, "_fetch_authority_target_metadata", lambda conn, ids: {})
+
+    rankings = opensearch_service._build_rankings_from_target_uid_counts(
+        conn=object(),
+        target_counts={
+            "decision:9001": {
+                "matched_citation_count": 10,
+                "ranked_source_ids": [8, 3, 5],
+            },
+            "decision:9002": {
+                "matched_citation_count": 10,
+                "ranked_source_ids": [7, 2, 6],
+            },
+            "decision:9003": {
+                "matched_citation_count": 11,
+                "ranked_source_ids": [9, 4, 1],
+            },
+        },
+    )
+
+    assert [row["target_id"] for row in rankings] == [9003, 9002, 9001]
+    assert rankings[0]["matched_citation_count"] == 11
+    assert rankings[0]["score"] == 1.0
+    assert rankings[0]["ranked_source_ids"] == [1, 4, 9]
+    assert rankings[1]["matched_citation_count"] == 10
+    assert rankings[1]["total_citation_count"] == 30
+    assert rankings[1]["court_level"] == 1
+    assert rankings[1]["ranked_source_ids"] == [2, 6, 7]
+
+
 def test_search_source_target_hits_opensearch_builds_scores_from_matched_queries(monkeypatch):
     from app import opensearch_service
 
