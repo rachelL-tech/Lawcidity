@@ -311,6 +311,42 @@ def test_search_source_ids_opensearch_skips_textual_statute_fallback_when_exact_
     assert len(fake_client.calls) == 1
 
 
+def test_search_source_ids_opensearch_uses_source_recall_composite_page_size_env(monkeypatch):
+    from app import opensearch_service
+
+    class FakeClient:
+        def __init__(self):
+            self.page_sizes = []
+
+        def search(self, index, body):
+            self.page_sizes.append(body["aggs"]["source_ids"]["composite"]["size"])
+            return {
+                "aggregations": {
+                    "source_ids": {
+                        "buckets": [
+                            {"key": {"source_id": 62683}},
+                        ],
+                    }
+                }
+            }
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
+    monkeypatch.setenv("OPENSEARCH_SOURCE_RECALL_COMPOSITE_PAGE_SIZE", "123")
+
+    source_ids = search_source_ids_opensearch(
+        query_terms=["牛肉麵"],
+        case_types=[],
+        statute_filters=[],
+        exclude_terms=[],
+        exclude_statute_filters=[],
+        source_limit=None,
+    )
+
+    assert source_ids == [62683]
+    assert fake_client.page_sizes == [123]
+
+
 def test_fetch_target_rankings_by_relevance_uses_hot_term_aggregation_for_single_keyword_large_source_set(monkeypatch):
     from app import opensearch_service
 
@@ -445,6 +481,51 @@ def test_build_rankings_from_target_uid_counts_orders_by_matched_count_then_tota
     assert rankings[1]["ranked_source_ids"] == [2, 6, 7]
 
 
+def test_search_target_uid_counts_opensearch_uses_target_agg_composite_page_size_env(monkeypatch):
+    from app import opensearch_service
+
+    class FakeClient:
+        def __init__(self):
+            self.page_sizes = []
+
+        def search(self, index, body):
+            self.page_sizes.append(body["aggs"]["targets"]["composite"]["size"])
+            source_ids = body["query"]["bool"]["filter"][0]["terms"]["source_id"]
+            return {
+                "aggregations": {
+                    "targets": {
+                        "buckets": [
+                            {
+                                "key": {"target_uid": f"decision:{source_ids[0]}"},
+                                "doc_count": 1,
+                                "ranked_source_ids": {
+                                    "buckets": [
+                                        {"key": source_ids[0]},
+                                    ]
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
+    monkeypatch.setenv("OPENSEARCH_TARGET_AGG_COMPOSITE_PAGE_SIZE", "321")
+    monkeypatch.setenv("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "1")
+
+    counts = opensearch_service._search_target_uid_counts_opensearch(
+        query_terms=["累犯"],
+        source_ids=[10, 11],
+    )
+
+    assert counts == {
+        "decision:10": {"matched_citation_count": 1, "ranked_source_ids": [10]},
+        "decision:11": {"matched_citation_count": 1, "ranked_source_ids": [11]},
+    }
+    assert fake_client.page_sizes == [321, 321]
+
+
 def test_search_source_target_hits_opensearch_builds_scores_from_matched_queries(monkeypatch):
     from app import opensearch_service
 
@@ -566,7 +647,6 @@ def test_search_source_target_hits_opensearch_stops_before_opening_zero_size_scr
     fake_client = FakeClient()
     monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
     monkeypatch.setenv("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "1")
-    monkeypatch.setenv("OPENSEARCH_SOURCE_TARGET_SCROLL_TTL", "5m")
 
     hits = opensearch_service.search_source_target_hits_opensearch(
         query_terms=["詐欺"],
@@ -580,6 +660,58 @@ def test_search_source_target_hits_opensearch_stops_before_opening_zero_size_scr
     assert len(hits) == 1
     assert fake_client.search_calls == [((10,), 1, "1m")]
     assert fake_client.scroll_calls == []
+
+
+def test_search_source_target_hits_opensearch_uses_scroll_page_size_env(monkeypatch):
+    from app import opensearch_service
+
+    class FakeClient:
+        def __init__(self):
+            self.search_calls = []
+
+        def search(self, index, body, scroll=None):
+            self.search_calls.append(body["size"])
+            return {
+                "_scroll_id": "dummy-scroll",
+                "hits": {
+                    "hits": [
+                        {
+                            "matched_queries": ["t0:snippet"],
+                            "_source": {
+                                "source_id": 10,
+                                "target_id": 9001,
+                                "target_authority_id": None,
+                                "target_uid": "decision:9001",
+                            },
+                        }
+                    ]
+                }
+            }
+
+        def scroll(self, scroll_id, scroll=None):
+            return {
+                "_scroll_id": "dummy-scroll",
+                "hits": {"hits": []},
+            }
+
+        def clear_scroll(self, scroll_id):
+            return None
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
+    monkeypatch.setenv("OPENSEARCH_SOURCE_TARGET_SCROLL_PAGE_SIZE", "3")
+
+    hits = opensearch_service.search_source_target_hits_opensearch(
+        query_terms=["詐欺"],
+        source_ids=[10],
+        statute_filters=[],
+        exclude_terms=[],
+        exclude_statute_filters=[],
+        max_hits=5,
+    )
+
+    assert len(hits) == 1
+    assert fake_client.search_calls == [3]
 
 
 def test_aggregate_source_target_hits_to_rankings_averages_top5_distinct_sources_without_citation_dedupe():
@@ -662,6 +794,62 @@ def test_aggregate_source_target_hits_to_rankings_averages_top5_distinct_sources
     ]
 
 
+def test_build_rankings_from_hit_iter_matches_list_based_builder(monkeypatch):
+    from app import opensearch_service
+
+    hits = [
+        {"source_id": 10, "target_id": 9001, "target_authority_id": None, "score": 4.0},
+        {"source_id": 11, "target_id": 9001, "target_authority_id": None, "score": 1.0},
+        {"source_id": 12, "target_id": 9001, "target_authority_id": None, "score": 2.0},
+        {"source_id": 21, "target_id": None, "target_authority_id": 301, "score": 1.2},
+    ]
+    decision_meta = {
+        9001: {
+            "canonical_id": 9001,
+            "target_id": 9001,
+            "target_authority_id": None,
+            "court": "最高法院",
+            "court_level": 1,
+            "jyear": 111,
+            "jcase_norm": "台上",
+            "jno": 123,
+            "display_title": "最高法院111年度台上字第123號判決",
+            "doc_type": "判決",
+            "total_citation_count": 88,
+        }
+    }
+    authority_meta = {
+        301: {
+            "target_id": None,
+            "target_authority_id": 301,
+            "court": "司法院",
+            "court_level": None,
+            "jyear": None,
+            "jcase_norm": None,
+            "jno": None,
+            "display_title": "司法院解釋",
+            "doc_type": "解釋",
+            "total_citation_count": 12,
+        }
+    }
+
+    monkeypatch.setattr(
+        opensearch_service,
+        "_fetch_decision_target_metadata",
+        lambda conn, ids: decision_meta,
+    )
+    monkeypatch.setattr(
+        opensearch_service,
+        "_fetch_authority_target_metadata",
+        lambda conn, ids: authority_meta,
+    )
+
+    list_rankings = opensearch_service._build_rankings_from_hits(object(), hits)
+    iter_rankings = opensearch_service._build_rankings_from_hit_iter(object(), iter(hits))
+
+    assert iter_rankings == list_rankings
+
+
 def test_chunk_source_ids_splits_large_source_lists_without_losing_order():
     chunks = chunk_source_ids(list(range(1, 8)), chunk_size=3)
 
@@ -705,7 +893,11 @@ def test_fetch_target_rankings_by_relevance_returns_rankings_list(monkeypatch):
 
     monkeypatch.setattr(
         "app.opensearch_service.search_source_target_hits_opensearch",
-        lambda **kwargs: hits,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not materialize hits list")),
+    )
+    monkeypatch.setattr(
+        "app.opensearch_service._iter_source_target_hits_opensearch",
+        lambda **kwargs: iter(hits),
     )
     monkeypatch.setattr(
         "app.opensearch_service._fetch_decision_target_metadata",
@@ -763,22 +955,26 @@ def test_fetch_target_rankings_by_relevance_falls_back_when_strict_hits_empty(mo
     }
     calls = []
 
-    def fake_search_source_target_hits_opensearch(**kwargs):
+    def fake_iter_source_target_hits_opensearch(**kwargs):
         calls.append(kwargs["minimum_should_match"])
         if kwargs["minimum_should_match"] == 1:
-            return []
-        return [
+            return iter(())
+        return iter([
             {
                 "source_id": 10,
                 "target_id": 9001,
                 "target_authority_id": None,
                 "score": 1.0,
             }
-        ]
+        ])
 
     monkeypatch.setattr(
         "app.opensearch_service.search_source_target_hits_opensearch",
-        fake_search_source_target_hits_opensearch,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not materialize hits list")),
+    )
+    monkeypatch.setattr(
+        "app.opensearch_service._iter_source_target_hits_opensearch",
+        fake_iter_source_target_hits_opensearch,
     )
     monkeypatch.setattr(
         "app.opensearch_service._fetch_decision_target_metadata",
@@ -833,18 +1029,18 @@ def test_fetch_target_rankings_by_relevance_appends_fallback_when_strict_ranking
     }
     calls = []
 
-    def fake_search_source_target_hits_opensearch(**kwargs):
+    def fake_iter_source_target_hits_opensearch(**kwargs):
         calls.append(kwargs["minimum_should_match"])
         if kwargs["minimum_should_match"] == 1:
-            return [
+            return iter([
                 {
                     "source_id": 10,
                     "target_id": 9001,
                     "target_authority_id": None,
                     "score": 2.0,
                 }
-            ]
-        return [
+            ])
+        return iter([
             {
                 "source_id": 11,
                 "target_id": 9001,
@@ -857,11 +1053,15 @@ def test_fetch_target_rankings_by_relevance_appends_fallback_when_strict_ranking
                 "target_authority_id": None,
                 "score": 1.0,
             },
-        ]
+        ])
 
     monkeypatch.setattr(
         "app.opensearch_service.search_source_target_hits_opensearch",
-        fake_search_source_target_hits_opensearch,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not materialize hits list")),
+    )
+    monkeypatch.setattr(
+        "app.opensearch_service._iter_source_target_hits_opensearch",
+        fake_iter_source_target_hits_opensearch,
     )
     monkeypatch.setattr(
         "app.opensearch_service._fetch_decision_target_metadata",
@@ -904,9 +1104,9 @@ def test_fetch_target_rankings_by_relevance_skips_fallback_when_strict_rankings_
     }
     calls = []
 
-    def fake_search_source_target_hits_opensearch(**kwargs):
+    def fake_iter_source_target_hits_opensearch(**kwargs):
         calls.append(kwargs["minimum_should_match"])
-        return [
+        return iter([
             {
                 "source_id": 1000 + idx,
                 "target_id": 9000 + idx,
@@ -914,11 +1114,15 @@ def test_fetch_target_rankings_by_relevance_skips_fallback_when_strict_rankings_
                 "score": 1.0,
             }
             for idx in range(200)
-        ]
+        ])
 
     monkeypatch.setattr(
         "app.opensearch_service.search_source_target_hits_opensearch",
-        fake_search_source_target_hits_opensearch,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not materialize hits list")),
+    )
+    monkeypatch.setattr(
+        "app.opensearch_service._iter_source_target_hits_opensearch",
+        fake_iter_source_target_hits_opensearch,
     )
     monkeypatch.setattr(
         "app.opensearch_service._fetch_decision_target_metadata",

@@ -410,7 +410,9 @@ def search_source_ids_opensearch(
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v3")
 
-    raw_page_size = (os.environ.get("OPENSEARCH_COMPOSITE_PAGE_SIZE", "1000") or "").strip()
+    raw_page_size = (
+        os.environ.get("OPENSEARCH_SOURCE_RECALL_COMPOSITE_PAGE_SIZE", "1000") or ""
+    ).strip()
     try:
         page_size = max(1, int(raw_page_size))
     except Exception:
@@ -506,8 +508,10 @@ def _iter_source_target_hits_opensearch(
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
 
-    raw_max_hits = (os.environ.get("OPENSEARCH_SOURCE_TARGET_MAX_HITS", "50000") or "").strip()
-    raw_hits_per_chunk = (os.environ.get("OPENSEARCH_SOURCE_TARGET_HITS_PER_CHUNK", "5000") or "").strip()
+    raw_max_hits = (os.environ.get("OPENSEARCH_SOURCE_TARGET_MAX_HITS", "40000") or "").strip()
+    raw_scroll_page_size = (
+        os.environ.get("OPENSEARCH_SOURCE_TARGET_SCROLL_PAGE_SIZE", "5000") or ""
+    ).strip()
     raw_source_chunk_size = (os.environ.get("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "5000") or "").strip()
     scroll_ttl = "1m"
     try:
@@ -515,9 +519,9 @@ def _iter_source_target_hits_opensearch(
     except Exception:
         configured_max_hits = 50000
     try:
-        hits_per_chunk = max(1, int(raw_hits_per_chunk))
+        scroll_page_size = max(1, int(raw_scroll_page_size))
     except Exception:
-        hits_per_chunk = 5000
+        scroll_page_size = 5000
     try:
         source_chunk_size = max(1, int(raw_source_chunk_size))
     except Exception:
@@ -537,7 +541,7 @@ def _iter_source_target_hits_opensearch(
                 statute_filters=statute_filters,
                 exclude_terms=exclude_terms,
                 exclude_statute_filters=exclude_statute_filters,
-                size=min(hits_per_chunk, hit_limit - yielded),
+                size=min(scroll_page_size, hit_limit - yielded),
                 minimum_should_match=minimum_should_match,
                 target_ids=target_ids or [],
                 target_authority_ids=target_authority_ids or [],
@@ -648,7 +652,9 @@ def _search_target_uid_counts_opensearch(
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
 
-    raw_page_size = (os.environ.get("OPENSEARCH_COMPOSITE_PAGE_SIZE", "1000") or "").strip()
+    raw_page_size = (
+        os.environ.get("OPENSEARCH_TARGET_AGG_COMPOSITE_PAGE_SIZE", "1000") or ""
+    ).strip()
     raw_source_chunk_size = (
         os.environ.get("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "5000") or ""
     ).strip()
@@ -823,38 +829,70 @@ def _fetch_authority_target_metadata(
     }
 
 
-def aggregate_source_target_hits_to_rankings(
-    hits: list[dict[str, Any]],
-    decision_meta: dict[int, dict[str, Any]],
-    authority_meta: dict[int, dict[str, Any]],
-    doc_types: list[str] | None = None,
-    court_levels: list[int] | None = None,
-) -> list[dict[str, Any]]:
-    """將 source-target hits 聚合成 search results。"""
+def _accumulate_target_hits(
+    hits: Any,
+) -> dict[str, dict[str, Any]]:
     aggregated: dict[str, dict[str, Any]] = {}
 
     for hit in hits:
         target_id = hit.get("target_id")
         authority_id = hit.get("target_authority_id")
         if target_id is not None:
+            target_key = f"decision:{int(target_id)}"
+        elif authority_id is not None:
+            target_key = f"authority:{int(authority_id)}"
+        else:
+            continue
+
+        row = aggregated.get(target_key)
+        if row is None:
+            row = {
+                "target_id": int(target_id) if target_id is not None else None,
+                "target_authority_id": int(authority_id) if authority_id is not None else None,
+                "_source_scores": {},
+                "_matched_source_ids": set(),
+            }
+            aggregated[target_key] = row
+
+        source_id = int(hit["source_id"])
+        row["_matched_source_ids"].add(source_id)
+        row["_source_scores"][source_id] = float(hit.get("score") or 0)
+
+    return aggregated
+
+
+def _build_rankings_from_aggregated_target_hits(
+    aggregated: dict[str, dict[str, Any]],
+    decision_meta: dict[int, dict[str, Any]],
+    authority_meta: dict[int, dict[str, Any]],
+    *,
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    rankings = []
+
+    for row in aggregated.values():
+        target_id = row.get("target_id")
+        authority_id = row.get("target_authority_id")
+        if target_id is not None:
             meta = decision_meta.get(int(target_id))
-            if not meta:
-                continue
-            target_key = f"decision:{int(meta['target_id'])}"
         else:
             meta = authority_meta.get(int(authority_id)) if authority_id is not None else None
-            if not meta:
-                continue
-            target_key = f"authority:{int(meta['target_authority_id'])}"
+        if not meta:
+            continue
 
         if doc_types and meta.get("doc_type") not in doc_types:
             continue
         if court_levels and meta.get("court_level") not in court_levels:
             continue
 
-        row = aggregated.get(target_key)
-        if row is None:
-            row = {
+        ranked_source_rows = sorted(
+            row["_source_scores"].items(),
+            key=lambda item: (-(item[1] or 0), item[0]),
+        )[:5]
+        top_scores = [float(score or 0) for _source_id, score in ranked_source_rows]
+        rankings.append(
+            {
                 "target_id": meta.get("target_id"),
                 "target_authority_id": meta.get("target_authority_id"),
                 "court": meta.get("court"),
@@ -865,30 +903,11 @@ def aggregate_source_target_hits_to_rankings(
                 "display_title": meta.get("display_title"),
                 "doc_type": meta.get("doc_type"),
                 "total_citation_count": int(meta.get("total_citation_count") or 0),
-                "matched_citation_count": 0,
-                "score": 0.0,
-                "_source_scores": {},
-                "_matched_source_ids": set(),
+                "matched_citation_count": len(row["_matched_source_ids"]),
+                "score": float(sum(top_scores) / len(top_scores)) if top_scores else 0.0,
+                "ranked_source_ids": [int(source_id) for source_id, _score in ranked_source_rows],
             }
-            aggregated[target_key] = row
-
-        source_id = int(hit["source_id"])
-        row["_matched_source_ids"].add(source_id)
-        row["_source_scores"][source_id] = float(hit.get("score") or 0)
-
-    rankings = []
-    for row in aggregated.values():
-        row["matched_citation_count"] = len(row["_matched_source_ids"])
-        ranked_source_rows = sorted(
-            row["_source_scores"].items(),
-            key=lambda item: (-(item[1] or 0), item[0]),
-        )[:5]
-        row["ranked_source_ids"] = [int(source_id) for source_id, _score in ranked_source_rows]
-        top_scores = [float(score or 0) for _source_id, score in ranked_source_rows]
-        row["score"] = float(sum(top_scores) / len(top_scores)) if top_scores else 0.0
-        del row["_source_scores"]
-        del row["_matched_source_ids"]
-        rankings.append(row)
+        )
 
     rankings.sort(key=lambda row: (
         -(row["score"] or 0),
@@ -897,6 +916,24 @@ def aggregate_source_target_hits_to_rankings(
         (row["court_level"] if row["court_level"] is not None else 99),
     ))
     return rankings
+
+
+def aggregate_source_target_hits_to_rankings(
+    hits: list[dict[str, Any]],
+    decision_meta: dict[int, dict[str, Any]],
+    authority_meta: dict[int, dict[str, Any]],
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    """將 source-target hits 聚合成 search results。"""
+    aggregated = _accumulate_target_hits(hits)
+    return _build_rankings_from_aggregated_target_hits(
+        aggregated,
+        decision_meta,
+        authority_meta,
+        doc_types=doc_types,
+        court_levels=court_levels,
+    )
 
 
 def _build_rankings_from_target_uid_counts(
@@ -1000,6 +1037,38 @@ def _build_rankings_from_hits(
     )
 
 
+def _build_rankings_from_hit_iter(
+    conn: psycopg.Connection,
+    hits: Any,
+    *,
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    aggregated = _accumulate_target_hits(hits)
+    if not aggregated:
+        return []
+
+    target_ids = sorted({
+        int(row["target_id"])
+        for row in aggregated.values()
+        if row.get("target_id") is not None
+    })
+    authority_ids = sorted({
+        int(row["target_authority_id"])
+        for row in aggregated.values()
+        if row.get("target_authority_id") is not None
+    })
+    decision_meta = _fetch_decision_target_metadata(conn, target_ids)
+    authority_meta = _fetch_authority_target_metadata(conn, authority_ids)
+    return _build_rankings_from_aggregated_target_hits(
+        aggregated,
+        decision_meta,
+        authority_meta,
+        doc_types=doc_types,
+        court_levels=court_levels,
+    )
+
+
 def _ranking_target_key(row: dict[str, Any]) -> tuple[str, int]:
     target_id = row.get("target_id")
     if target_id is not None:
@@ -1056,50 +1125,46 @@ def fetch_target_rankings_by_relevance(
                 court_levels=court_levels,
             )
 
-    strict_hits = search_source_target_hits_opensearch(
-        query_terms=query_terms,
-        source_ids=source_ids,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms,
-        exclude_statute_filters=exclude_statute_filters,
-        minimum_should_match=1,
+    strict_rankings = _build_rankings_from_hit_iter(
+        conn,
+        _iter_source_target_hits_opensearch(
+            query_terms=query_terms,
+            source_ids=source_ids,
+            statute_filters=statute_filters,
+            exclude_terms=exclude_terms,
+            exclude_statute_filters=exclude_statute_filters,
+            minimum_should_match=1,
+        ) or [],
+        doc_types=doc_types,
+        court_levels=court_levels,
     )
-    if not strict_hits:
-        fallback_hits = search_source_target_hits_opensearch(
+    if not strict_rankings:
+        return _build_rankings_from_hit_iter(
+            conn,
+            _iter_source_target_hits_opensearch(
+                query_terms=query_terms,
+                source_ids=source_ids,
+                statute_filters=statute_filters,
+                exclude_terms=exclude_terms,
+                exclude_statute_filters=exclude_statute_filters,
+                minimum_should_match=None,
+            ) or [],
+            doc_types=doc_types,
+            court_levels=court_levels,
+        )
+    if len(strict_rankings) >= SOURCE_TARGET_STRICT_FILL_THRESHOLD:
+        return strict_rankings
+
+    fallback_rankings = _build_rankings_from_hit_iter(
+        conn,
+        _iter_source_target_hits_opensearch(
             query_terms=query_terms,
             source_ids=source_ids,
             statute_filters=statute_filters,
             exclude_terms=exclude_terms,
             exclude_statute_filters=exclude_statute_filters,
             minimum_should_match=None,
-        )
-        return _build_rankings_from_hits(
-            conn,
-            fallback_hits,
-            doc_types=doc_types,
-            court_levels=court_levels,
-        )
-
-    strict_rankings = _build_rankings_from_hits(
-        conn,
-        strict_hits,
-        doc_types=doc_types,
-        court_levels=court_levels,
-    )
-    if len(strict_rankings) >= SOURCE_TARGET_STRICT_FILL_THRESHOLD:
-        return strict_rankings
-
-    fallback_hits = search_source_target_hits_opensearch(
-        query_terms=query_terms,
-        source_ids=source_ids,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms,
-        exclude_statute_filters=exclude_statute_filters,
-        minimum_should_match=None,
-    )
-    fallback_rankings = _build_rankings_from_hits(
-        conn,
-        fallback_hits,
+        ) or [],
         doc_types=doc_types,
         court_levels=court_levels,
     )
