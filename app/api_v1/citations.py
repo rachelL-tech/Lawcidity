@@ -252,23 +252,21 @@ def _citation_rows(
             WITH excluded AS MATERIALIZED (
                 SELECT DISTINCT unnest(%(source_ids)s::bigint[]) AS source_id
             ),
-            deduped AS (
+            deduped AS MATERIALIZED (
                 SELECT DISTINCT ON (c.source_id)
                     c.source_id,
-                    cu.level                        AS source_court_level,
-                    src.decision_date,
                     c.id                            AS citation_id
                 FROM citations c
-                JOIN decisions src ON c.source_id = src.id
-                LEFT JOIN court_units cu ON cu.id = src.court_unit_id
                 LEFT JOIN excluded e ON e.source_id = c.source_id
                 WHERE {target_filter}
                   AND e.source_id IS NULL
                 ORDER BY c.source_id, c.id
             )
-            SELECT citation_id
+            SELECT deduped.citation_id
             FROM deduped
-            ORDER BY source_court_level ASC NULLS LAST, decision_date DESC NULLS LAST, source_id DESC
+            JOIN decisions src ON src.id = deduped.source_id
+            LEFT JOIN court_units cu ON cu.id = src.court_unit_id
+            ORDER BY cu.level ASC NULLS LAST, src.decision_date DESC NULLS LAST, deduped.source_id DESC
             LIMIT %(limit)s
         """
         rows_sql = """
