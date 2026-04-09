@@ -48,6 +48,7 @@ SOURCE_TARGET_MATCH_NAME_RE = re.compile(
     r"^t(?P<term_idx>\d+):(?P<bucket>snippet)$"
 )
 SOURCE_TARGET_STATUTE_MATCH_NAME_RE = re.compile(r"^st(?P<filter_idx>\d+)$")
+SOURCE_TARGET_STRICT_FILL_THRESHOLD = 200
 COURT_LEVEL_MAP = {
     "憲法法庭": 0,
     "最高法院": 1,
@@ -195,6 +196,7 @@ def build_source_target_rerank_query(
     statute_filters: list[tuple[str, str | None, str | None]],
     *,
     size: int = 200,
+    minimum_should_match: int | None = None,
     exclude_terms: list[str] | None = None,
     exclude_statute_filters: list[tuple[str, str | None, str | None]] | None = None,
     target_ids: list[int] | None = None,
@@ -208,6 +210,7 @@ def build_source_target_rerank_query(
         exclude_statute_filters=exclude_statute_filters or [],
         target_ids=target_ids or [],
         target_authority_ids=target_authority_ids or [],
+        minimum_should_match=minimum_should_match,
     )
 
     body = {
@@ -232,6 +235,7 @@ def _build_source_target_relevance_bool_query(
     exclude_statute_filters: list[tuple[str, str | None, str | None]],
     target_ids: list[int],
     target_authority_ids: list[int],
+    minimum_should_match: int | None,
 ) -> dict[str, Any]:
     filters: list[dict[str, Any]] = []
     should: list[dict[str, Any]] = []
@@ -269,6 +273,8 @@ def _build_source_target_relevance_bool_query(
         )
     if should:
         bool_query["should"] = should
+        if minimum_should_match is not None:
+            bool_query["minimum_should_match"] = minimum_should_match
     return bool_query
 
 
@@ -416,6 +422,7 @@ def _iter_source_target_hits_opensearch(
     exclude_statute_filters: list[tuple[str, str | None, str | None]],
     *,
     max_hits: int | None = None,
+    minimum_should_match: int | None = None,
     target_ids: list[int] | None = None,
     target_authority_ids: list[int] | None = None,
 ) -> Any:
@@ -458,6 +465,7 @@ def _iter_source_target_hits_opensearch(
                 exclude_terms=exclude_terms,
                 exclude_statute_filters=exclude_statute_filters,
                 size=min(hits_per_chunk, hit_limit - yielded),
+                minimum_should_match=minimum_should_match,
                 target_ids=target_ids or [],
                 target_authority_ids=target_authority_ids or [],
             )
@@ -512,6 +520,7 @@ def search_source_target_hits_opensearch(
     exclude_statute_filters: list[tuple[str, str | None, str | None]],
     *,
     max_hits: int | None = None,
+    minimum_should_match: int | None = None,
     target_ids: list[int] | None = None,
     target_authority_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
@@ -523,6 +532,7 @@ def search_source_target_hits_opensearch(
             exclude_terms=exclude_terms,
             exclude_statute_filters=exclude_statute_filters,
             max_hits=max_hits,
+            minimum_should_match=minimum_should_match,
             target_ids=target_ids or [],
             target_authority_ids=target_authority_ids or [],
         ) or []
@@ -702,28 +712,13 @@ def aggregate_source_target_hits_to_rankings(
     return rankings
 
 
-def fetch_target_rankings_by_relevance(
+def _build_rankings_from_hits(
     conn: psycopg.Connection,
-    source_ids: list[int],
-    query_terms: list[str],
-    statute_filters: list[tuple[str, str | None, str | None]],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple[str, str | None, str | None]],
+    hits: list[dict[str, Any]],
     *,
     doc_types: list[str] | None = None,
     court_levels: list[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """以 source-target window hits 聚合 target relevance 排行。"""
-    if not source_ids:
-        return []
-
-    hits = search_source_target_hits_opensearch(
-        query_terms=query_terms,
-        source_ids=source_ids,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms,
-        exclude_statute_filters=exclude_statute_filters,
-    )
     if not hits:
         return []
 
@@ -746,3 +741,90 @@ def fetch_target_rankings_by_relevance(
         doc_types=doc_types,
         court_levels=court_levels,
     )
+
+
+def _ranking_target_key(row: dict[str, Any]) -> tuple[str, int]:
+    target_id = row.get("target_id")
+    if target_id is not None:
+        return ("decision", int(target_id))
+    return ("authority", int(row["target_authority_id"]))
+
+
+def _merge_rankings_keep_strict_first(
+    primary_rankings: list[dict[str, Any]],
+    fallback_rankings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = list(primary_rankings)
+    seen = {_ranking_target_key(row) for row in primary_rankings}
+    for row in fallback_rankings:
+        key = _ranking_target_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
+def fetch_target_rankings_by_relevance(
+    conn: psycopg.Connection,
+    source_ids: list[int],
+    query_terms: list[str],
+    statute_filters: list[tuple[str, str | None, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str | None, str | None]],
+    *,
+    doc_types: list[str] | None = None,
+    court_levels: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    """以 source-target window hits 聚合 target relevance 排行。"""
+    if not source_ids:
+        return []
+
+    strict_hits = search_source_target_hits_opensearch(
+        query_terms=query_terms,
+        source_ids=source_ids,
+        statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
+        minimum_should_match=1,
+    )
+    if not strict_hits:
+        fallback_hits = search_source_target_hits_opensearch(
+            query_terms=query_terms,
+            source_ids=source_ids,
+            statute_filters=statute_filters,
+            exclude_terms=exclude_terms,
+            exclude_statute_filters=exclude_statute_filters,
+            minimum_should_match=None,
+        )
+        return _build_rankings_from_hits(
+            conn,
+            fallback_hits,
+            doc_types=doc_types,
+            court_levels=court_levels,
+        )
+
+    strict_rankings = _build_rankings_from_hits(
+        conn,
+        strict_hits,
+        doc_types=doc_types,
+        court_levels=court_levels,
+    )
+    if len(strict_rankings) >= SOURCE_TARGET_STRICT_FILL_THRESHOLD:
+        return strict_rankings
+
+    fallback_hits = search_source_target_hits_opensearch(
+        query_terms=query_terms,
+        source_ids=source_ids,
+        statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
+        minimum_should_match=None,
+    )
+    fallback_rankings = _build_rankings_from_hits(
+        conn,
+        fallback_hits,
+        doc_types=doc_types,
+        court_levels=court_levels,
+    )
+    return _merge_rankings_keep_strict_first(strict_rankings, fallback_rankings)
