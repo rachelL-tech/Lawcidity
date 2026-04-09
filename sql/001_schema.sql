@@ -1,6 +1,6 @@
 -- 台灣判決引用關係排行榜 — Schema v4
 -- decisions 為 citation graph 唯一節點（刪除 cases 表）
--- 最後更新：2026-02
+-- 最後更新：2026-04
 
 -- 台灣標準時間（Asia/Taipei = UTC+8）
 ALTER DATABASE citations SET timezone = 'Asia/Taipei';
@@ -206,10 +206,12 @@ CREATE UNIQUE INDEX citations_null_match_authority_uniq
 
 CREATE INDEX citations_target_idx       ON citations(target_id);
 CREATE INDEX citations_target_canonical_source_idx
-  ON citations(target_canonical_id, source_id)
+  ON citations(target_canonical_id, source_id, id)
   WHERE target_canonical_id IS NOT NULL;
 CREATE INDEX citations_source_match_idx ON citations(source_id, match_start);  -- Phase 2 snippet bridging
-CREATE INDEX citations_authority_idx    ON citations(target_authority_id);
+CREATE INDEX citations_authority_idx
+  ON citations(target_authority_id, source_id, id)
+  WHERE target_authority_id IS NOT NULL;
 
 
 -- =========================
@@ -229,6 +231,8 @@ CREATE TABLE decision_reason_statutes (
 
 CREATE UNIQUE INDEX drs_uniq            ON decision_reason_statutes(decision_id, law, article_raw, sub_ref);
 CREATE INDEX        drs_law_article_idx ON decision_reason_statutes(law, article_raw);
+CREATE INDEX        drs_law_article_decision_idx
+  ON decision_reason_statutes(law, article_raw, decision_id);
 CREATE INDEX        drs_decision_idx    ON decision_reason_statutes(decision_id);
 
 
@@ -314,6 +318,8 @@ CREATE UNIQUE INDEX cc_decision_citation_uniq ON chunks(decision_id, citation_id
 CREATE UNIQUE INDEX cc_supreme_uniq ON chunks(decision_id, chunk_index)
   WHERE chunk_type = 'supreme_reasoning';
 CREATE INDEX        cc_decision_chunk_idx     ON chunks(decision_id, chunk_index);
+CREATE INDEX        cc_citation_context_citation_idx ON chunks(citation_id)
+  WHERE chunk_type = 'citation_context' AND embedding IS NOT NULL;
 -- HNSW index 在 embed_and_index.py 跑完後另行執行（見 sql/002_pgvector_migration.sql）
 -- CREATE INDEX cc_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)
 --   WITH (m = 16, ef_construction = 64);
