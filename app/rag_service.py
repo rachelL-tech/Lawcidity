@@ -98,35 +98,37 @@ def _path_b_statutes(
     ct_where = "AND cc.case_type = %s" if case_type else ""
     ct_params = [case_type] if case_type else []
 
-    # B1: citation chunks via citation_snippet_statutes
+    # B1: shrink statute matches to citation ids first, then probe chunks by citation_id
     b1_rows = conn.execute(f"""
+        WITH statute_citations AS (
+            SELECT DISTINCT citation_id
+            FROM citation_snippet_statutes
+            WHERE (law, article_raw) IN ({values_sql})
+        )
         SELECT {CHUNK_SELECT}
         FROM chunks cc
+        JOIN statute_citations sc ON sc.citation_id = cc.citation_id
         JOIN decisions d ON d.id = cc.decision_id
         WHERE cc.embedding IS NOT NULL
           AND cc.chunk_type = 'citation_context'
-          AND cc.citation_id IN (
-              SELECT DISTINCT citation_id
-              FROM citation_snippet_statutes
-              WHERE (law, article_raw) IN ({values_sql})
-          )
           {ct_where}
-    """, [vec_str] + stat_params + ct_params).fetchall()
+    """, stat_params + [vec_str] + ct_params).fetchall()
 
-    # B2: supreme chunks via decision_reason_statutes
+    # B2: probe the smaller supreme chunk universe, then validate statute hits by decision_id
     b2_rows = conn.execute(f"""
         SELECT {CHUNK_SELECT}
         FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
         WHERE cc.embedding IS NOT NULL
           AND cc.chunk_type = 'supreme_reasoning'
-          AND cc.decision_id IN (
-              SELECT DISTINCT decision_id
-              FROM decision_reason_statutes
-              WHERE (law, article_raw) IN ({values_sql})
-          )
           {ct_where}
-    """, [vec_str] + stat_params + ct_params).fetchall()
+          AND EXISTS (
+              SELECT 1
+              FROM decision_reason_statutes drs
+              WHERE drs.decision_id = cc.decision_id
+                AND (drs.law, drs.article_raw) IN ({values_sql})
+          )
+    """, [vec_str] + ct_params + stat_params).fetchall()
 
     return [dict(r) for r in b1_rows] + [dict(r) for r in b2_rows]
 
