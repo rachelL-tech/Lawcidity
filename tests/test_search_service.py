@@ -12,6 +12,7 @@ from app.opensearch_service import (
     aggregate_source_target_hits_to_rankings,
     calculate_source_target_match_score,
     fetch_target_rankings_by_relevance,
+    search_source_ids_opensearch,
     _fetch_authority_target_metadata,
 )
 
@@ -205,6 +206,109 @@ def test_calculate_source_target_match_score_counts_each_statute_filter_once():
     )
 
     assert score == 2.0
+
+
+def test_search_source_ids_opensearch_falls_back_to_textual_statute_query_when_exact_recall_is_empty(monkeypatch):
+    from app import opensearch_service
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, index, body):
+            self.calls.append(body)
+            if len(self.calls) == 1:
+                bool_query = body["query"]["bool"]
+                assert any("nested" in filt for filt in bool_query["filter"])
+                return {
+                    "aggregations": {
+                        "source_ids": {
+                            "buckets": [],
+                        }
+                    }
+                }
+
+            bool_query = body["query"]["bool"]
+            assert not any("nested" in filt for filt in bool_query["filter"])
+            assert {"match_phrase": {"clean_text": "牛肉麵"}} in bool_query["must"]
+            assert {
+                "bool": {
+                    "must": [
+                        {"match_phrase": {"clean_text": "個人資料保護法"}},
+                    ]
+                }
+            } in bool_query["must"]
+            assert {
+                "bool": {
+                    "must": [
+                        {"match_phrase": {"clean_text": "刑法"}},
+                        {"match_phrase": {"clean_text": "第47條"}},
+                        {"match_phrase": {"clean_text": "第1項"}},
+                    ]
+                }
+            } in bool_query["must"]
+            return {
+                "aggregations": {
+                    "source_ids": {
+                        "buckets": [
+                            {"key": {"source_id": 62683}},
+                        ],
+                    }
+                }
+            }
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
+
+    source_ids = search_source_ids_opensearch(
+        query_terms=["牛肉麵"],
+        case_types=[],
+        statute_filters=[
+            ("個人資料保護法", None, None),
+            ("刑法", "47", "第1項"),
+        ],
+        exclude_terms=[],
+        exclude_statute_filters=[],
+        source_limit=None,
+    )
+
+    assert source_ids == [62683]
+    assert len(fake_client.calls) == 2
+
+
+def test_search_source_ids_opensearch_skips_textual_statute_fallback_when_exact_recall_succeeds(monkeypatch):
+    from app import opensearch_service
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, index, body):
+            self.calls.append(body)
+            return {
+                "aggregations": {
+                    "source_ids": {
+                        "buckets": [
+                            {"key": {"source_id": 62683}},
+                        ],
+                    }
+                }
+            }
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(opensearch_service, "_get_opensearch_client", lambda: fake_client)
+
+    source_ids = search_source_ids_opensearch(
+        query_terms=["牛肉麵"],
+        case_types=[],
+        statute_filters=[("個人資料保護法", None, None)],
+        exclude_terms=[],
+        exclude_statute_filters=[],
+        source_limit=None,
+    )
+
+    assert source_ids == [62683]
+    assert len(fake_client.calls) == 1
 
 
 def test_search_source_target_hits_opensearch_builds_scores_from_matched_queries(monkeypatch):

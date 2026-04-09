@@ -190,6 +190,63 @@ def build_opensearch_query(
     return {"bool": bool_query}
 
 
+def _format_textual_statute_article(article: str) -> str:
+    if "之" not in article:
+        return f"第{article}條"
+    head, tail = article.split("之", 1)
+    return f"第{head}條之{tail}"
+
+
+def _build_opensearch_textual_statute_clause(
+    law: str,
+    article: str | None,
+    sub_ref: str | None,
+) -> dict[str, Any]:
+    must: list[dict[str, Any]] = [
+        {"match_phrase": {"clean_text": law}},
+    ]
+    if article is not None:
+        must.append({"match_phrase": {"clean_text": _format_textual_statute_article(article)}})
+    if sub_ref is not None:
+        must.append({"match_phrase": {"clean_text": sub_ref}})
+    return {"bool": {"must": must}}
+
+
+def build_opensearch_textual_statute_query(
+    query_terms: list[str],
+    case_types: list[str],
+    statute_filters: list[tuple[str, str | None, str | None]],
+    exclude_terms: list[str],
+    exclude_statute_filters: list[tuple[str, str | None, str | None]],
+) -> dict[str, Any]:
+    must = [
+        {"match_phrase": {"clean_text": term}}
+        for term in query_terms
+    ]
+    must.extend(
+        _build_opensearch_textual_statute_clause(law, article, sub_ref)
+        for law, article, sub_ref in statute_filters
+    )
+
+    filters: list[dict[str, Any]] = []
+    if case_types:
+        filters.append({"terms": {"case_type": case_types}})
+
+    must_not: list[dict[str, Any]] = [
+        {"match_phrase": {"clean_text": term}}
+        for term in exclude_terms
+    ]
+    must_not.extend(
+        _build_opensearch_textual_statute_clause(law, article, sub_ref)
+        for law, article, sub_ref in exclude_statute_filters
+    )
+
+    bool_query: dict[str, Any] = {"must": must, "filter": filters}
+    if must_not:
+        bool_query["must_not"] = must_not
+    return {"bool": bool_query}
+
+
 def build_source_target_rerank_query(
     query_terms: list[str],
     source_ids: list[int],
@@ -350,13 +407,6 @@ def search_source_ids_opensearch(
 ) -> list[int]:
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v3")
-    bool_query = build_opensearch_query(
-        query_terms=query_terms,
-        case_types=case_types,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms,
-        exclude_statute_filters=exclude_statute_filters,
-    )
 
     raw_page_size = (os.environ.get("OPENSEARCH_COMPOSITE_PAGE_SIZE", "1000") or "").strip()
     try:
@@ -364,44 +414,65 @@ def search_source_ids_opensearch(
     except Exception:
         page_size = 1000
 
-    source_ids: list[int] = []
-    seen: set[int] = set()
-    after_key: dict[str, Any] | None = None
-    while True:
-        composite: dict[str, Any] = {
-            "size": page_size,
-            "sources": [{"source_id": {"terms": {"field": "source_id"}}}],
-        }
-        if after_key is not None:
-            composite["after"] = after_key
+    def collect_source_ids(bool_query: dict[str, Any]) -> list[int]:
+        source_ids: list[int] = []
+        seen: set[int] = set()
+        after_key: dict[str, Any] | None = None
+        while True:
+            composite: dict[str, Any] = {
+                "size": page_size,
+                "sources": [{"source_id": {"terms": {"field": "source_id"}}}],
+            }
+            if after_key is not None:
+                composite["after"] = after_key
 
-        body = {
-            "size": 0,
-            "query": bool_query,
-            "aggs": {"source_ids": {"composite": composite}},
-        }
-        response = client.search(index=index_name, body=body)
-        agg = (response.get("aggregations") or {}).get("source_ids") or {}
-        buckets = agg.get("buckets") or []
+            body = {
+                "size": 0,
+                "query": bool_query,
+                "aggs": {"source_ids": {"composite": composite}},
+            }
+            response = client.search(index=index_name, body=body)
+            agg = (response.get("aggregations") or {}).get("source_ids") or {}
+            buckets = agg.get("buckets") or []
 
-        for bucket in buckets:
-            raw_id = (bucket.get("key") or {}).get("source_id")
-            try:
-                source_id = int(raw_id)
-            except Exception:
-                continue
-            if source_id in seen:
-                continue
-            seen.add(source_id)
-            source_ids.append(source_id)
-            if source_limit is not None and len(source_ids) >= source_limit:
-                return source_ids
+            for bucket in buckets:
+                raw_id = (bucket.get("key") or {}).get("source_id")
+                try:
+                    source_id = int(raw_id)
+                except Exception:
+                    continue
+                if source_id in seen:
+                    continue
+                seen.add(source_id)
+                source_ids.append(source_id)
+                if source_limit is not None and len(source_ids) >= source_limit:
+                    return source_ids
 
-        after_key = agg.get("after_key")
-        if not after_key:
-            break
+            after_key = agg.get("after_key")
+            if not after_key:
+                break
 
-    return source_ids
+        return source_ids
+
+    exact_query = build_opensearch_query(
+        query_terms=query_terms,
+        case_types=case_types,
+        statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
+    )
+    source_ids = collect_source_ids(exact_query)
+    if source_ids or not query_terms or not statute_filters:
+        return source_ids
+
+    textual_query = build_opensearch_textual_statute_query(
+        query_terms=query_terms,
+        case_types=case_types,
+        statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
+    )
+    return collect_source_ids(textual_query)
 
 
 def chunk_source_ids(source_ids: list[int], chunk_size: int) -> list[list[int]]:
