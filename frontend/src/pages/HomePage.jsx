@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
@@ -21,9 +22,104 @@ function TrustBadge({ icon, text }) {
   );
 }
 
+function DemoCarousel({ steps, accent }) {
+  const [current, setCurrent] = useState(0);
+  const total = steps.length;
+
+  const activeDot =
+    accent === "brand"
+      ? "bg-brand text-white"
+      : "bg-amber-500 text-white";
+  const inactiveDot =
+    "bg-transparent border border-text-secondary/30 text-text-secondary/50 hover:border-text-secondary/60";
+  const arrowBase =
+    "absolute top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-opacity bg-white/90 border border-divider text-text-primary";
+
+  return (
+    <div>
+      {/* Step indicators */}
+      <div className="flex items-center gap-2 mb-5">
+        {steps.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setCurrent(i)}
+            className={`w-7 h-7 rounded-full text-xs font-bold transition-colors ${
+              i === current ? activeDot : inactiveDot
+            }`}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <span className="ml-2 text-xs text-text-secondary/50">
+          {current + 1} / {total}
+        </span>
+      </div>
+
+      {/* GIF with arrows */}
+      <div className="relative">
+        <button
+          onClick={() => setCurrent((c) => c - 1)}
+          disabled={current === 0}
+          className={`${arrowBase} left-3 ${current === 0 ? "opacity-0 pointer-events-none" : "opacity-80 hover:opacity-100"}`}
+          aria-label="Previous"
+        >
+          ‹
+        </button>
+
+        <img
+          key={current}
+          src={steps[current].gif}
+          alt={`Step ${current + 1}`}
+          className="w-full rounded-xl border border-divider"
+        />
+
+        <button
+          onClick={() => setCurrent((c) => c + 1)}
+          disabled={current === total - 1}
+          className={`${arrowBase} right-3 ${current === total - 1 ? "opacity-0 pointer-events-none" : "opacity-80 hover:opacity-100"}`}
+          aria-label="Next"
+        >
+          ›
+        </button>
+      </div>
+
+      {/* Description */}
+      <p className="mt-4 text-sm text-text-secondary leading-relaxed">
+        {steps[current].desc}
+      </p>
+    </div>
+  );
+}
+
 export default function PortfolioHomePage() {
   const { t } = useTranslation();
   const { lang = "en" } = useParams();
+
+  const keywordSteps = [
+    {
+      desc: 'Enter keywords like "車禍" or "行車紀錄器". You can also optionally add a statute using autocomplete (e.g. "刑法" + "284") or filter by case type (e.g. "刑事").',
+      gif: "/gif/keyword-1-input.gif",
+    },
+    {
+      desc: "Sort by relevance or citation count; filter by documentation type and court level.",
+      gif: "/gif/keyword-2-sort-filter.gif",
+    },
+    {
+      desc: "Click a target to see matched and unmatched citation snippets, then drill into the full decision with jump-to-snippet.",
+      gif: "/gif/keyword-3-snippets-and-decisions.gif",
+    },
+  ];
+
+  const ragSteps = [
+    {
+      desc: "Describe a case in natural language → AI extracts legal issues and statutes → confirm before submitting.",
+      gif: "/gif/rag-1-analyze.gif",
+    },
+    {
+      desc: "Browse Gemini-generated analysis per issue with supporting decisions; click a source (orange) to open the full decision or a target (gray) to see citation counts.",
+      gif: "/gif/rag-2-analysis-page.gif",
+    },
+  ];
 
   return (
     <div className="font-body text-text-primary">
@@ -65,17 +161,34 @@ export default function PortfolioHomePage() {
         </div>
       </Section>
 
-      {/* What I Built — demo videos */}
+      {/* What I Built — demo carousel */}
       <Section className="max-w-4xl mx-auto px-6 pb-20" delay={200}>
-        <h2 className="font-display text-3xl text-center mb-3">
+        <h2 className="font-display text-3xl text-center mb-12">
           {t("what_built.heading")}
         </h2>
-        <p className="text-center text-text-secondary mb-10 max-w-2xl mx-auto">
-          {t("what_built.intro")}
-        </p>
-        {/* TODO: demo videos go here */}
-        <div className="bg-card-bg border border-brand-border/50 rounded-xl p-12 text-center text-text-secondary/60 text-sm">
-          Demo videos coming soon
+
+        <div className="grid md:grid-cols-2 gap-10">
+          {/* Keyword Search */}
+          <div>
+            <h3 className="font-display text-lg mb-5 flex items-center gap-2">
+              <span className="bg-brand text-white text-xs font-semibold px-2.5 py-1 rounded-md tracking-wide">
+                KEYWORD
+              </span>
+              Keyword Search
+            </h3>
+            <DemoCarousel steps={keywordSteps} accent="brand" />
+          </div>
+
+          {/* RAG Search */}
+          <div>
+            <h3 className="font-display text-lg mb-5 flex items-center gap-2">
+              <span className="bg-amber-500 text-white text-xs font-semibold px-2.5 py-1 rounded-md tracking-wide">
+                AI
+              </span>
+              RAG Search
+            </h3>
+            <DemoCarousel steps={ragSteps} accent="amber" />
+          </div>
         </div>
       </Section>
 

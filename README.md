@@ -2,7 +2,7 @@
 
 Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assisted flow that clarifies legal intent before analization.
 
-**🔗 [Page](https://lawcidity.rachel-create.com/)** — try keyword search or RAG-based retrieval on real court data.
+**🔗 [Page](https://lawcidity.rachel-create.com/)** — try lexical (keyword) search or Semantic (RAG) search on real court data.
 
 > Try these searches:
 > - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」
@@ -14,21 +14,26 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 ### Keyword Search
 
-(1) Enter free-text keywords (e.g. "車禍", "行車記錄器"), optional statute filters with autocomplete — type a law name ("刑法") and article number ("284") and optional case type ("刑事").  
+(1) Enter free-text keywords (e.g. "車禍", "行車記錄器"), optional statute filters with autocomplete — type a law name ("刑法") and article number ("284") and optional case type ("刑事").
+
 ![](frontend/public/gif/keyword-1-input.gif)
 
-(2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.  
+(2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.
+
 ![](frontend/public/gif/keyword-2-sort-filter.gif)
 
-(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria and snippets that cite the same target but **fall outside** the criteria → click a snippet's source title to open the full decision with a **jump-to-snippet** button.  
+(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria and snippets that cite the same target but **fall outside** the criteria → click a snippet's source title to open the full decision with a **jump-to-snippet** button.
+
 ![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
 
 ### RAG Search
 
-(1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.  
+(1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.
+
 ![](frontend/public/gif/rag-1-analyze.gif)
 
-(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right → click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.  
+(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right → click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.
+
 ![](frontend/public/gif/rag-2-analysis-page.gif)
 
 ---
@@ -40,7 +45,7 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
   - Filters for statute, case type, document type, and court level
   - Citation expansion and full decision drill-down
 
-- **RAG-based search**
+- **RAG search**
   - Gemini-assisted issue and statute extraction from factual queries
   - Dual-path retrieval with pgvector semantic search and statute-guided matching
   - AI-generated legal analysis with supporting decisions
@@ -81,7 +86,7 @@ lawcidity/
 │   ├── test_snippet.py           # Snippet boundary tests
 │   ├── test_search_service.py    # SQL builder unit tests
 │   └── test_doc_type_normalize.py
-├── frontend/             # React + Vite
+├── frontend/             # React + Tailwind CSS
 │   └── src/
 │       ├── pages/        # HomePage, DemoPage, KeywordResultsPage, AiResultsPage, DecisionPage
 │       └── components/   # SearchForm, AiSearchForm, ModeToggle, LawCombobox, ResultCard, ...

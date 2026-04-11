@@ -4,7 +4,7 @@
     "github": "GitHub"
   },
   "hero": {
-    "eyebrow": "AI-Assisted Legal Search Project",
+    "eyebrow": "Legal Search Project",
     "headline": "I built Lawcidity, a legal search project using Taiwanese court decisions.",
     "subheadline": "Built on real court decisions, with separate paths for keyword search and AI-assisted (RAG) retrieval.",
     "cta_demo": "Try Demo",
@@ -17,7 +17,7 @@
   },
   "what_built": {
     "heading": "What I Built",
-    "intro": "See each feature in action — keyword search, statute filtering, and AI-assisted retrieval."
+    "intro": "See each feature in action — keyword search, and AI (RAG) search."
   },
   "final_cta": {
     "heading": "Explore the Project",
