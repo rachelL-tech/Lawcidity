@@ -31,6 +31,17 @@ export default function DecisionPage() {
   const highlightTerms = [anchor, ...keywords].filter(Boolean);
   const sections = parseDecisionSections(decision.clean_text || "");
 
+  function scrollToHighlightedAnchor() {
+    const marks = Array.from(document.querySelectorAll("mark"));
+    const anchorMark = anchor
+      ? marks.find((mark) => mark.textContent?.trim() === anchor)
+      : null;
+    const targetMark = anchorMark || marks[0];
+    if (targetMark) {
+      targetMark.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
   return (
     <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
       {/* AI 摘要 placeholder */}
@@ -43,10 +54,7 @@ export default function DecisionPage() {
       {highlightTerms.length > 0 && (
         <div className="text-center">
           <button
-            onClick={() => {
-              const firstMark = document.querySelector("mark");
-              if (firstMark) firstMark.scrollIntoView({ behavior: "smooth", block: "center" });
-            }}
+            onClick={scrollToHighlightedAnchor}
             className="px-6 py-2 bg-gray-800 text-white rounded-full text-sm"
           >
             跳至引用段落
