@@ -5,8 +5,8 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 **🔗 [Page](https://lawcidity.rachel-create.com/)** — try keyword search or RAG-based retrieval on real court data.
 
 > Try these searches:
-> - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」 — see citation-linked rankings
-> - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」 → 確認爭點、法條 → 生成 AI 分析
+> - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」
+> - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」
 
 ---
 
@@ -20,22 +20,16 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 (2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.  
 ![](frontend/public/gif/keyword-2-sort-filter.gif)
 
-(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria, and snippets that cite the same target but **fall outside** the criteria.  
-![](frontend/public/gif/keyword-3-snippets.gif)
-
-(4) Click a snippet's source title to open the full decision, with a **jump-to-snippet** button.  
-![](frontend/public/gif/keyword-4-decision.gif)
+(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria and snippets that cite the same target but **fall outside** the criteria → click a snippet's source title to open the full decision with a **jump-to-snippet** button.  
+![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
 
 ### RAG Search
 
 (1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.  
 ![](frontend/public/gif/rag-1-analyze.gif)
 
-(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right.  
+(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right → click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.  
 ![](frontend/public/gif/rag-2-analysis-page.gif)
-
-(3) Click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.  
-![](frontend/public/gif/rag-3-blocks.gif)
 
 ---
 
@@ -70,8 +64,6 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 | AI services | Gemini Flash, Voyage API (voyage-law-2) |
 | Infrastructure | AWS EC2, RDS, ALB, nginx |
 
-**Data source:** [Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/) — public court decisions, 2025-01 to 2026-01.
-
 **Key technology decisions:**
 - **OpenSearch** over PostgreSQL GIN: 27× faster on cited-decision retrieval, less than a third of the index storage
 - **pgvector** over a managed vector DB: co-located with relational data, avoids extra service dependency
@@ -100,6 +92,8 @@ lawcidity/
 ---
 
 ## Data Model
+
+**Data source:** [Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/) — public court decisions, 2025-01 to 2026-01.
 
 ### PostgreSQL ER Diagram
 ![PostgreSQL ER Diagram](frontend/public/er-diagram-overview.png)
