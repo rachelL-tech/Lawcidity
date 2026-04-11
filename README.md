@@ -14,7 +14,7 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 **🔗 [Live demo](https://lawcidity.rachel-create.com/)**
 
-### (Keyword Search)
+### Keyword Search
 
 (1) Enter free-text keywords (e.g. "車禍", "行車記錄器") and optional statute filters with autocomplete — type a law name ("刑法") and article number ("284").  
 ![](frontend/public/gif/keyword-1-input.gif)
@@ -28,7 +28,7 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 (4) Click a snippet's source title to open the full decision, with a **jump-to-snippet** button.  
 ![](frontend/public/gif/keyword-4-decision.gif)
 
-### (RAG Search)
+### RAG Search
 
 (1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.  
 ![](frontend/public/gif/rag-1-analyze.gif)
@@ -67,13 +67,13 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, Vite 7, Tailwind CSS 4 |
+| Frontend | React 19, Tailwind CSS 4 |
 | Application | FastAPI |
 | Keyword search | OpenSearch (2-gram ngram analyzer) |
-| Semantic search | pgvector (HNSW / ivfflat) |
+| Semantic search | pgvector (ivfflat) |
 | Storage | PostgreSQL |
 | AI services | Gemini Flash, Voyage API (voyage-law-2) |
-| Infrastructure | AWS EC2, RDS, nginx |
+| Infrastructure | AWS EC2, RDS, ALB, nginx |
 
 **Data source:** [Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/) — public court decisions, 2025-01 to 2026-01.
 
@@ -157,6 +157,28 @@ For RAG retrieval, a single semantic search path misses results that are topical
 
 ---
 
+## Data Model
+
+### PostgreSQL ER Diagram
+![PostgreSQL ER Diagram](frontend/public/ER diagram(overview).png)
+For a detailed version, see [ER diagram(detail).png](frontend/public/ER diagram(detail).png).
+
+**Core tables:**
+
+| Table | Rows | Description |
+|---|---|---|
+| `decisions` | 1.4M | Court decisions with normalized metadata |
+| `citations` | 552K | Source → target citation links with snippet positions |
+| `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
+| `decision_reason_statutes` | 5.2M | Statute references extracted from decision reasoning |
+| `citation_snippet_statutes` | 298K | Statute references within citation snippets |
+| `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
+
+### PostgreSQL-to-OpenSearch Index Flow
+![PostgreSQL-to-OpenSearch Index Flow](frontend/public/Index Flow.png)
+
+---
+
 ## Development Journey
 
 Eight weeks of iterative development, from raw court documents to a working search product.
@@ -169,23 +191,6 @@ Eight weeks of iterative development, from raw court documents to a working sear
 | **4. Parser refactor** | Mar 14–21 | Rewrote citation parser into traceable functions, tightened false positive rules, sibling citation dedup |
 | **5. Semantic search & RAG** | Mar 22–27 | Multi-round embedding evaluation, citation-context + supreme reasoning chunks, dual-path retrieval, Gemini AI analysis |
 | **6. Optimization & deploy** | Mar 26–30 | RAG merge layer optimization, chunk dedup, issue-based embedding search, HTTPS production deployment |
-
----
-
-## ER Diagram
-
-![ER Diagram](docs/er-diagram.png)
-
-**Core tables:**
-
-| Table | Rows | Description |
-|---|---|---|
-| `decisions` | 1.4M | Court decisions with normalized metadata |
-| `citations` | 552K | Source → target citation links with snippet positions |
-| `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
-| `decision_reason_statutes` | 5.2M | Statute references extracted from decision reasoning |
-| `citation_snippet_statutes` | 298K | Statute references within citation snippets |
-| `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
 
 ---
 
