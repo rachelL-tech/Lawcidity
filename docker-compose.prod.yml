@@ -7,9 +7,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      OPENSEARCH_URL: https://opensearch:9200
-      OPENSEARCH_VERIFY_CERTS: "false"
     depends_on:
       opensearch:
         condition: service_healthy
