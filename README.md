@@ -44,19 +44,17 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 ## Features
 
 - **Keyword search**
-  - Statute autocomplete with law name validation, article number, and sub-reference input
-  - Statute filtering and case type filtering
-  - Citation expansion: finds sources containing query keywords, then surfaces the targets they cite — when multiple sources point to the same target, that signals a stable, authoritative holding
-  - Results ranked by hit rate and citation count, with document type and court level filters
-  - Click through to full decision detail
+  - Citation-linked target ranking from keyword and statute queries
+  - Filters for statute, case type, document type, and court level
+  - Citation expansion and full decision drill-down
 
 - **RAG-based search**
-  - Input a factual description → Gemini extracts candidate issues and statutes → user selects which to confirm
-  - AI-generated analysis with supporting decisions as references
-  - Click through to full decision detail
+  - Gemini-assisted issue and statute extraction from factual queries
+  - Dual-path retrieval with pgvector semantic search and statute-guided matching
+  - AI-generated legal analysis with supporting decisions
 
 - **Decision detail page**
-  - Full decision text with citation snippet highlighting
+  - Full decision text with citation snippet highlighting and jump-to-snippet navigation
 
 ---
 
@@ -101,6 +99,28 @@ lawcidity/
 ├── sql/                  # Schema migrations
 └── docker-compose.yml    # Local dev stack
 ```
+
+---
+
+## Data Model
+
+### PostgreSQL ER Diagram
+![PostgreSQL ER Diagram](frontend/public/ER diagram(overview).png)
+For a detailed version, see [ER diagram(detail).png](frontend/public/ER diagram(detail).png).
+
+**Core tables:**
+
+| Table | Rows | Description |
+|---|---|---|
+| `decisions` | 1.4M | Court decisions with normalized metadata |
+| `citations` | 552K | Source → target citation links with snippet positions |
+| `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
+| `decision_reason_statutes` | 5.2M | Statute references extracted from decision reasoning |
+| `citation_snippet_statutes` | 298K | Statute references within citation snippets |
+| `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
+
+### PostgreSQL-to-OpenSearch Index Flow
+![PostgreSQL-to-OpenSearch Index Flow](frontend/public/Index Flow.png)
 
 ---
 
@@ -154,28 +174,6 @@ Running two retrieval paths means maintaining two independent pipelines with dif
 For keyword ranking, the original approach scored each target by running PostgreSQL ILIKE across all citation snippets — a binary hit per keyword term, scanning every matching source. This was exhaustive but scaled linearly with corpus size (roughly 18 seconds for broad queries). I moved scoring to a pre-indexed source-target window index in OpenSearch, where each keyword's proximity to the citation position determines its weight (snippet context = 3.0, post-citation 100 chars = 1.5, 200 chars = 0.5, pre-citation 60 chars = 0.2). Source retrieval is capped at 50,000, which bounds query time regardless of corpus growth. The trade-off: targets cited only by sources ranked below the cap may appear with incomplete citation counts or be absent entirely — but query time dropped from roughly 18 seconds to roughly 3 seconds, and the proximity-weighted signal produces more relevant top-K rankings than binary keyword matching.
 
 For RAG retrieval, a single semantic search path misses results that are topically relevant but not close enough in embedding space, especially when the user has specific statutes in mind. I used a dual-path retrieval design: Path A runs HNSW approximate nearest-neighbor search for the top 50 semantically similar chunks, while Path B finds chunks whose associated citations or decisions match the user's confirmed statutes and computes vector distances via brute-force scan. The two paths are merged by chunk ID, and each chunk is scored as cosine similarity plus a statute-match boost. Chunks are not arbitrary text splits — they are either citation-context passages (text surrounding a citation reference in lower-court decisions) or supreme-reasoning passages (complete reasoning sections from Supreme Court decisions), so each chunk carries a citation link back to the target it discusses. The user-facing flow has two stages: Gemini first extracts candidate issues and statutes from a factual description, the user confirms which to keep, and then the confirmed inputs drive both retrieval paths and the final generated analysis.
-
----
-
-## Data Model
-
-### PostgreSQL ER Diagram
-![PostgreSQL ER Diagram](frontend/public/ER diagram(overview).png)
-For a detailed version, see [ER diagram(detail).png](frontend/public/ER diagram(detail).png).
-
-**Core tables:**
-
-| Table | Rows | Description |
-|---|---|---|
-| `decisions` | 1.4M | Court decisions with normalized metadata |
-| `citations` | 552K | Source → target citation links with snippet positions |
-| `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
-| `decision_reason_statutes` | 5.2M | Statute references extracted from decision reasoning |
-| `citation_snippet_statutes` | 298K | Statute references within citation snippets |
-| `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
-
-### PostgreSQL-to-OpenSearch Index Flow
-![PostgreSQL-to-OpenSearch Index Flow](frontend/public/Index Flow.png)
 
 ---
 
