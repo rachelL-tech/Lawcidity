@@ -14,25 +14,25 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 ### Keyword Search
 
-(1) Enter free-text keywords (e.g. "車禍", "行車記錄器"), optional statute filters with autocomplete — type a law name ("刑法") and article number ("284") and optional case type ("刑事").
+(1) Enter keywords like "車禍" or "行車紀錄器". You can also optionally add a statute using autocomplete (e.g. "刑法" + "284") or filter by case type (e.g. "刑事").
 
 ![](frontend/public/gif/keyword-1-input.gif)
 
-(2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.
+(2) Sort by relevance or citation count; filter by documentation type and court level.
 
 ![](frontend/public/gif/keyword-2-sort-filter.gif)
 
-(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria and snippets that cite the same target but **fall outside** the criteria → click a snippet's source title to open the full decision with a **jump-to-snippet** button.
+(3) Click a target to see matched and unmatched citation snippets, then drill into the full decision with jump-to-snippet.
 
 ![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
 
 ### RAG Search
 
-(1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.
+(1) Describe a case in natural language → AI extracts legal issues and statutes → confirm before submitting.
 
 ![](frontend/public/gif/rag-1-analyze.gif)
 
-(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right → click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.
+(2) Browse Gemini-generated analysis per issue with supporting decisions; click a source (orange) to open the full decision or a target (gray) to see citation counts.
 
 ![](frontend/public/gif/rag-2-analysis-page.gif)
 
@@ -100,6 +100,8 @@ lawcidity/
 
 **Data source:** [Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/) — public court decisions, 2025-01 to 2026-01.
 
+The PostgreSQL database currently uses **17 GB** on RDS, and the OpenSearch data directory uses about **3.2 GB** on EC2.
+
 ### PostgreSQL ER Diagram
 ![PostgreSQL ER Diagram](frontend/public/er-diagram-overview.png)
 For a detailed version, see [er-diagram-detail.png](frontend/public/er-diagram-detail.png).
@@ -108,17 +110,22 @@ For a detailed version, see [er-diagram-detail.png](frontend/public/er-diagram-d
 
 | Table | Rows | Description |
 |---|---|---|
-| `decisions` | 1.4M | Court decisions with normalized metadata |
-| `citations` | 552K | Source → target citation links with snippet positions |
+| `decisions` | 1.4M | Source and target court decisions with normalized metadata |
+| `citations` | 552K | Source → target citation relationships with full-text positions |
 | `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
-| `decision_reason_statutes` | 5.2M | Statute references extracted from decision reasoning |
-| `citation_snippet_statutes` | 298K | Statute references within citation snippets |
-| `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
+| `decision_reason_statutes` | 6.6M | Statute references extracted from decision reasoning sections |
+| `citation_snippet_statutes` | 458K | Statute references within citation snippets |
+| `authorities` | 1.6K | Other cited legal documents that are not court decisions, stored separately from `decisions` |
 
 ### PostgreSQL-to-OpenSearch Index Flow
 ![PostgreSQL-to-OpenSearch Index Flow](frontend/public/index-flow.png)
 
 **Core Indexs:**
+
+| Index | Documents | Store size | Description |
+|---|---:|---:|---|
+| `decisions_v3` | 3.0M | 2.8 GB | Main decision index for keyword retrieval |
+| `source_target_windows_v2` | 997K | 456 MB | Source-target pairs with citation snippets for ranking cited targets |
 
 ---
 
