@@ -5,14 +5,12 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 **🔗 [Page](https://lawcidity.rachel-create.com/)** — try keyword search or RAG-based retrieval on real court data.
 
 > Try these searches:
-> - **Keyword search**: keyword「行車記錄器」「車禍」＋ statute「刑法」「284」 — see citation-linked rankings
+> - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」 — see citation-linked rankings
 > - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」 → 確認爭點、法條 → 生成 AI 分析
 
 ---
 
 ## Demo
-
-**🔗 [Live demo](https://lawcidity.rachel-create.com/)**
 
 ### Keyword Search
 
@@ -60,7 +58,6 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 ## Architecture
 
-<!-- TODO: Replace with actual architecture diagram -->
 ![Architecture](frontend/public/Architecture.png)
 
 | Layer | Technology |
@@ -105,8 +102,8 @@ lawcidity/
 ## Data Model
 
 ### PostgreSQL ER Diagram
-![PostgreSQL ER Diagram](frontend/public/ER diagram(overview).png)
-For a detailed version, see [ER diagram(detail).png](frontend/public/ER diagram(detail).png).
+![PostgreSQL ER Diagram](frontend/public/er-diagram-overview.png)
+For a detailed version, see [er-diagram-detail.png](frontend/public/er-diagram-detail.png).
 
 **Core tables:**
 
@@ -120,7 +117,9 @@ For a detailed version, see [ER diagram(detail).png](frontend/public/ER diagram(
 | `authorities` | 1.6K | Authoritative decisions, resolutions, interpretations |
 
 ### PostgreSQL-to-OpenSearch Index Flow
-![PostgreSQL-to-OpenSearch Index Flow](frontend/public/Index Flow.png)
+![PostgreSQL-to-OpenSearch Index Flow](frontend/public/index-flow.png)
+
+**Core Indexs:**
 
 ---
 
