@@ -38,7 +38,7 @@ function DemoCarousel({ steps, accent }) {
   return (
     <div>
       {/* Step indicators */}
-      <div className="flex items-center gap-2 mb-5">
+      <div className="flex items-center justify-center gap-2 mb-5">
         {steps.map((_, i) => (
           <button
             key={i}
@@ -50,9 +50,6 @@ function DemoCarousel({ steps, accent }) {
             {i + 1}
           </button>
         ))}
-        <span className="ml-2 text-xs text-text-secondary/50">
-          {current + 1} / {total}
-        </span>
       </div>
 
       {/* GIF with arrows */}
@@ -171,10 +168,10 @@ export default function PortfolioHomePage() {
           {/* Keyword Search */}
           <div>
             <h3 className="font-display text-lg mb-5 flex items-center gap-2">
-              <span className="bg-brand text-white text-xs font-semibold px-2.5 py-1 rounded-md tracking-wide">
+              <span className="bg-brand text-white text-xs font-semibold px-2 py-1 rounded-md tracking-wide">
                 KEYWORD
               </span>
-              Keyword Search
+              Lexical Search
             </h3>
             <DemoCarousel steps={keywordSteps} accent="brand" />
           </div>
@@ -182,10 +179,10 @@ export default function PortfolioHomePage() {
           {/* RAG Search */}
           <div>
             <h3 className="font-display text-lg mb-5 flex items-center gap-2">
-              <span className="bg-amber-500 text-white text-xs font-semibold px-2.5 py-1 rounded-md tracking-wide">
-                AI
+              <span className="bg-amber-500 text-white text-xs font-semibold px-2 py-1 rounded-md tracking-wide">
+                AI (RAG)
               </span>
-              RAG Search
+              Semantic Search
             </h3>
             <DemoCarousel steps={ragSteps} accent="amber" />
           </div>
