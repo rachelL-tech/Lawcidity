@@ -14,7 +14,7 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 ### Keyword Search
 
-(1) Enter free-text keywords (e.g. "車禍", "行車記錄器") and optional statute filters with autocomplete — type a law name ("刑法") and article number ("284").  
+(1) Enter free-text keywords (e.g. "車禍", "行車記錄器"), optional statute filters with autocomplete — type a law name ("刑法") and article number ("284") and optional case type ("刑事").  
 ![](frontend/public/gif/keyword-1-input.gif)
 
 (2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.  
