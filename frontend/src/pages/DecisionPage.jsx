@@ -34,10 +34,10 @@ export default function DecisionPage() {
   return (
     <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
       {/* AI 摘要 placeholder */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm">
+      {/* <div className="bg-white rounded-2xl p-6 shadow-sm">
         <h2 className="text-brand font-bold mb-3">AI 摘要</h2>
         <p className="text-sm text-gray-400">即將推出</p>
-      </div>
+      </div> */}
 
       {/* 跳至引用段落（使用者從搜尋結果點進來時，跳到 snippet 高亮位置） */}
       {highlightTerms.length > 0 && (

@@ -2,7 +2,7 @@
 
 Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assisted flow that clarifies legal intent before analization.
 
-**🔗 [Live Demo](https://your-domain.com)** — try keyword search or RAG-based retrieval on real court data.
+**🔗 [Page](https://lawcidity.rachel-create.com/)** — try keyword search or RAG-based retrieval on real court data.
 
 > Try these searches:
 > - **Keyword search**: keyword「行車記錄器」「車禍」＋ statute「刑法」「284」 — see citation-linked rankings
@@ -12,19 +12,32 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 
 ## Demo
 
-<!-- TODO: Replace with actual screenshots/GIFs -->
+**🔗 [Live demo](https://lawcidity.rachel-create.com/)**
 
-| Keyword Search |
-|---|
-| ![keyword search](docs/screenshots/keyword-search.png) |
+### (Keyword Search)
 
-| RAG-based Search |
-|---|
-| ![rag search](docs/screenshots/rag-search.png) |
+(1) Enter free-text keywords (e.g. "車禍", "行車記錄器") and optional statute filters with autocomplete — type a law name ("刑法") and article number ("284").  
+![](frontend/public/gif/keyword-1-input.gif)
 
-| Decision Detail |
-|---|
-| ![decision detail](docs/screenshots/decision-detail.png) |
+(2) Sort results by **relevance** or **citation count**; filter by **documentation type** and **court level**.  
+![](frontend/public/gif/keyword-2-sort-filter.gif)
+
+(3) Click a target to see citation snippets from sources — split into snippets that **match** the search criteria, and snippets that cite the same target but **fall outside** the criteria.  
+![](frontend/public/gif/keyword-3-snippets.gif)
+
+(4) Click a snippet's source title to open the full decision, with a **jump-to-snippet** button.  
+![](frontend/public/gif/keyword-4-decision.gif)
+
+### (RAG Search)
+
+(1) Describe a case in natural language → click **AI Analyze** to extract candidate legal issues and statutes → confirm before submitting.  
+![](frontend/public/gif/rag-1-analyze.gif)
+
+(2) The analysis page shows **confirmed search parameters** on the left, **Gemini-generated analysis** per issue on the upper right, and **reference sources** on the lower right.  
+![](frontend/public/gif/rag-2-analysis-page.gif)
+
+(3) Click an **orange block** (source) to open the decision detail page; click a **gray block** (target) to see how many times it has been cited.  
+![](frontend/public/gif/rag-3-blocks.gif)
 
 ---
 
@@ -50,7 +63,7 @@ Lawcidity helps lawyers find authoritative court holdings faster, and an AI-assi
 ## Architecture
 
 <!-- TODO: Replace with actual architecture diagram -->
-![Architecture](docs/screenshots/architecture.png)
+![Architecture](frontend/public/Architecture.png)
 
 | Layer | Technology |
 |---|---|
@@ -161,8 +174,7 @@ Eight weeks of iterative development, from raw court documents to a working sear
 
 ## ER Diagram
 
-<!-- TODO: Replace with actual ER diagram -->
-![ER Diagram](docs/screenshots/er-diagram.png)
+![ER Diagram](docs/er-diagram.png)
 
 **Core tables:**
 

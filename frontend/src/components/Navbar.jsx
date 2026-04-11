@@ -20,9 +20,12 @@ export default function PortfolioNavbar() {
           end
           className="flex items-center gap-2 text-brand font-bold text-lg font-body"
         >
-          <span className="w-8 h-8 bg-brand-light rounded-full flex items-center justify-center text-brand text-sm">
-            &oline;
-          </span>
+          <img
+            src="/favicon.png"
+            alt=""
+            aria-hidden="true"
+            className="w-8 h-8 rounded-full object-cover"
+          />
           Lawcidity 法澄
         </NavLink>
 

@@ -90,7 +90,7 @@ export default function AiResultsPage() {
 
           {/* 原始 query */}
           <div>
-            <h3 className="text-xs text-gray-400 mb-1">案情事實</h3>
+            <h3 className="text-xs text-gray-400 mb-1">案例事實</h3>
             <p className="text-sm text-gray-700 leading-relaxed line-clamp-6">
               {query}
             </p>
@@ -362,7 +362,7 @@ function TargetCiteTag({ id, children }) {
             <p className="text-red-500">載入失敗</p>
           ) : info ? (
             <>
-              <p className="font-medium mb-1">{info.case_ref}</p>
+              {/* <p className="font-medium mb-1">{info.case_ref}</p> */}
               <p className="text-gray-500 mb-2">被引用 {info.total_citation_count} 次</p>
               {info.statutes?.length > 0 && (
                 <div className="flex flex-wrap gap-1">
@@ -376,12 +376,12 @@ function TargetCiteTag({ id, children }) {
                   ))}
                 </div>
               )}
-              <Link
+              {/* <Link
                 to={`/${lang}/decisions/${id}`}
                 className="block mt-2 text-brand hover:underline"
               >
                 查看判決全文
-              </Link>
+              </Link> */}
             </>
           ) : null}
         </div>
