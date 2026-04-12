@@ -266,7 +266,7 @@ def _citation_rows(
             FROM deduped
             JOIN decisions src ON src.id = deduped.source_id
             LEFT JOIN court_units cu ON cu.id = src.court_unit_id
-            ORDER BY cu.level ASC NULLS LAST, src.decision_date DESC NULLS LAST, deduped.source_id DESC
+            ORDER BY cu.level ASC NULLS LAST, deduped.source_id DESC
             LIMIT %(limit)s
         """
         rows_sql = """

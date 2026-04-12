@@ -50,7 +50,6 @@ SOURCE_TARGET_MATCH_NAME_RE = re.compile(
 )
 SOURCE_TARGET_STATUTE_MATCH_NAME_RE = re.compile(r"^st(?P<filter_idx>\d+)$")
 SOURCE_TARGET_STRICT_FILL_THRESHOLD = 200
-SOURCE_TARGET_HOT_TERM_SOURCE_THRESHOLD = 10000
 COURT_LEVEL_MAP = {
     "憲法法庭": 0,
     "最高法院": 1,
@@ -627,15 +626,13 @@ def search_source_target_hits_opensearch(
 
 
 def _should_use_target_uid_hot_term_aggregation(
-    source_ids: list[int],
     query_terms: list[str],
     statute_filters: list[tuple[str, str | None, str | None]],
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str | None, str | None]],
 ) -> bool:
     return (
-        len(source_ids) >= SOURCE_TARGET_HOT_TERM_SOURCE_THRESHOLD
-        and len(query_terms) == 1
+        len(query_terms) == 1
         and not statute_filters
         and not exclude_terms
         and not exclude_statute_filters
@@ -1107,7 +1104,6 @@ def fetch_target_rankings_by_relevance(
         return []
 
     if _should_use_target_uid_hot_term_aggregation(
-        source_ids,
         query_terms,
         statute_filters,
         exclude_terms,

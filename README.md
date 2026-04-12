@@ -1,12 +1,18 @@
 # Lawcidity
 
-Lawcidity helps lawyers find authoritative court holdings faster, with an AI-assisted flow that clarifies legal intent before analysis.
+A citation-based legal search engine that helps lawyers find authoritative court holdings faster, with an AI-assisted flow that clarifies legal intent before analysis.
 
 **🔗 [Live Demo](https://lawcidity.rachel-create.com/)**
 
 > Try these searches:
 > - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」
 > - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」
+
+## Why Citations?
+
+During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. My hypothesis: **the more a decision is cited, the more likely it represents a stable, authoritative holding** — because no matter how relevant a legal opinion seems, if it's a minority view, judges won't adopt it.
+
+I extracted and counted citation relationships from court decisions, and confirmed the pattern: under specific keyword and statute combinations, certain targets are cited far more frequently than others. This became the core retrieval strategy — find all decisions containing a keyword or statute (sources), identify the targets they commonly cite, and rank by citation count.
 
 ---
 
@@ -109,7 +115,7 @@ A case number in a court decision is not always a legal citation — it may refe
 
 At this point, source recall (Stage 1) was fast, but the bottleneck shifted: scoring still happened in PostgreSQL, running ILIKE against every citation snippet for every recalled source. When source count was high, the number of (source, target) pairs exploded, and the per-row ILIKE scan became the dominant cost.
 
-**Building a source-target window index.** Since OpenSearch was already fast at keyword hit detection, I built a new `source_target_windows` index that stored each (source, target) pair with the citation snippet text. This added a second stage to the pipeline: after Stage 1 source recall, Stage 2 scans the source-target index in OpenSearch to flag keyword and statute hits per pair, Python aggregates the flags into target scores, and PostgreSQL only provides metadata. The per-row PG ILIKE scan was eliminated.
+**Building a source-target window index.** Since OpenSearch was already fast at keyword hit detection, I built a new `source_target_windows` index that stored each (source, target) pair with the citation snippet text. This added a second stage to the pipeline: after Stage 1 source recall, Stage 2 scans the source-target index in OpenSearch to flag keyword and statute hits per pair, Python aggregates the flags into target scores, and PostgreSQL only provides metadata. The per-row PG ILIKE scan was eliminated. Stage 2 scrolls pairs up to a cap of 40,000 hits to bound query time.
 
 <!-- placeholder: 前後架構對比圖，或一張表格比較
      舊 pipeline (OpenSearch recall → PG ILIKE score) vs
@@ -119,7 +125,7 @@ At this point, source recall (Stage 1) was fast, but the bottleneck shifted: sco
 
 *Noisy second-stage hits.* Initially, the Stage 2 query set no `minimum_should_match` — any (source, target) pair that matched the source ID filter was returned, even if it never hit any keyword or statute window. For「損害賠償」, 83% of the 50,000 hits scored zero. Setting `minimum_should_match=1` fixed the noise, but strict matching produced zero results for rare terms where citation snippets did not contain the search keyword. The solution was a strict-then-fallback blend: run strict first, and if results are insufficient, supplement with a relaxed pass.
 
-*Hot-term score saturation.* For very common single-keyword queries (e.g.「證據」with 155K sources), pair-level scores degenerated into ties — nearly every pair hit the same keyword window, and scoring became meaningless. For these cases (single keyword, ≥10K sources, no statute filter), the pipeline switches to a target-level aggregation path in OpenSearch: instead of scoring individual pairs, it counts how many distinct sources cite each target, then ranks by matched citation count, total citation count, and court level.
+*Single-keyword aggregation path.* For single-keyword queries with no statute filter, pair-level scores are all 1.0 — every matching pair hits the keyword once, so scoring individual pairs is meaningless. The pipeline instead uses a target-level aggregation in OpenSearch: count how many distinct sources cite each target, then rank by matched citation count, total citation count, and court level. This is also more accurate than the pair-scroll path, since the composite aggregation pages through all pairs without the 40K cap.
 
 *Streaming aggregation.* The original second-stage path collected all hits into a Python list, sorted them, then aggregated into targets. Replacing it with a streaming approach — aggregating into target state while scrolling — cut both latency and peak memory without changing results.
 
