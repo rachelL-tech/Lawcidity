@@ -10,9 +10,16 @@ A citation-based legal search engine that helps lawyers find authoritative court
 
 ## Why Citations?
 
-During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. My hypothesis: **the more a decision is cited, the more likely it represents a stable, authoritative holding** — because no matter how relevant a legal opinion seems, if it's a minority view, judges won't adopt it.
+During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. When I extracted citation relationships and examined the text surrounding each reference, a pattern emerged: **sources that cite the same target use nearly identical language — the citation appears in the same legal context every time**, which means the target represents a stable, established holding on a specific sub-issue.
 
-I extracted and counted citation relationships from court decisions, and confirmed the pattern: under specific keyword and statute combinations, certain targets are cited far more frequently than others. This became the core retrieval strategy — find all decisions containing a keyword or statute (sources), identify the targets they commonly cite, and rank by citation count.
+For example, searching「車禍」(traffic accident): the most-cited target appears across dozens of sources, and every snippet discusses the definition of「突發狀況」(sudden circumstances). The second most-cited target's snippets all address「逃逸」(fleeing the scene). Each top target maps to one specific legal question — not vague thematic similarity, but the same holding cited in the same way.
+
+This became the core retrieval strategy — find all decisions containing a keyword or statute (**sources**), identify the decisions they commonly cite (**targets**), and rank by citation count.
+
+<!-- placeholder: 「車禍」實際 snippet 對比——
+     並排 3–4 個來自不同 source 的 citation snippet，
+     它們引用同一個 target，且文字幾乎一樣（都在講突發狀況定義）。
+     視覺上直接說明「相同 target → 相同法律脈絡」的假說。 -->
 
 ---
 
@@ -101,9 +108,15 @@ A case number in a court decision is not always a legal citation — it may refe
 
 **Why this is hard:** There is no universal rule for identifying false positives. Even within the court's own reasoning section, a case number may appear as evidence on file (「有該裁定在卷可參」), as prior case history (「判決上訴駁回確定」), or as a party's argument being summarized rather than the court's own citation. If these false positives are not filtered early, they propagate into the citation index and degrade both retrieval quality and query speed downstream.
 
-<!-- placeholder: 截圖 — raw decision JSON 片段，
-     標出一個 true citation 和一個 false positive，
-     展示兩者在文本中看起來幾乎一樣 -->
+<!-- placeholder A: 判決書原文截圖（左）vs 解析後結果（右）——
+     左側：真實原文，密密麻麻、充滿 \n 和空格、案號夾在句子中間，
+     視覺上展示「為什麼這件事很難」。
+     右側：解析後抽出的 citation list，乾淨結構化。 -->
+
+<!-- placeholder B: raw JSON（司法院原始資料）片段（左）vs true citation / false positive 標注（右）——
+     左側：原始 JSON 中的 JFULL 欄位片段，
+     右側：同一段文字，標出哪些案號是 true citation（綠）、哪些是 false positive（紅），
+     展示兩者在文本中看起來幾乎一樣。 -->
 
 **Decision:** The citation parser was decomposed into small, individually testable functions. Each extraction and filtering rule was validated against real failure cases — the test suite currently covers 27+ edge cases from production data, including evidence reference filtering, procedural history detection, and party-section vs court-reasoning distinction.
 
@@ -125,7 +138,7 @@ At this point, source recall (Stage 1) was fast, but the bottleneck shifted: sco
 
 *Noisy second-stage hits.* Initially, the Stage 2 query set no `minimum_should_match` — any (source, target) pair that matched the source ID filter was returned, even if it never hit any keyword or statute window. For「損害賠償」, 83% of the 50,000 hits scored zero. Setting `minimum_should_match=1` fixed the noise, but strict matching produced zero results for rare terms where citation snippets did not contain the search keyword. The solution was a strict-then-fallback blend: run strict first, and if results are insufficient, supplement with a relaxed pass.
 
-*Single-keyword aggregation path.* For single-keyword queries with no statute filter, pair-level scores are all 1.0 — every matching pair hits the keyword once, so scoring individual pairs is meaningless. The pipeline instead uses a target-level aggregation in OpenSearch: count how many distinct sources cite each target, then rank by matched citation count, total citation count, and court level. This is also more accurate than the pair-scroll path, since the composite aggregation pages through all pairs without the 40K cap.
+*Single-keyword aggregation path.* For single-keyword queries with no statute filter, pair-level scores are all 1.0 — every matching pair hits the keyword once, so scoring individual pairs is meaningless. The pipeline instead runs a target-level aggregation in OpenSearch: count how many distinct keyword-matching sources cite each target (`matched_citation_count`), then rank by matched count → `total_citation_count` → court level. This is also more accurate than the Stage 2 scroll path, since the composite aggregation pages through all pairs without the 40K cap. The distinction between matched and total matters: the frontend's "citation count" sort uses `total_citation_count` (citations from all cases, including those that don't contain the keyword); relevance sort uses `matched_citation_count`. For「車禍」, the most globally-cited target — a Grand Chamber ruling with 5,595 total citations — ranks #8 in relevance order with only 10 matched citations, while the #1 target has 35 matched citations, all in car-accident contexts. Sorting by total would surface a broadly-cited ruling that occasionally appears in car-accident cases; sorting by matched surfaces decisions that are specifically authoritative for that topic.
 
 *Streaming aggregation.* The original second-stage path collected all hits into a Python list, sorted them, then aggregated into targets. Replacing it with a streaming approach — aggregating into target state while scrolling — cut both latency and peak memory without changing results.
 
@@ -136,8 +149,6 @@ At this point, source recall (Stage 1) was fast, but the bottleneck shifted: sco
 *Citations: dropping global score ranking.* Citation preview originally required scoring every citation across all matched sources to determine display order — this was the single largest latency cost in citation expansion. Since the search stage already produces the top 5 ranked source IDs per target (selected from aggregated pair scores), the citation preview can reuse them directly instead of recomputing. For each of the 5 sources, it picks one representative citation by keyword and statute hit flags — no global scoring needed. This dropped citation expansion from ~3 seconds to ~0.8 seconds.
 
 *SQL-level optimizations.* Additional improvements included query shape changes (DISTINCT ON restructuring, denormalization, index upgrades) across citation preview and rerank queries.
-
-<!-- placeholder: benchmark 表格 -->
 
 | Operation | Before | After |
 |---|---|---|
@@ -156,18 +167,39 @@ At this point, source recall (Stage 1) was fast, but the bottleneck shifted: sco
 
 The two paths are merged by chunk ID. Each chunk is scored as cosine similarity plus a statute-match boost.
 
-<!-- placeholder: scoring 公式截圖 -->
+<!-- placeholder: Path A / Path B 合流示意圖——
+     Path A：query embedding → ANN search → top 50 chunks
+     Path B：confirmed statutes → SQL filter → 全部 matching chunks → vector distance
+     兩路以 chunk ID merge，加分後排序輸出。
+
+     下方補 scoring 公式：score = cosine_similarity + statute_match_boost，
+     說明 boost 值與觸發條件。 -->
 
 **Chunk design.** Chunks are not arbitrary text splits — they are structured around two types of high-value legal text:
 
-- **Citation-context chunks:** text surrounding a citation reference in lower-court decisions. Each chunk is anchored to a specific citation and carries a link to the cited target. Boundaries are defined by the citation's snippet position.
-- **Supreme-reasoning chunks:** complete reasoning sections from Supreme Court decisions. These chunks have no specific citation target — they represent the court's own legal reasoning. Boundaries follow section markers in the decision text, with a maximum chunk length of 2,000 characters.
+- **Citation-context chunks:** text surrounding a citation reference in lower-court decisions. Each chunk is anchored to a specific citation and carries a link to the cited target. Boundaries expand outward from the citation position to the nearest section markers (㈠㈡㈢, ⒈⒉⒊, 一二三、, etc.); if the resulting span exceeds 2,000 characters, the boundary falls back to sentence endings (。). Hard limits prevent the chunk from extending before the reasoning section header or past the closing dateline (中華民國...). Overlapping chunks from adjacent citations are merged.
+- **Supreme-reasoning chunks:** complete reasoning sections from Supreme Court decisions. These chunks have no specific citation target — they represent the court's own legal reasoning. The reasoning section start is detected in priority order: 得心證之理由 → 本院判斷 → 惟查 → 經查 → 理由 section header. The section is then split by major section markers (一、二、壹、貳、); segments exceeding 2,000 characters are hard-split at sentence boundaries.
+
+<!-- placeholder: Chunk 邊界切割示意圖——
+     用一段真實判決書原文，標出：
+     - citation 位置（錨點）
+     - 前後最近的小節符（chunk 邊界）
+     - 最終 chunk 範圍（highlight）
+     可同時展示「重疊 chunk 合併」的情況。 -->
 
 Text-level deduplication (via md5 hashing) ensures identical chunks are only embedded once.
 
-**Embedding selection.** Evaluated across multiple rounds: BAAI bge-m3, Qwen3-Embedding (0.6B / 4B), Gemini embedding, voyage-multilingual-2, voyage-law-2, voyage-4-large. The evaluation measured both Recall@5 and score gap between related and unrelated snippets, so the decision reflected retrieval quality and ranking stability. voyage-law-2 was selected for its legal-domain specialization and superior score separation.
+**Embedding selection.** Evaluated across three rounds covering BAAI bge-m3, Qwen3-Embedding (0.6B / 4B), Gemini embedding, voyage-multilingual-2, voyage-law-2, and voyage-4-large. Each round used the same test set: 6 target decisions (civil, criminal, administrative, IP), with related citation snippets and 20 unrelated snippets as negatives. The two metrics were `avg gap` (mean score of related snippets minus mean score of unrelated snippets — measures ranking stability) and `Recall@5` (fraction of related snippets appearing in the top 5 results).
 
-<!-- placeholder: embedding 評估比較表（Recall@5 + score gap） -->
+| Model | avg gap | min gap | Recall@5 |
+|---|---:|---:|---:|
+| bge-m3 | 0.212 | 0.080 | 0.826 |
+| Qwen3-Embedding-0.6B (512d) | 0.341 | 0.177 | 0.938 |
+| voyage-multilingual-2 | 0.386 | 0.287 | 0.938 |
+| voyage-4-large | 0.351 | 0.230 | 0.938 |
+| **voyage-law-2** | **0.404** | **0.241** | 0.882 |
+
+voyage-law-2 led on avg gap (+18% over Qwen3, +15% over voyage-4-large) and won on all 6 targets individually. Its Recall@5 is slightly lower (0.882 vs 0.938), but the larger gap means its ranking is more stable — related snippets score further above unrelated ones even when not all land in the top 5. voyage-law-2 was selected for its legal-domain specialization and superior score separation.
 
 **Path B SQL optimization.** Path B was initially the dominant latency source within RAG retrieval:
 
