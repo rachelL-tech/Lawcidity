@@ -11,7 +11,11 @@ import sys
 sys.path.insert(0, '.')
 
 import pytest
-from etl.citation_parser import extract_citations
+from etl.citation_parser import extract_citations_next
+
+
+def extract_citations(text: str) -> list:
+    return [c.to_dict() for c in extract_citations_next(text)]
 
 
 def _citations_from(text: str) -> list:

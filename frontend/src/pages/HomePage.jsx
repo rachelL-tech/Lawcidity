@@ -37,21 +37,6 @@ function DemoCarousel({ steps, accent }) {
 
   return (
     <div>
-      {/* Step indicators */}
-      <div className="flex items-center justify-center gap-2 mb-5">
-        {steps.map((_, i) => (
-          <button
-            key={i}
-            onClick={() => setCurrent(i)}
-            className={`w-7 h-7 rounded-full text-xs font-bold transition-colors ${
-              i === current ? activeDot : inactiveDot
-            }`}
-          >
-            {i + 1}
-          </button>
-        ))}
-      </div>
-
       {/* GIF with arrows */}
       <div className="relative">
         <button
@@ -84,6 +69,21 @@ function DemoCarousel({ steps, accent }) {
       <p className="mt-4 text-sm text-text-secondary leading-relaxed">
         {steps[current].desc}
       </p>
+
+      {/* Step indicators */}
+      <div className="flex items-center justify-center gap-2 mt-4">
+        {steps.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setCurrent(i)}
+            className={`w-7 h-7 rounded-full text-xs font-bold transition-colors ${
+              i === current ? activeDot : inactiveDot
+            }`}
+          >
+            {i + 1}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -167,7 +167,7 @@ export default function PortfolioHomePage() {
         <div className="grid md:grid-cols-2 gap-10">
           {/* Keyword Search */}
           <div>
-            <h3 className="font-display text-lg mb-5 flex items-center gap-2">
+            <h3 className="font-display text-lg mb-5 flex items-center justify-center gap-2 text-center">
               <span className="bg-brand text-white text-xs font-semibold px-2 py-1 rounded-md tracking-wide">
                 KEYWORD
               </span>
@@ -178,7 +178,7 @@ export default function PortfolioHomePage() {
 
           {/* RAG Search */}
           <div>
-            <h3 className="font-display text-lg mb-5 flex items-center gap-2">
+            <h3 className="font-display text-lg mb-5 flex items-center justify-center gap-2 text-center">
               <span className="bg-amber-500 text-white text-xs font-semibold px-2 py-1 rounded-md tracking-wide">
                 AI (RAG)
               </span>

@@ -20,6 +20,7 @@ This became the core retrieval strategy — find all decisions containing a keyw
      並排 3–4 個來自不同 source 的 citation snippet，
      它們引用同一個 target，且文字幾乎一樣（都在講突發狀況定義）。
      視覺上直接說明「相同 target → 相同法律脈絡」的假說。 -->
+![](frontend/public/why_citations_snippet.png)
 
 ---
 

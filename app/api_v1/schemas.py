@@ -116,42 +116,6 @@ class CitationsResponse(BaseModel):
     others_sources: list[CitationSource] | None = None
 
 
-# ── POST /search/semantic ──────────────────────────────────────────────────────
-
-class SemanticSearchRequest(BaseModel):
-    query: str
-    case_type: str | None = None   # 民事/刑事/行政（可選）
-    k: int = 200                   # knn 召回 chunk 數
-    page: int = 1
-    page_size: int = 20
-
-
-class SemanticTarget(BaseModel):
-    target_id: int | None
-    authority_id: int | None
-    case_ref: str
-    court: str
-    doc_type: str | None
-
-
-class SemanticSourceItem(BaseModel):
-    source_id: int
-    case_ref: str
-    court: str
-    doc_type: str | None
-    decision_date: str | None
-    score: float
-    chunk_count: int
-    cited_targets: list[SemanticTarget]
-
-
-class SemanticSearchResponse(BaseModel):
-    total: int
-    page: int
-    page_size: int
-    results: list[SemanticSourceItem]
-
-
 # ── GET /decisions/{id} ────────────────────────────────────────────────────────
 
 class DecisionStatute(BaseModel):

@@ -588,43 +588,6 @@ def _iter_source_target_hits_opensearch(
                 except Exception:
                     pass
 
-def search_source_target_hits_opensearch(
-    query_terms: list[str],
-    source_ids: list[int],
-    statute_filters: list[tuple[str, str | None, str | None]],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple[str, str | None, str | None]],
-    *,
-    max_hits: int | None = None,
-    minimum_should_match: int | None = None,
-    target_ids: list[int] | None = None,
-    target_authority_ids: list[int] | None = None,
-) -> list[dict[str, Any]]:
-    hits = list(
-        _iter_source_target_hits_opensearch(
-            query_terms=query_terms,
-            source_ids=source_ids,
-            statute_filters=statute_filters,
-            exclude_terms=exclude_terms,
-            exclude_statute_filters=exclude_statute_filters,
-            max_hits=max_hits,
-            minimum_should_match=minimum_should_match,
-            target_ids=target_ids or [],
-            target_authority_ids=target_authority_ids or [],
-        ) or []
-    )
-
-    hits.sort(
-        key=lambda row: (
-            -(row["score"] or 0),
-            row["source_id"],
-            row["target_id"] if row["target_id"] is not None else 2**63 - 1,
-            row["target_authority_id"] if row["target_authority_id"] is not None else 2**63 - 1,
-        )
-    )
-    return hits
-
-
 def _should_use_target_uid_hot_term_aggregation(
     query_terms: list[str],
     statute_filters: list[tuple[str, str | None, str | None]],
@@ -915,24 +878,6 @@ def _build_rankings_from_aggregated_target_hits(
     return rankings
 
 
-def aggregate_source_target_hits_to_rankings(
-    hits: list[dict[str, Any]],
-    decision_meta: dict[int, dict[str, Any]],
-    authority_meta: dict[int, dict[str, Any]],
-    doc_types: list[str] | None = None,
-    court_levels: list[int] | None = None,
-) -> list[dict[str, Any]]:
-    """將 source-target hits 聚合成 search results。"""
-    aggregated = _accumulate_target_hits(hits)
-    return _build_rankings_from_aggregated_target_hits(
-        aggregated,
-        decision_meta,
-        authority_meta,
-        doc_types=doc_types,
-        court_levels=court_levels,
-    )
-
-
 def _build_rankings_from_target_uid_counts(
     conn: psycopg.Connection,
     target_counts: dict[str, dict[str, Any]],
@@ -1001,37 +946,6 @@ def _build_rankings_from_target_uid_counts(
         )
     )
     return rankings
-
-
-def _build_rankings_from_hits(
-    conn: psycopg.Connection,
-    hits: list[dict[str, Any]],
-    *,
-    doc_types: list[str] | None = None,
-    court_levels: list[int] | None = None,
-) -> list[dict[str, Any]]:
-    if not hits:
-        return []
-
-    target_ids = sorted({
-        int(hit["target_id"])
-        for hit in hits
-        if hit.get("target_id") is not None
-    })
-    authority_ids = sorted({
-        int(hit["target_authority_id"])
-        for hit in hits
-        if hit.get("target_authority_id") is not None
-    })
-    decision_meta = _fetch_decision_target_metadata(conn, target_ids)
-    authority_meta = _fetch_authority_target_metadata(conn, authority_ids)
-    return aggregate_source_target_hits_to_rankings(
-        hits,
-        decision_meta,
-        authority_meta,
-        doc_types=doc_types,
-        court_levels=court_levels,
-    )
 
 
 def _build_rankings_from_hit_iter(
