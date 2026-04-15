@@ -9,7 +9,7 @@ import { fetchCitations } from "../lib/api";
 //   keywords: string[] — 傳給 SnippetCard 做 highlight
 //   statutes: StatuteFilter[] — 傳給 citations API 篩選 matched
 //   excludeKeywords / excludeStatutes / caseTypes — cache miss 時重建第一階段 source 母體
-//   searchCacheKey: string | null — /search 回傳的 source_ids cache key
+//   searchCacheId: string | null — /search 回傳的後端 cache UUID
 export default function ResultCard({
   item,
   keywords,
@@ -18,7 +18,7 @@ export default function ResultCard({
   excludeStatutes,
   caseTypes,
   rank,
-  searchCacheKey,
+  searchCacheId,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [matched, setMatched] = useState(null); // null = 尚未載入
@@ -51,7 +51,7 @@ export default function ResultCard({
         excludeKeywords,
         excludeStatutes,
         caseTypes,
-        searchCacheKey,
+        searchCacheId,
         item.ranked_source_ids ?? [],
       );
       const matchedSources = resp.matched_sources ?? [];

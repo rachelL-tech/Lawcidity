@@ -62,21 +62,21 @@ export function rerank(req) {
 }
 
 // 把 citations 查詢需要的參數轉成 query string，給展開 citations preview 用
-function citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds) {
+function citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, rankedSourceIds) {
   const p = new URLSearchParams();
   if (keywords.length) p.set("keywords", keywords.join(",")); // keywords=a,b,c 
   if (statutes.length) p.set("statutes", JSON.stringify(statutes));
   if (excludeKeywords.length) p.set("exclude_keywords", excludeKeywords.join(","));
   if (excludeStatutes.length) p.set("exclude_statutes", JSON.stringify(excludeStatutes));
   if (caseTypes.length) p.set("case_types", caseTypes.join(","));
-  if (searchCacheKey) p.set("search_cache_key", searchCacheKey);
+  if (cacheId) p.set("search_cache_key", cacheId);
   if (rankedSourceIds?.length) p.set("ranked_source_ids", rankedSourceIds.join(","));
   return p.toString(); // URLSearchParams 是物件，要轉成字串才能放在 URL 後面
 }
 
 // 打 GET /api/v1/{targetType}/{targetId}/citations?...
-export function fetchCitations(targetType, targetId, keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds = []) {
-  const qs = citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, searchCacheKey, rankedSourceIds);
+export function fetchCitations(targetType, targetId, keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, rankedSourceIds = []) {
+  const qs = citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, rankedSourceIds);
   return get(`/${targetType}/${targetId}/citations?${qs}`);
 }
 

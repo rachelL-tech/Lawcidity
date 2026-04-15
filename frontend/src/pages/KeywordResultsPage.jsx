@@ -5,7 +5,7 @@ import Pagination from "../components/Pagination";
 import ResultCard from "../components/ResultCard";
 import TargetFilterBar from "../components/TargetFilterBar";
 import { search, rerank } from "../lib/api";
-import { paramsToSearchRequest, searchRequestToParams, searchParamsKey } from "../lib/url";
+import { paramsToSearchRequest, searchRequestToParams, buildSearchSignature } from "../lib/url";
 
 // 搜尋結果頁
 // URL 是 state 的唯一來源
@@ -21,25 +21,25 @@ export default function SearchResultsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // 快取後端 search source_ids cache key，供 citations 展開用
-  const searchCacheKeyRef = useRef(null);
-  // 記錄上次觸發 OpenSearch 的搜尋條件 key
-  const prevSearchKeyRef = useRef("");
+  // 目前頁面手上正在使用的後端 cache UUID，供 rerank / citations 重用
+  const activeCacheIdRef = useRef(null);
+  // 目前頁面已對齊的搜尋母體指紋，用來判斷是否需要重跑 full search
+  const handledSearchSignatureRef = useRef("");
 
   // 從 URL 還原目前的搜尋條件
   const req = paramsToSearchRequest(searchParams);
-  const currentSearchKey = searchParamsKey(searchParams);
-  const searchCacheStorageKey = currentSearchKey
-    ? `search-cache-key:${currentSearchKey}`
+  const searchSignature = buildSearchSignature(searchParams);
+  const sessionLookupKey = searchSignature
+    ? `search-cache-id:${searchSignature}`
     : null;
   const needsTargetRerank =
     req.doc_types.length > 0 ||
     req.court_levels.length > 0 ||
     req.sort !== "relevance";
 
-  function buildRerankRequest(searchCacheKey) {
+  function buildRerankRequest(cacheId) {
     return {
-      search_cache_key: searchCacheKey,
+      search_cache_key: cacheId,
       keywords: req.keywords,
       statutes: req.statutes,
       exclude_keywords: req.exclude_keywords,
@@ -55,16 +55,16 @@ export default function SearchResultsPage() {
 
   // URL 改變時決定要打全量搜尋還是 rerank
   useEffect(() => {
-    const persistedSearchCacheKey = searchCacheStorageKey
-      ? window.sessionStorage.getItem(searchCacheStorageKey)
+    const storedCacheId = sessionLookupKey
+      ? window.sessionStorage.getItem(sessionLookupKey)
       : null;
-    if (persistedSearchCacheKey) {
-      searchCacheKeyRef.current = persistedSearchCacheKey;
-      prevSearchKeyRef.current = currentSearchKey;
+    if (storedCacheId) {
+      activeCacheIdRef.current = storedCacheId;
+      handledSearchSignatureRef.current = searchSignature;
     }
 
     const needFullSearch =
-      currentSearchKey !== prevSearchKeyRef.current && !persistedSearchCacheKey;
+      searchSignature !== handledSearchSignatureRef.current && !storedCacheId;
 
     async function fetchResults() {
       setLoading(true);
@@ -73,21 +73,21 @@ export default function SearchResultsPage() {
         let data;
         if (needFullSearch) {
           const searchData = await search(req);
-          searchCacheKeyRef.current = searchData.search_cache_key ?? null;
-          prevSearchKeyRef.current = currentSearchKey;
+          activeCacheIdRef.current = searchData.search_cache_key ?? null;
+          handledSearchSignatureRef.current = searchSignature;
           data = needsTargetRerank
-            ? await rerank(buildRerankRequest(searchCacheKeyRef.current))
+            ? await rerank(buildRerankRequest(activeCacheIdRef.current))
             : searchData;
         } else {
-          data = await rerank(buildRerankRequest(searchCacheKeyRef.current));
+          data = await rerank(buildRerankRequest(activeCacheIdRef.current));
         }
-        searchCacheKeyRef.current = data.search_cache_key ?? searchCacheKeyRef.current;
-        prevSearchKeyRef.current = currentSearchKey;
-        if (searchCacheStorageKey) {
-          if (searchCacheKeyRef.current) {
-            window.sessionStorage.setItem(searchCacheStorageKey, searchCacheKeyRef.current);
+        activeCacheIdRef.current = data.search_cache_key ?? activeCacheIdRef.current;
+        handledSearchSignatureRef.current = searchSignature;
+        if (sessionLookupKey) {
+          if (activeCacheIdRef.current) {
+            window.sessionStorage.setItem(sessionLookupKey, activeCacheIdRef.current);
           } else {
-            window.sessionStorage.removeItem(searchCacheStorageKey);
+            window.sessionStorage.removeItem(sessionLookupKey);
           }
         }
         setResults(data.results);
@@ -206,7 +206,7 @@ export default function SearchResultsPage() {
                 excludeKeywords={req.exclude_keywords}
                 excludeStatutes={req.exclude_statutes}
                 caseTypes={req.case_types}
-                searchCacheKey={searchCacheKeyRef.current}
+                searchCacheId={activeCacheIdRef.current}
               />
             ))}
           </div>

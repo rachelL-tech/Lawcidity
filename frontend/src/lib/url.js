@@ -34,8 +34,8 @@ export function paramsToSearchRequest(params) {
   };
 }
 
-// 萃取「觸發 OpenSearch」的搜尋參數字串（用來偵測搜尋條件是否真正改變）
-export function searchParamsKey(params) {
+// 萃取「搜尋母體」的條件指紋；只要這組值不變，就可重用既有 source recall cache
+export function buildSearchSignature(params) {
   const keys = ["kw", "st", "xkw", "xst", "ct"];
   return keys.map((k) => params.get(k) || "").join("|");
 }
