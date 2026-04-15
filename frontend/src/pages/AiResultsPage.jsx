@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, Link, useParams } from "react-router-dom";
 import { analyzeGenerate, fetchDecision } from "../lib/api";
 
@@ -9,63 +9,96 @@ import { analyzeGenerate, fetchDecision } from "../lib/api";
  * 右側：Gemini 全文分析（含 citation tags）+ RAG 來源判決列表
  */
 const CACHE_KEY = "ai_results_cache";
+const EMPTY_LIST = [];
+const EMPTY_AI_RESULT = {
+  resolvedKey: null,
+  analysis: "",
+  ragResults: [],
+  error: null,
+};
 
 function getCacheKey(query, issues, statutes) {
   return JSON.stringify({ query, issues, statutes });
 }
 
+function readCachedAiResult(cacheKey) {
+  if (!cacheKey) return null;
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    return cached.key === cacheKey ? cached : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function AiResultsPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { query, issues, statutes } = location.state || {};
+  const query = location.state?.query;
+  const issues = location.state?.issues ?? EMPTY_LIST;
+  const statutes = location.state?.statutes ?? EMPTY_LIST;
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [analysis, setAnalysis] = useState("");
-  const [ragResults, setRagResults] = useState([]);
+  const requestKey = query ? getCacheKey(query, issues, statutes) : null;
+  const cachedResult = readCachedAiResult(requestKey);
+  const [requestState, setRequestState] = useState(EMPTY_AI_RESULT);
+  const hasActiveResult = requestState.resolvedKey === requestKey;
+  const activeResult = hasActiveResult ? requestState : EMPTY_AI_RESULT;
+  const loading = Boolean(query) && !cachedResult && !hasActiveResult;
+  const error = activeResult.error;
+  const analysis = hasActiveResult
+    ? activeResult.analysis
+    : (cachedResult?.analysis ?? "");
+  const ragResults = hasActiveResult
+    ? activeResult.ragResults
+    : (cachedResult?.rag_results ?? EMPTY_LIST);
 
   useEffect(() => {
-    if (!query) return;
+    if (!query || !requestKey || cachedResult || hasActiveResult) return;
 
-    // 先嘗試從 sessionStorage 讀 cache
-    const cacheKey = getCacheKey(query, issues, statutes);
-    try {
-      const raw = sessionStorage.getItem(CACHE_KEY);
-      if (raw) {
-        const cached = JSON.parse(raw);
-        if (cached.key === cacheKey) {
-          setAnalysis(cached.analysis);
-          setRagResults(cached.rag_results);
-          setLoading(false);
-          return;
-        }
-      }
-    } catch { /* cache miss */ }
+    let cancelled = false;
 
-    setLoading(true);
-    setError(null);
-
-    analyzeGenerate({
-      query,
-      issues: issues || [],
-      statutes: statutes || [],
-      top: 10,
-    })
-      .then((data) => {
-        setAnalysis(data.analysis);
-        setRagResults(data.rag_results);
+    async function loadAnalysis() {
+      try {
+        const data = await analyzeGenerate({
+          query,
+          issues,
+          statutes,
+          top: 10,
+        });
+        if (cancelled) return;
+        setRequestState({
+          resolvedKey: requestKey,
+          analysis: data.analysis,
+          ragResults: data.rag_results,
+          error: null,
+        });
         // 寫入 sessionStorage
         try {
           sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-            key: cacheKey,
+            key: requestKey,
             analysis: data.analysis,
             rag_results: data.rag_results,
           }));
         } catch { /* storage full, ignore */ }
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [query, issues, statutes]);
+      } catch (e) {
+        if (cancelled) return;
+        setRequestState({
+          resolvedKey: requestKey,
+          analysis: "",
+          ragResults: [],
+          error: e.message,
+        });
+      }
+    }
+
+    loadAnalysis();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cachedResult, hasActiveResult, issues, query, requestKey, statutes]);
 
   if (!query) {
     return (
@@ -239,11 +272,9 @@ function parseAnalysis(text) {
       );
     } else {
       // <statute>
-      const law = match[5];
-      const article = match[6];
       const label = match[7];
       result.push(
-        <StatuteTag key={`stat-${match.index}`} law={law} article={article}>
+        <StatuteTag key={`stat-${match.index}`}>
           {label}
         </StatuteTag>
       );
@@ -319,7 +350,6 @@ function CiteTag({ type, id, children }) {
 }
 
 function TargetCiteTag({ id, children }) {
-  const { lang = "en" } = useParams();
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState(null);
   const [fetching, setFetching] = useState(false);
@@ -392,7 +422,7 @@ function TargetCiteTag({ id, children }) {
 
 /* ── Statute Tag ── */
 
-function StatuteTag({ law, article, children }) {
+function StatuteTag({ children }) {
   return (
     <span className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded text-sm bg-highlight-statute text-green-800 border border-green-200 font-medium">
       {children}

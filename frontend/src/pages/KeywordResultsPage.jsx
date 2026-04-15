@@ -37,6 +37,19 @@ export default function SearchResultsPage() {
     req.court_levels.length > 0 ||
     req.sort !== "relevance";
 
+  function buildSearchRequest() {
+    return {
+      keywords: req.keywords,
+      statutes: req.statutes,
+      exclude_keywords: req.exclude_keywords,
+      exclude_statutes: req.exclude_statutes,
+      case_types: req.case_types,
+      sort: "relevance",
+      page: req.page,
+      page_size: req.page_size,
+    };
+  }
+
   function buildRerankRequest(cacheId) {
     return {
       search_cache_key: cacheId,
@@ -72,7 +85,7 @@ export default function SearchResultsPage() {
       try {
         let data;
         if (needFullSearch) {
-          const searchData = await search(req);
+          const searchData = await search(buildSearchRequest());
           activeCacheIdRef.current = searchData.search_cache_key ?? null;
           handledSearchSignatureRef.current = searchSignature;
           data = needsTargetRerank

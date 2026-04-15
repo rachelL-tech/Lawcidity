@@ -5,24 +5,55 @@ import { parseDecisionSections } from "../lib/decisionSections";
 import { highlightText } from "../lib/highlight";
 import DocTypeBadge from "../components/DocTypeBadge";
 
+const EMPTY_DECISION_STATE = {
+  resolvedDecisionId: null,
+  decision: null,
+  error: null,
+};
+
 export default function DecisionPage() {
   const { id } = useParams();
   const [urlParams] = useSearchParams();
   const keywords = urlParams.get("kw")?.split(",").filter(Boolean) || [];
   const anchor = (urlParams.get("anchor") || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
-  const [decision, setDecision] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [decisionState, setDecisionState] = useState(EMPTY_DECISION_STATE);
+  const currentDecisionState =
+    decisionState.resolvedDecisionId === id ? decisionState : EMPTY_DECISION_STATE;
+  const decision = currentDecisionState.decision;
+  const error = currentDecisionState.error;
+  const loading = Boolean(id) && currentDecisionState.resolvedDecisionId !== id;
 
   useEffect(() => {
-    if (!id) return;
-    setLoading(true);
-    fetchDecision(Number(id))
-      .then(setDecision)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [id]);
+    if (!id || decisionState.resolvedDecisionId === id) return;
+
+    let cancelled = false;
+
+    async function loadDecision() {
+      try {
+        const data = await fetchDecision(Number(id));
+        if (cancelled) return;
+        setDecisionState({
+          resolvedDecisionId: id,
+          decision: data,
+          error: null,
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setDecisionState({
+          resolvedDecisionId: id,
+          decision: null,
+          error: e.message,
+        });
+      }
+    }
+
+    loadDecision();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [decisionState.resolvedDecisionId, id]);
 
   if (loading) return <div className="p-8 text-center text-gray-400">載入中…</div>;
   if (error) return <div className="p-8 text-center text-red-500">錯誤：{error}</div>;

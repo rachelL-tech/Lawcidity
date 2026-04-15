@@ -32,33 +32,12 @@ async function get(path) {
 
 // 打搜尋 API，req 是搜尋條件物件
 export function search(req) {
-  return post("/search", {
-    keywords: req.keywords,
-    statutes: req.statutes,
-    exclude_keywords: req.exclude_keywords,
-    exclude_statutes: req.exclude_statutes,
-    case_types: req.case_types,
-    sort: "relevance",
-    page: req.page,
-    page_size: req.page_size,
-  });
+  return post("/search", req);
 }
 
 // 只重跑 target ranking（不重打第一階段 source 召回）
 export function rerank(req) {
-  return post("/search/rerank", {
-    search_cache_key: req.search_cache_key,
-    keywords: req.keywords,
-    statutes: req.statutes,
-    exclude_keywords: req.exclude_keywords,
-    exclude_statutes: req.exclude_statutes,
-    case_types: req.case_types,
-    doc_types: req.doc_types,
-    court_levels: req.court_levels,
-    sort: req.sort,
-    page: req.page,
-    page_size: req.page_size,
-  });
+  return post("/search/rerank", req);
 }
 
 // 把 citations 查詢需要的參數轉成 query string，給展開 citations preview 用
