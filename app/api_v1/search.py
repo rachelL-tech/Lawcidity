@@ -46,35 +46,6 @@ from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
 router = APIRouter()
 
-
-def _fmt_case_ref(display_title):
-    return display_title or ""
-
-
-def _to_statute_filter_objs(statute_filters: list[tuple]) -> list[StatuteFilter]:
-    return [
-        StatuteFilter(law=law, article=article, sub_ref=sub_ref)
-        for law, article, sub_ref in statute_filters
-    ]
-
-
-def _sort_rankings(rankings: list[dict], sort: str) -> list[dict]:
-    if sort == "total_citation_count":
-        rankings.sort(
-            key=lambda row: (
-                -(row.get("total_citation_count") or 0),
-                -(row.get("score") or 0),
-                row.get("court_level") if row.get("court_level") is not None else 99,
-            )
-        )
-    return rankings
-
-
-def _build_ranking_cache(rankings: list[dict]) -> tuple[list[dict], dict[str, list[int]]]:
-    rows = list(rankings)
-    return rows, {}
-
-
 def _ensure_ordered_indexes(
     rows: list[dict],
     ordered_indexes: dict[str, list[int]],
@@ -152,8 +123,8 @@ def search(req: SearchRequest):
             exclude_terms,
             exclude_statute_filters,
         )
-    all_rankings = _sort_rankings(all_rankings, req.sort)
-    rows, ordered_indexes = _build_ranking_cache(all_rankings)
+    rows = list(all_rankings)
+    ordered_indexes: dict[str, list[int]] = {}
     search_cache_key = put_search_source_ids(
         source_ids,
         rows=rows,
@@ -173,7 +144,7 @@ def search(req: SearchRequest):
             jyear=row.get("jyear"),
             jcase_norm=row.get("jcase_norm"),
             jno=row.get("jno"),
-            case_ref=_fmt_case_ref(row.get("display_title")),
+            case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
             ranked_source_ids=[int(source_id) for source_id in (row.get("ranked_source_ids") or [])],
@@ -190,9 +161,15 @@ def search(req: SearchRequest):
         results=results,
         search_context=SearchContext(
             keywords=query_terms,
-            statutes=_to_statute_filter_objs(statute_filters),
+            statutes=[
+                StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                for law, article, sub_ref in statute_filters
+            ],
             exclude_keywords=exclude_terms,
-            exclude_statutes=_to_statute_filter_objs(exclude_statute_filters),
+            exclude_statutes=[
+                StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                for law, article, sub_ref in exclude_statute_filters
+            ],
         ),
     )
 
@@ -336,11 +313,10 @@ def rerank(req: RerankRequest):
                 exclude_terms,
                 exclude_statute_filters,
             )
-        all_rankings = _sort_rankings(all_rankings, "relevance")
-        rows, ordered_indexes = _build_ranking_cache(all_rankings)
-        if source_ids_from_cache and req.search_cache_key:
+        rows = list(all_rankings)
+        ordered_indexes = {}
+        if source_ids_from_cache:
             put_search_rankings(req.search_cache_key, rows, ordered_indexes)
-            search_cache_key = req.search_cache_key
         else:
             search_cache_key = put_search_source_ids(
                 source_ids,
