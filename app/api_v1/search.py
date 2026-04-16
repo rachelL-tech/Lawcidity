@@ -11,13 +11,15 @@
 
 不包含 citation 明細，前端展開 target 時另打 citations.py 的 endpoint。
 """
+from dataclasses import dataclass
+
 from fastapi import APIRouter, HTTPException
 from app.db import get_conn
 from app.search_cache import (
-    get_search_rankings,
-    get_search_source_ids,
-    put_search_rankings,
-    put_search_source_ids,
+    create_search_cache,
+    get_cached_rankings,
+    get_cached_source_ids,
+    update_cached_rankings,
 )
 from app.opensearch_service import (
     dedupe_query_terms,
@@ -45,6 +47,15 @@ from app.rag_service import rag_search
 from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
 router = APIRouter()
+
+
+@dataclass
+class _NormalizedSearchInput:
+    query_terms: list[str]
+    statute_filters: list[tuple[str, str | None, str | None]]
+    exclude_terms: list[str]
+    exclude_statute_filters: list[tuple[str, str | None, str | None]]
+    case_types: list[str]
 
 def _ensure_ordered_indexes(
     rows: list[dict],
@@ -85,29 +96,42 @@ def _filter_rankings(
     return filtered
 
 
+def _normalize_search_request(
+    req: SearchRequest | RerankRequest,
+) -> _NormalizedSearchInput:
+    query_terms = dedupe_query_terms(req.keywords)
+    statute_filters = dedupe_statute_filters([
+        (s.law, s.article, s.sub_ref) for s in req.statutes
+    ])
+    exclude_terms = dedupe_query_terms(req.exclude_keywords)
+    exclude_statute_filters = dedupe_statute_filters([
+        (s.law, s.article, s.sub_ref) for s in req.exclude_statutes
+    ])
+    case_types = parse_case_types(",".join(req.case_types)) if req.case_types else []
+    return _NormalizedSearchInput(
+        query_terms=query_terms,
+        statute_filters=statute_filters,
+        exclude_terms=exclude_terms,
+        exclude_statute_filters=exclude_statute_filters,
+        case_types=case_types,
+    )
+
+
 @router.post("/search", response_model=SearchResponse)
 def search(req: SearchRequest):
     try:
-        query_terms = dedupe_query_terms(req.keywords)
-        statute_filters = dedupe_statute_filters([
-            (s.law, s.article, s.sub_ref) for s in req.statutes
-        ])
-        exclude_terms = dedupe_query_terms(req.exclude_keywords)
-        exclude_statute_filters = dedupe_statute_filters([
-            (s.law, s.article, s.sub_ref) for s in req.exclude_statutes
-        ])
-        case_types = parse_case_types(",".join(req.case_types)) if req.case_types else []
+        normalized = _normalize_search_request(req)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     with get_conn() as conn:
         try:
             source_ids = search_source_ids_opensearch(
-                query_terms=query_terms,
-                case_types=case_types,
-                statute_filters=statute_filters,
-                exclude_terms=exclude_terms,
-                exclude_statute_filters=exclude_statute_filters,
+                query_terms=normalized.query_terms,
+                case_types=normalized.case_types,
+                statute_filters=normalized.statute_filters,
+                exclude_terms=normalized.exclude_terms,
+                exclude_statute_filters=normalized.exclude_statute_filters,
                 source_limit=None,
             )
         except RuntimeError as e:
@@ -118,14 +142,14 @@ def search(req: SearchRequest):
         all_rankings = fetch_target_rankings_by_relevance(
             conn,
             source_ids,
-            query_terms,
-            statute_filters,
-            exclude_terms,
-            exclude_statute_filters,
+            normalized.query_terms,
+            normalized.statute_filters,
+            normalized.exclude_terms,
+            normalized.exclude_statute_filters,
         )
     rows = list(all_rankings)
     ordered_indexes: dict[str, list[int]] = {}
-    search_cache_key = put_search_source_ids(
+    search_cache_key = create_search_cache(
         source_ids,
         rows=rows,
         ordered_indexes=ordered_indexes,
@@ -160,15 +184,15 @@ def search(req: SearchRequest):
         search_cache_key=search_cache_key,
         results=results,
         search_context=SearchContext(
-            keywords=query_terms,
+            keywords=normalized.query_terms,
             statutes=[
                 StatuteFilter(law=law, article=article, sub_ref=sub_ref)
-                for law, article, sub_ref in statute_filters
+                for law, article, sub_ref in normalized.statute_filters
             ],
-            exclude_keywords=exclude_terms,
+            exclude_keywords=normalized.exclude_terms,
             exclude_statutes=[
                 StatuteFilter(law=law, article=article, sub_ref=sub_ref)
-                for law, article, sub_ref in exclude_statute_filters
+                for law, article, sub_ref in normalized.exclude_statute_filters
             ],
         ),
     )
@@ -259,28 +283,23 @@ def analyze_generate(req: GenerateRequest):
 @router.post("/search/rerank", response_model=SearchResponse)
 def rerank(req: RerankRequest):
     """使用 search_cache_key 重跑 target ranking；cache miss 時重打第一階段 OpenSearch 召回。"""
-    query_terms = dedupe_query_terms(req.keywords)
-    statute_filters = dedupe_statute_filters([
-        (s.law, s.article, s.sub_ref) for s in req.statutes
-    ])
-    exclude_terms = dedupe_query_terms(req.exclude_keywords)
-    exclude_statute_filters = dedupe_statute_filters([
-        (s.law, s.article, s.sub_ref) for s in req.exclude_statutes
-    ])
-    case_types = parse_case_types(",".join(req.case_types)) if req.case_types else []
-    source_ids = get_search_source_ids(req.search_cache_key)
+    try:
+        normalized = _normalize_search_request(req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    source_ids = get_cached_source_ids(req.search_cache_key)
     source_ids_from_cache = source_ids is not None
-    cached_rankings = get_search_rankings(req.search_cache_key)
+    cached_rankings = get_cached_rankings(req.search_cache_key)
     search_cache_key = req.search_cache_key
 
     if source_ids is None:
         try:
             source_ids = search_source_ids_opensearch(
-                query_terms=query_terms,
-                case_types=case_types,
-                statute_filters=statute_filters,
-                exclude_terms=exclude_terms,
-                exclude_statute_filters=exclude_statute_filters,
+                query_terms=normalized.query_terms,
+                case_types=normalized.case_types,
+                statute_filters=normalized.statute_filters,
+                exclude_terms=normalized.exclude_terms,
+                exclude_statute_filters=normalized.exclude_statute_filters,
                 source_limit=None,
             )
         except RuntimeError as e:
@@ -296,9 +315,9 @@ def rerank(req: RerankRequest):
             source_count=0,
             search_cache_key=search_cache_key,
             results=[], search_context=SearchContext(
-                keywords=query_terms,
+                keywords=normalized.query_terms,
                 statutes=[StatuteFilter(law=s.law, article=s.article, sub_ref=s.sub_ref) for s in req.statutes],
-                exclude_keywords=exclude_terms,
+                exclude_keywords=normalized.exclude_terms,
                 exclude_statutes=[StatuteFilter(law=s.law, article=s.article, sub_ref=s.sub_ref) for s in req.exclude_statutes],
             ),
         )
@@ -308,17 +327,17 @@ def rerank(req: RerankRequest):
             all_rankings = fetch_target_rankings_by_relevance(
                 conn,
                 source_ids,
-                query_terms,
-                statute_filters,
-                exclude_terms,
-                exclude_statute_filters,
+                normalized.query_terms,
+                normalized.statute_filters,
+                normalized.exclude_terms,
+                normalized.exclude_statute_filters,
             )
         rows = list(all_rankings)
         ordered_indexes = {}
         if source_ids_from_cache:
-            put_search_rankings(req.search_cache_key, rows, ordered_indexes)
+            update_cached_rankings(req.search_cache_key, rows, ordered_indexes)
         else:
-            search_cache_key = put_search_source_ids(
+            search_cache_key = create_search_cache(
                 source_ids,
                 rows=rows,
                 ordered_indexes=ordered_indexes,
@@ -329,7 +348,7 @@ def rerank(req: RerankRequest):
 
     sort_indexes, indexes_updated = _ensure_ordered_indexes(rows, ordered_indexes, req.sort)
     if indexes_updated and req.sort != "relevance":
-        put_search_rankings(search_cache_key, rows, ordered_indexes)
+        update_cached_rankings(search_cache_key, rows, ordered_indexes)
 
     filtered_indexes = _filter_rankings(
         rows,
@@ -351,7 +370,7 @@ def rerank(req: RerankRequest):
             jyear=row.get("jyear"),
             jcase_norm=row.get("jcase_norm"),
             jno=row.get("jno"),
-            case_ref=_fmt_case_ref(row.get("display_title")),
+            case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
             ranked_source_ids=[int(source_id) for source_id in (row.get("ranked_source_ids") or [])],
@@ -367,9 +386,15 @@ def rerank(req: RerankRequest):
         search_cache_key=search_cache_key,
         results=results,
         search_context=SearchContext(
-            keywords=query_terms,
-            statutes=_to_statute_filter_objs(statute_filters),
-            exclude_keywords=exclude_terms,
-            exclude_statutes=_to_statute_filter_objs(exclude_statute_filters),
+            keywords=normalized.query_terms,
+            statutes=[
+                StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                for law, article, sub_ref in normalized.statute_filters
+            ],
+            exclude_keywords=normalized.exclude_terms,
+            exclude_statutes=[
+                StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                for law, article, sub_ref in normalized.exclude_statute_filters
+            ],
         ),
     )

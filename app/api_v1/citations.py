@@ -12,7 +12,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg.rows import dict_row
 from app.db import get_conn
-from app.search_cache import get_search_source_ids
+from app.search_cache import get_cached_source_ids
 from app.opensearch_service import (
     dedupe_query_terms,
     dedupe_statute_filters,
@@ -59,7 +59,7 @@ def _resolve_source_ids_for_citations(
     case_types: list[str],
     search_cache_key: str | None,
 ) -> list[int]:
-    cached_source_ids = get_search_source_ids(search_cache_key)
+    cached_source_ids = get_cached_source_ids(search_cache_key)
     if cached_source_ids:
         return cached_source_ids
 

@@ -22,7 +22,7 @@ _MAX_ENTRIES = 20
 
 
 @dataclass
-class _SearchSourceEntry:
+class _SearchCacheEntry:
     expires_at: float
     source_ids: list[int]
     rows: list[dict[str, Any]] | None = None
@@ -30,7 +30,7 @@ class _SearchSourceEntry:
 
 
 _LOCK = threading.Lock()
-_CACHE: OrderedDict[str, _SearchSourceEntry] = OrderedDict()
+_CACHE: OrderedDict[str, _SearchCacheEntry] = OrderedDict()
 
 
 def _copy_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
@@ -68,7 +68,7 @@ def _evict_lru_if_needed() -> None:
         _CACHE.popitem(last=False)
 
 
-def put_search_source_ids(
+def create_search_cache(
     source_ids: list[int],
     rows: list[dict[str, Any]] | None = None,
     ordered_indexes: dict[str, list[int]] | None = None,
@@ -77,7 +77,7 @@ def put_search_source_ids(
     cache_key = uuid.uuid4().hex
     with _LOCK:
         _prune_expired(now)
-        _CACHE[cache_key] = _SearchSourceEntry(
+        _CACHE[cache_key] = _SearchCacheEntry(
             expires_at=now + _TTL_SECONDS,
             source_ids=list(source_ids),
             rows=_copy_rows(rows),
@@ -88,7 +88,7 @@ def put_search_source_ids(
     return cache_key
 
 
-def get_search_source_ids(cache_key: str | None) -> list[int] | None:
+def get_cached_source_ids(cache_key: str | None) -> list[int] | None:
     if not cache_key:
         return None
 
@@ -102,7 +102,7 @@ def get_search_source_ids(cache_key: str | None) -> list[int] | None:
         return list(entry.source_ids)
 
 
-def get_search_rankings(cache_key: str | None) -> dict[str, Any] | None:
+def get_cached_rankings(cache_key: str | None) -> dict[str, Any] | None:
     if not cache_key:
         return None
 
@@ -121,7 +121,7 @@ def get_search_rankings(cache_key: str | None) -> dict[str, Any] | None:
         }
 
 
-def put_search_rankings(
+def update_cached_rankings(
     cache_key: str | None,
     rows: list[dict[str, Any]],
     ordered_indexes: dict[str, list[int]],
