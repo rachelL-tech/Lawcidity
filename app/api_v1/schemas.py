@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Literal
 
 
@@ -62,7 +62,6 @@ class SearchResponse(BaseModel):
     results: list[SearchResultItem]
     search_context: SearchContext
 
-
 class RerankRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -83,7 +82,6 @@ class RerankRequest(BaseModel):
         if not any(keyword.strip() for keyword in self.keywords):
             raise ValueError("keywords 至少填一個")
         return self
-
 
 # ── GET /decisions/{id}/citations ──────────────────────────────────────────────
 
@@ -106,6 +104,32 @@ class CitationTargetInfo(BaseModel):
     court: str              # root_norm
     case_ref: str           # 案號 or authority display
     doc_type: str | None
+
+
+class CitationQueryParams(BaseModel):
+    keywords: str | None = Field(None, description="逗號分隔")
+    statutes: str | None = Field(None, description="JSON array string")
+    exclude_keywords: str | None = Field(None, description="逗號分隔")
+    exclude_statutes: str | None = Field(None, description="JSON array string")
+    case_types: str | None = Field(None, description="逗號分隔")
+    search_cache_key: str | None = Field(
+        None,
+        description="由 /search 回傳；對應此次搜尋的 source_ids 快取 key",
+    )
+    ranked_source_ids: str | None = Field(
+        None,
+        description="逗號分隔；/search 回傳的 preview source ids",
+    )
+
+
+class ParsedCitationQuery(BaseModel):
+    query_terms: list[str]
+    statute_list: list[tuple[str, str | None, str | None]]
+    exclude_terms: list[str]
+    exclude_statute_list: list[tuple[str, str | None, str | None]]
+    case_types: list[str]
+    search_cache_key: str | None = None
+    ranked_source_ids: list[int] | None = None
 
 
 class CitationsResponse(BaseModel):

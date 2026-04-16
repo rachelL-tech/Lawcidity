@@ -7,7 +7,9 @@
 - 使用 PostgreSQL 組裝 matched / others 展開資料。
 """
 
-from fastapi import APIRouter, HTTPException, Query
+import json
+
+from fastapi import APIRouter, Depends, HTTPException
 from psycopg.rows import dict_row
 from app.db import get_conn
 from app.search_cache import get_search_source_ids
@@ -19,7 +21,9 @@ from app.opensearch_service import (
     search_source_ids_opensearch,
 )
 from app.api_v1.schemas import (
+    CitationQueryParams,
     CitationsResponse,
+    ParsedCitationQuery,
     CitationTargetInfo,
     CitationSource,
 )
@@ -72,29 +76,6 @@ def _resolve_source_ids_for_citations(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{exc}") from exc
-
-
-def _parse_ranked_source_ids(raw: str | None) -> list[int] | None:
-    if raw is None or not isinstance(raw, str) or not raw:
-        return None
-
-    ranked_source_ids: list[int] = []
-    seen: set[int] = set()
-    for part in raw.split(","):
-        value = part.strip()
-        if not value:
-            continue
-        try:
-            source_id = int(value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="ranked_source_ids 格式錯誤") from exc
-        if source_id in seen:
-            continue
-        seen.add(source_id)
-        ranked_source_ids.append(source_id)
-        if len(ranked_source_ids) >= CITATIONS_PREVIEW_LIMIT:
-            break
-    return ranked_source_ids or None
 
 
 # ── Citation 查詢 ─────────────────────────────────────────────────────
@@ -329,49 +310,67 @@ def _citation_rows(
 
 # ── 共用回應組裝 ──────────────────────────────────────────────────────
 
-def _parse_citation_params(keywords, statutes):
-    """解析 citations endpoint 的 keywords/statutes query params。"""
-    import json as _json
-
+def _parse_citation_query(params: CitationQueryParams) -> ParsedCitationQuery:
     query_terms = dedupe_query_terms(
-        keywords.split(",") if keywords else []
+        params.keywords.split(",") if params.keywords else []
     )
     try:
-        statute_list: list[tuple] = []
-        if statutes:
-            parsed = _json.loads(statutes)
+        statute_list: list[tuple[str, str | None, str | None]] = []
+        if params.statutes:
+            parsed = json.loads(params.statutes)
             statute_list = dedupe_statute_filters([
                 (s.get("law", ""), s.get("article"), s.get("sub_ref"))
                 for s in parsed
             ])
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"statutes 格式錯誤：{e}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"statutes 格式錯誤：{exc}") from exc
 
     if not query_terms and not statute_list:
         raise HTTPException(status_code=400, detail="keywords 和 statutes 至少填一個")
 
-    return query_terms, statute_list
-
-
-def _parse_exclude_and_case_type_params(exclude_keywords, exclude_statutes, case_types):
-    import json as _json
-
     exclude_terms = dedupe_query_terms(
-        exclude_keywords.split(",") if exclude_keywords else []
+        params.exclude_keywords.split(",") if params.exclude_keywords else []
     )
     try:
-        exclude_statute_list: list[tuple] = []
-        if exclude_statutes:
-            parsed = _json.loads(exclude_statutes)
+        exclude_statute_list: list[tuple[str, str | None, str | None]] = []
+        if params.exclude_statutes:
+            parsed = json.loads(params.exclude_statutes)
             exclude_statute_list = dedupe_statute_filters([
                 (s.get("law", ""), s.get("article"), s.get("sub_ref"))
                 for s in parsed
             ])
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"exclude_statutes 格式錯誤：{e}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"exclude_statutes 格式錯誤：{exc}") from exc
 
-    parsed_case_types = parse_case_types(case_types) if case_types else []
-    return exclude_terms, exclude_statute_list, parsed_case_types
+    ranked_source_ids: list[int] | None = None
+    if params.ranked_source_ids:
+        ranked_source_ids = []
+        seen: set[int] = set()
+        for part in params.ranked_source_ids.split(","):
+            value = part.strip()
+            if not value:
+                continue
+            try:
+                source_id = int(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="ranked_source_ids 格式錯誤") from exc
+            if source_id in seen:
+                continue
+            seen.add(source_id)
+            ranked_source_ids.append(source_id)
+            if len(ranked_source_ids) >= CITATIONS_PREVIEW_LIMIT:
+                break
+        ranked_source_ids = ranked_source_ids or None
+
+    return ParsedCitationQuery(
+        query_terms=query_terms,
+        statute_list=statute_list,
+        exclude_terms=exclude_terms,
+        exclude_statute_list=exclude_statute_list,
+        case_types=parse_case_types(params.case_types) if params.case_types else [],
+        search_cache_key=params.search_cache_key,
+        ranked_source_ids=ranked_source_ids,
+    )
 
 
 def _build_citations_response(
@@ -447,45 +446,35 @@ def _get_authority_target(conn, authority_id: int) -> CitationTargetInfo:
 @router.get("/decisions/{target_id}/citations", response_model=CitationsResponse)
 def get_decision_citations_matched(
     target_id: int,
-    keywords: str | None = Query(None, description="逗號分隔"),
-    statutes: str | None = Query(None, description="JSON array string"),
-    exclude_keywords: str | None = Query(None, description="逗號分隔"),
-    exclude_statutes: str | None = Query(None, description="JSON array string"),
-    case_types: str | None = Query(None, description="逗號分隔"),
-    search_cache_key: str | None = Query(None, description="由 /search 回傳；對應此次搜尋的 source_ids 快取 key"),
-    ranked_source_ids: str | None = Query(None, description="逗號分隔；/search 回傳的 preview source ids"),
+    params: CitationQueryParams = Depends(),
 ):
-    query_terms, statute_list = _parse_citation_params(keywords, statutes)
-    exclude_terms, exclude_statute_list, parsed_case_types = _parse_exclude_and_case_type_params(
-        exclude_keywords, exclude_statutes, case_types
-    )
-    parsed_ranked_source_ids = _parse_ranked_source_ids(ranked_source_ids)
+    parsed = _parse_citation_query(params)
     with get_conn() as conn:
         target_info = _get_decision_target(conn, target_id)
         resolved_source_ids = _resolve_source_ids_for_citations(
-            query_terms,
-            statute_list,
-            exclude_terms,
-            exclude_statute_list,
-            parsed_case_types,
-            search_cache_key,
+            parsed.query_terms,
+            parsed.statute_list,
+            parsed.exclude_terms,
+            parsed.exclude_statute_list,
+            parsed.case_types,
+            parsed.search_cache_key,
         )
         matched_rows, matched_total, others_total = _citation_rows(
             conn,
             "c.target_canonical_id",
             target_id,
-            query_terms,
-            statute_list,
+            parsed.query_terms,
+            parsed.statute_list,
             resolved_source_ids,
             True,
-            ranked_source_ids=parsed_ranked_source_ids,
+            ranked_source_ids=parsed.ranked_source_ids,
         )
         others_rows, _matched_total, _others_total = _citation_rows(
             conn,
             "c.target_canonical_id",
             target_id,
-            query_terms,
-            statute_list,
+            parsed.query_terms,
+            parsed.statute_list,
             resolved_source_ids,
             False,
             shared_counts=(matched_total + others_total, matched_total),
@@ -503,45 +492,35 @@ def get_decision_citations_matched(
 @router.get("/authorities/{authority_id}/citations", response_model=CitationsResponse)
 def get_authority_citations_matched(
     authority_id: int,
-    keywords: str | None = Query(None, description="逗號分隔"),
-    statutes: str | None = Query(None, description="JSON array string"),
-    exclude_keywords: str | None = Query(None, description="逗號分隔"),
-    exclude_statutes: str | None = Query(None, description="JSON array string"),
-    case_types: str | None = Query(None, description="逗號分隔"),
-    search_cache_key: str | None = Query(None, description="由 /search 回傳；對應此次搜尋的 source_ids 快取 key"),
-    ranked_source_ids: str | None = Query(None, description="逗號分隔；/search 回傳的 preview source ids"),
+    params: CitationQueryParams = Depends(),
 ):
-    query_terms, statute_list = _parse_citation_params(keywords, statutes)
-    exclude_terms, exclude_statute_list, parsed_case_types = _parse_exclude_and_case_type_params(
-        exclude_keywords, exclude_statutes, case_types
-    )
-    parsed_ranked_source_ids = _parse_ranked_source_ids(ranked_source_ids)
+    parsed = _parse_citation_query(params)
     with get_conn() as conn:
         target_info = _get_authority_target(conn, authority_id)
         resolved_source_ids = _resolve_source_ids_for_citations(
-            query_terms,
-            statute_list,
-            exclude_terms,
-            exclude_statute_list,
-            parsed_case_types,
-            search_cache_key,
+            parsed.query_terms,
+            parsed.statute_list,
+            parsed.exclude_terms,
+            parsed.exclude_statute_list,
+            parsed.case_types,
+            parsed.search_cache_key,
         )
         matched_rows, matched_total, others_total = _citation_rows(
             conn,
             "c.target_authority_id",
             authority_id,
-            query_terms,
-            statute_list,
+            parsed.query_terms,
+            parsed.statute_list,
             resolved_source_ids,
             True,
-            ranked_source_ids=parsed_ranked_source_ids,
+            ranked_source_ids=parsed.ranked_source_ids,
         )
         others_rows, _matched_total, _others_total = _citation_rows(
             conn,
             "c.target_authority_id",
             authority_id,
-            query_terms,
-            statute_list,
+            parsed.query_terms,
+            parsed.statute_list,
             resolved_source_ids,
             False,
             shared_counts=(matched_total + others_total, matched_total),
