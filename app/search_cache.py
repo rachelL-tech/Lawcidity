@@ -40,8 +40,8 @@ def _copy_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None
     copied_rows: list[dict[str, Any]] = []
     for row in rows:
         copied = dict(row)
-        if "ranked_source_ids" in copied and copied["ranked_source_ids"] is not None:
-            copied["ranked_source_ids"] = list(copied["ranked_source_ids"])
+        if "preview_source_ids" in copied and copied["preview_source_ids"] is not None:
+            copied["preview_source_ids"] = list(copied["preview_source_ids"])
         copied_rows.append(copied)
     return copied_rows
 

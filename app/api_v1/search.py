@@ -21,11 +21,13 @@ from app.search_cache import (
     get_cached_source_ids,
     update_cached_rankings,
 )
-from app.opensearch_service import (
+from app.target_ranking import fetch_target_rankings_by_relevance
+from app.query_normalization import (
     dedupe_query_terms,
     dedupe_statute_filters,
-    fetch_target_rankings_by_relevance,
     parse_case_types,
+)
+from app.opensearch_service import (
     search_source_ids_opensearch,
 )
 from app.api_v1.schemas import (
@@ -154,10 +156,8 @@ def search(req: SearchRequest):
         rows=rows,
         ordered_indexes=ordered_indexes,
     )
-    total = len(rows)
     start = (req.page - 1) * req.page_size
-    page_indexes = list(range(len(rows)))[start:start + req.page_size]
-    page_rankings = [rows[idx] for idx in page_indexes]
+    page_rankings = rows[start:start + req.page_size]
 
     results = [
         SearchResultItem(
@@ -171,13 +171,13 @@ def search(req: SearchRequest):
             case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
-            ranked_source_ids=[int(source_id) for source_id in (row.get("ranked_source_ids") or [])],
+            preview_source_ids=[int(source_id) for source_id in (row.get("preview_source_ids") or [])],
         )
         for row in page_rankings
     ]
 
     return SearchResponse(
-        total=total,
+        total=len(rows),
         page=req.page,
         page_size=req.page_size,
         source_count=len(source_ids),
@@ -314,11 +314,18 @@ def rerank(req: RerankRequest):
             total=0, page=req.page, page_size=req.page_size,
             source_count=0,
             search_cache_key=search_cache_key,
-            results=[], search_context=SearchContext(
+            results=[], 
+            search_context=SearchContext(
                 keywords=normalized.query_terms,
-                statutes=[StatuteFilter(law=s.law, article=s.article, sub_ref=s.sub_ref) for s in req.statutes],
+                statutes=[
+                    StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                    for law, article, sub_ref in normalized.statute_filters
+                ],
                 exclude_keywords=normalized.exclude_terms,
-                exclude_statutes=[StatuteFilter(law=s.law, article=s.article, sub_ref=s.sub_ref) for s in req.exclude_statutes],
+                exclude_statutes=[
+                    StatuteFilter(law=law, article=article, sub_ref=sub_ref)
+                    for law, article, sub_ref in normalized.exclude_statute_filters
+                ],
             ),
         )
 
@@ -358,8 +365,7 @@ def rerank(req: RerankRequest):
     )
     total = len(filtered_indexes)
     start = (req.page - 1) * req.page_size
-    page_indexes = filtered_indexes[start:start + req.page_size]
-    page_rankings = [rows[idx] for idx in page_indexes]
+    page_rankings = [rows[idx] for idx in filtered_indexes[start:start + req.page_size]]
 
     results = [
         SearchResultItem(
@@ -373,7 +379,7 @@ def rerank(req: RerankRequest):
             case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
-            ranked_source_ids=[int(source_id) for source_id in (row.get("ranked_source_ids") or [])],
+            preview_source_ids=[int(source_id) for source_id in (row.get("preview_source_ids") or [])],
         )
         for row in page_rankings
     ]

@@ -43,7 +43,7 @@ class SearchResultItem(BaseModel):
     case_ref: str
     doc_type: str | None
     total_citation_count: int # 不受搜尋條件限制，歷史上引用此 target 的 distinct source 數
-    ranked_source_ids: list[int] = []
+    preview_source_ids: list[int] = []
 
 
 class SearchContext(BaseModel):
@@ -98,14 +98,6 @@ class CitationSource(BaseModel):
     statutes: list[dict]
 
 
-class CitationTargetInfo(BaseModel):
-    id: int
-    target_type: str        # "decision" | "authority"
-    court: str              # root_norm
-    case_ref: str           # 案號 or authority display
-    doc_type: str | None
-
-
 class CitationQueryParams(BaseModel):
     keywords: str | None = Field(None, description="逗號分隔")
     statutes: str | None = Field(None, description="JSON array string")
@@ -116,7 +108,7 @@ class CitationQueryParams(BaseModel):
         None,
         description="由 /search 回傳；對應此次搜尋的 source_ids 快取 key",
     )
-    ranked_source_ids: str | None = Field(
+    preview_source_ids: str | None = Field(
         None,
         description="逗號分隔；/search 回傳的 preview source ids",
     )
@@ -129,11 +121,10 @@ class ParsedCitationQuery(BaseModel):
     exclude_statute_list: list[tuple[str, str | None, str | None]]
     case_types: list[str]
     search_cache_key: str | None = None
-    ranked_source_ids: list[int] | None = None
+    preview_source_ids: list[int] | None = None
 
 
 class CitationsResponse(BaseModel):
-    target: CitationTargetInfo
     matched_total: int
     others_total: int
     matched_sources: list[CitationSource] | None = None
