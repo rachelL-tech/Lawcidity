@@ -5,7 +5,7 @@
   },
   "hero": {
     "eyebrow": "Legal Search Project",
-    "headline": "I built Lawcidity, a legal search project using Taiwanese court decisions.",
+    "headline": "Lawcidity, a legal search project using Taiwanese court decisions.",
     "subheadline": "Built on real court decisions, with separate paths for keyword search and AI-assisted (RAG) retrieval.",
     "cta_demo": "Try Demo",
     "cta_github": "View on GitHub"
@@ -16,7 +16,7 @@
     "scale": "1.4M decisions, 15GB across PostgreSQL and OpenSearch"
   },
   "what_built": {
-    "heading": "What I Built",
+    "heading": "Features",
     "intro": "See each feature in action — keyword search, and AI (RAG) search."
   },
   "final_cta": {

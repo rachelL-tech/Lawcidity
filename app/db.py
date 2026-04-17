@@ -1,11 +1,7 @@
 import os
-from pathlib import Path
 
 import psycopg
-from dotenv import load_dotenv
 from psycopg.rows import dict_row
-
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 def get_database_url() -> str:
