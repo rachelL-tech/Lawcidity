@@ -76,6 +76,7 @@ def build_opensearch_query(
         {"match_phrase": {"clean_text": term}}
         for term in query_terms
     ]
+
     filters: list[dict[str, Any]] = []
     if case_types:
         filters.append({"terms": {"case_type": case_types}})
@@ -93,9 +94,14 @@ def build_opensearch_query(
             _build_opensearch_statute_nested_query(law, article, sub_ref)
         )
 
-    bool_query: dict[str, Any] = {"must": must, "filter": filters}
+    bool_query: dict[str, Any] = {}
+    if must:
+        bool_query["must"] = must
+    if filters:
+        bool_query["filter"] = filters
     if must_not:
         bool_query["must_not"] = must_not
+
     return {"bool": bool_query}
 
 
@@ -150,9 +156,14 @@ def build_opensearch_textual_statute_query(
         for law, article, sub_ref in exclude_statute_filters
     )
 
-    bool_query: dict[str, Any] = {"must": must, "filter": filters}
+    bool_query: dict[str, Any] = {}
+    if must:
+        bool_query["must"] = must
+    if filters:
+        bool_query["filter"] = filters
     if must_not:
         bool_query["must_not"] = must_not
+
     return {"bool": bool_query}
 
 
@@ -226,7 +237,9 @@ def _build_source_target_relevance_bool_query(
                     }
                 )
 
-    bool_query: dict[str, Any] = {"filter": filters}
+    bool_query: dict[str, Any] = {}
+    if filters:
+        bool_query["filter"] = filters
     if statute_filters:
         should.extend(
             _build_opensearch_statute_nested_query(
@@ -241,6 +254,7 @@ def _build_source_target_relevance_bool_query(
         bool_query["should"] = should
         if minimum_should_match is not None:
             bool_query["minimum_should_match"] = minimum_should_match
+            
     return bool_query
 
 
