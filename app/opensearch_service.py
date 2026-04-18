@@ -2,46 +2,18 @@
 搜尋業務邏輯層（不依賴 FastAPI）。
 
 職責：
-- OpenSearch 召回：search_source_ids_opensearch（composite agg 分頁收集 source_ids）
-- Source-target retrieval：hits / target_uid counts
+- Stage 1 召回：search_source_ids_opensearch（composite agg 分頁收集 source_ids）
+- Stage 2 target ranking：search_target_rankings_step_down（msm 階梯式 composite agg）
 
 OpenSearch 查詢策略：
-- clean_text 使用 ngram analyzer（2-gram）
+- clean_text / window_text_snippet 使用 ngram analyzer（2-gram）
 - 每個 term 用 match_phrase（字元連續，等同 ILIKE）
-- source_id 以 composite aggregation 分頁收集（純召回，不走 _score 排序）
+- source_id / target_uid 以 composite aggregation 分頁收集
 """
 
-# ── Score 策略 ──────────────────────────────────────────────────────────
-#
-# /search relevance：
-# - 每個 query term 在 snippet 命中 → +1
-# - 每組 statute filter 命中 → +1
-# - target score 由 Python 聚合 source-target hits 計算
-#
-# /citations：
-# - 目前不再計算 citation-level score
-# - 只保留法條命中布林判斷所需 SQL builder
-# ────────────────────────────────────────────────────────────────────────
-
 import os
-import re
 from typing import Any
 from urllib.parse import urlparse
-
-SOURCE_TARGET_WINDOW_CONFIGS = (
-    ("window_text_snippet", "snippet", 1.0),
-)
-SOURCE_TARGET_WINDOW_BUCKET_WEIGHTS = {
-    bucket: boost
-    for _field, bucket, boost in SOURCE_TARGET_WINDOW_CONFIGS
-}
-SOURCE_TARGET_MATCH_NAME_RE = re.compile(
-    r"^t(?P<term_idx>\d+):(?P<bucket>snippet)$"
-)
-SOURCE_TARGET_STATUTE_MATCH_NAME_RE = re.compile(r"^st(?P<filter_idx>\d+)$")
-
-
-# ── OpenSearch ────────────────────────────────────────────────────────
 
 
 def _build_opensearch_statute_nested_query(
@@ -50,7 +22,6 @@ def _build_opensearch_statute_nested_query(
     sub_ref: str | None,
     *,
     path: str = "statutes",
-    query_name: str | None = None,
 ) -> dict[str, Any]:
     nested_must: list[dict[str, Any]] = [{"term": {f"{path}.law": law}}]
     if article is not None:
@@ -58,12 +29,7 @@ def _build_opensearch_statute_nested_query(
     if sub_ref is not None:
         # prefix 比對：搜尋「第1項」可命中「第1項前段」、「第1項第1款」等
         nested_must.append({"prefix": {f"{path}.sub_ref": sub_ref}})
-    nested_query: dict[str, Any] = {
-        "nested": {"path": path, "query": {"bool": {"must": nested_must}}}
-    }
-    if query_name is not None:
-        nested_query["nested"]["_name"] = query_name
-    return nested_query
+    return {"nested": {"path": path, "query": {"bool": {"must": nested_must}}}}
 
 def build_opensearch_query(
     query_terms: list[str],
@@ -167,120 +133,29 @@ def build_opensearch_textual_statute_query(
     return {"bool": bool_query}
 
 
-def build_source_target_rerank_query(
-    query_terms: list[str],
-    source_ids: list[int],
-    statute_filters: list[tuple[str, str | None, str | None]],
-    *,
-    size: int = 200,
-    minimum_should_match: int | None = None,
-    exclude_terms: list[str] | None = None,
-    exclude_statute_filters: list[tuple[str, str | None, str | None]] | None = None,
-    target_ids: list[int] | None = None,
-    target_authority_ids: list[int] | None = None,
-) -> dict[str, Any]:
-    bool_query = _build_source_target_relevance_bool_query(
-        query_terms=query_terms,
-        source_ids=source_ids,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms or [],
-        exclude_statute_filters=exclude_statute_filters or [],
-        target_ids=target_ids or [],
-        target_authority_ids=target_authority_ids or [],
-        minimum_should_match=minimum_should_match,
-    )
-
-    body = {
-        "size": size,
-        "_source": [
-            "source_id",
-            "target_id",
-            "target_authority_id",
-            "target_uid",
-        ],
-        "query": {"bool": bool_query},
-        "sort": ["_doc"],
-    }
-    return body
-
-
 def _build_source_target_relevance_bool_query(
     query_terms: list[str],
     source_ids: list[int],
     statute_filters: list[tuple[str, str | None, str | None]],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple[str, str | None, str | None]],
-    target_ids: list[int],
-    target_authority_ids: list[int],
     minimum_should_match: int | None,
 ) -> dict[str, Any]:
-    filters: list[dict[str, Any]] = []
-    should: list[dict[str, Any]] = []
-    if source_ids:
-        filters.append({"terms": {"source_id": source_ids}})
-    if target_ids:
-        filters.append({"terms": {"target_id": target_ids}})
-    if target_authority_ids:
-        filters.append({"terms": {"target_authority_id": target_authority_ids}})
-
-    if query_terms:
-        for idx, term in enumerate(query_terms):
-            for field, bucket, _boost in SOURCE_TARGET_WINDOW_CONFIGS:
-                should.append(
-                    {
-                        "match_phrase": {
-                            field: {
-                                "query": term,
-                                "_name": f"t{idx}:{bucket}",
-                            }
-                        }
-                    }
-                )
+    should: list[dict[str, Any]] = [
+        {"match_phrase": {"window_text_snippet": term}}
+        for term in query_terms
+    ]
+    should.extend(
+        _build_opensearch_statute_nested_query(law, article, sub_ref)
+        for law, article, sub_ref in statute_filters
+    )
 
     bool_query: dict[str, Any] = {}
-    if filters:
-        bool_query["filter"] = filters
-    if statute_filters:
-        should.extend(
-            _build_opensearch_statute_nested_query(
-                law,
-                article,
-                sub_ref,
-                query_name=f"st{idx}",
-            )
-            for idx, (law, article, sub_ref) in enumerate(statute_filters)
-        )
+    if source_ids:
+        bool_query["filter"] = [{"terms": {"source_id": source_ids}}]
     if should:
         bool_query["should"] = should
         if minimum_should_match is not None:
             bool_query["minimum_should_match"] = minimum_should_match
-            
     return bool_query
-
-
-def calculate_source_target_match_score(matched_queries: list[str] | None) -> float:
-    """依 named query 命中結果重建 source-target relevance 分數。"""
-    if not matched_queries:
-        return 0.0
-
-    best_weights: dict[int, float] = {}
-    matched_statute_filters: set[int] = set()
-    for raw_name in matched_queries:
-        if not isinstance(raw_name, str):
-            continue
-        match = SOURCE_TARGET_MATCH_NAME_RE.match(raw_name)
-        if match:
-            term_idx = int(match.group("term_idx"))
-            bucket = match.group("bucket")
-            weight = float(SOURCE_TARGET_WINDOW_BUCKET_WEIGHTS[bucket])
-            prev = best_weights.get(term_idx)
-            if prev is None or weight > prev:
-                best_weights[term_idx] = weight
-            continue
-        statute_match = SOURCE_TARGET_STATUTE_MATCH_NAME_RE.match(raw_name)
-        if statute_match:
-            matched_statute_filters.add(int(statute_match.group("filter_idx")))
-    return float(sum(best_weights.values()) + len(matched_statute_filters))
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -408,113 +283,14 @@ def chunk_source_ids(source_ids: list[int], chunk_size: int) -> list[list[int]]:
     ]
 
 
-def _iter_source_target_hits_opensearch(
+def _aggregate_targets_at_msm(
+    *,
     query_terms: list[str],
     source_ids: list[int],
     statute_filters: list[tuple[str, str | None, str | None]],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple[str, str | None, str | None]],
-    *,
-    max_hits: int | None = None,
-    minimum_should_match: int | None = None,
-    target_ids: list[int] | None = None,
-    target_authority_ids: list[int] | None = None,
-) -> Any:
-    """查 source-target window index，逐筆產出以 named query flags 重建分數的 pair hits。"""
-    if not source_ids:
-        return
-
-    client = _get_opensearch_client()
-    index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
-
-    raw_max_hits = (os.environ.get("OPENSEARCH_SOURCE_TARGET_MAX_HITS", "40000") or "").strip()
-    raw_scroll_page_size = (
-        os.environ.get("OPENSEARCH_SOURCE_TARGET_SCROLL_PAGE_SIZE", "5000") or ""
-    ).strip()
-    raw_source_chunk_size = (os.environ.get("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "5000") or "").strip()
-    scroll_ttl = "1m"
-    try:
-        configured_max_hits = max(1, int(raw_max_hits))
-    except Exception:
-        configured_max_hits = 50000
-    try:
-        scroll_page_size = max(1, int(raw_scroll_page_size))
-    except Exception:
-        scroll_page_size = 5000
-    try:
-        source_chunk_size = max(1, int(raw_source_chunk_size))
-    except Exception:
-        source_chunk_size = 5000
-
-    hit_limit = configured_max_hits if max_hits is None else max(1, max_hits)
-    yielded = 0
-
-    for source_id_chunk in chunk_source_ids(source_ids, source_chunk_size):
-        if yielded >= hit_limit:
-            break
-        scroll_id: str | None = None
-        try:
-            body = build_source_target_rerank_query(
-                query_terms=query_terms,
-                source_ids=source_id_chunk,
-                statute_filters=statute_filters,
-                exclude_terms=exclude_terms,
-                exclude_statute_filters=exclude_statute_filters,
-                size=min(scroll_page_size, hit_limit - yielded),
-                minimum_should_match=minimum_should_match,
-                target_ids=target_ids or [],
-                target_authority_ids=target_authority_ids or [],
-            )
-            response = client.search(index=index_name, body=body, scroll=scroll_ttl)
-            scroll_id = response.get("_scroll_id")
-
-            while yielded < hit_limit:
-                response_hits = ((response.get("hits") or {}).get("hits") or [])
-                if not response_hits:
-                    break
-
-                for hit in response_hits:
-                    source = hit.get("_source") or {}
-                    try:
-                        source_id = int(source.get("source_id"))
-                    except Exception:
-                        continue
-                    target_id = source.get("target_id")
-                    target_authority_id = source.get("target_authority_id")
-                    yield {
-                        "source_id": source_id,
-                        "target_id": int(target_id) if target_id is not None else None,
-                        "target_authority_id": (
-                            int(target_authority_id)
-                            if target_authority_id is not None else None
-                        ),
-                        "score": calculate_source_target_match_score(
-                            hit.get("matched_queries")
-                        ),
-                    }
-                    yielded += 1
-                    if yielded >= hit_limit:
-                        break
-
-                if yielded >= hit_limit or len(response_hits) < body["size"] or not scroll_id:
-                    break
-
-                response = client.scroll(scroll_id=scroll_id, scroll=scroll_ttl)
-                scroll_id = response.get("_scroll_id") or scroll_id
-        finally:
-            if scroll_id:
-                try:
-                    client.clear_scroll(scroll_id=scroll_id)
-                except Exception:
-                    pass
-
-def _search_target_uid_counts_opensearch(
-    query_terms: list[str],
-    source_ids: list[int],
+    minimum_should_match: int | None,
 ) -> dict[str, dict[str, Any]]:
-    if not source_ids:
-        return {}
-
+    """某個 msm 下，composite agg 回傳 {target_uid: {matched_count, preview_source_ids}}。"""
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
 
@@ -538,12 +314,8 @@ def _search_target_uid_counts_opensearch(
         bool_query = _build_source_target_relevance_bool_query(
             query_terms=query_terms,
             source_ids=source_id_chunk,
-            statute_filters=[],
-            exclude_terms=[],
-            exclude_statute_filters=[],
-            target_ids=[],
-            target_authority_ids=[],
-            minimum_should_match=1,
+            statute_filters=statute_filters,
+            minimum_should_match=minimum_should_match,
         )
         after_key: dict[str, Any] | None = None
         while True:
@@ -565,11 +337,10 @@ def _search_target_uid_counts_opensearch(
                                 "terms": {
                                     "field": "source_id",
                                     "size": 5,
-                                    "order": {"_key": "asc"},
-                                }
-                            }
+                                },
+                            },
                         },
-                    }
+                    },
                 },
             }
             response = client.search(index=index_name, body=body)
@@ -581,28 +352,69 @@ def _search_target_uid_counts_opensearch(
                     continue
                 row = counts.setdefault(
                     target_uid,
-                    {
-                        "matched_citation_count": 0,
-                        "preview_source_ids": [],
-                    },
+                    {"matched_citation_count": 0, "preview_source_ids": []},
                 )
                 row["matched_citation_count"] += int(bucket.get("doc_count") or 0)
-                merged_source_ids = {
-                    int(source_id)
-                    for source_id in (row.get("preview_source_ids") or [])
-                }
-                source_buckets = (
-                    (bucket.get("preview_source_ids") or {}).get("buckets") or []
-                )
-                for source_bucket in source_buckets:
-                    try:
-                        merged_source_ids.add(int(source_bucket.get("key")))
-                    except Exception:
-                        continue
-                row["preview_source_ids"] = sorted(merged_source_ids)[:5]
+                if len(row["preview_source_ids"]) < 5:
+                    source_buckets = (
+                        (bucket.get("preview_source_ids") or {}).get("buckets") or []
+                    )
+                    existing = set(row["preview_source_ids"])
+                    for source_bucket in source_buckets:
+                        try:
+                            sid = int(source_bucket.get("key"))
+                        except Exception:
+                            continue
+                        if sid in existing:
+                            continue
+                        row["preview_source_ids"].append(sid)
+                        existing.add(sid)
+                        if len(row["preview_source_ids"]) >= 5:
+                            break
 
             after_key = agg.get("after_key")
             if not after_key:
                 break
 
     return counts
+
+
+def search_target_rankings_step_down(
+    *,
+    query_terms: list[str],
+    source_ids: list[int],
+    statute_filters: list[tuple[str, str | None, str | None]],
+    threshold: int = 200,
+) -> list[dict[str, Any]]:
+    """
+    階梯式 step_down：msm=N → N-1 → ... → 1 → None（filter-only）。
+    每階用 composite agg 抓 target 級 matched_count + top 5 preview sources。
+    pool 累積達 threshold 就停，回傳時附 reached_at_msm（None fallback 記為 0）。
+    """
+    if not source_ids:
+        return []
+
+    should_count = len(query_terms) + len(statute_filters)
+    msm_ladder: list[int | None] = (
+        list(range(should_count, 0, -1)) + [None] if should_count else [None]
+    )
+
+    pool: dict[str, dict[str, Any]] = {}
+    for msm in msm_ladder:
+        level = _aggregate_targets_at_msm(
+            query_terms=query_terms,
+            source_ids=source_ids,
+            statute_filters=statute_filters,
+            minimum_should_match=msm,
+        )
+        for target_uid, stats in level.items():
+            if target_uid in pool:
+                continue
+            pool[target_uid] = {
+                **stats,
+                "reached_at_msm": msm if msm is not None else 0,
+            }
+        if len(pool) >= threshold:
+            break
+
+    return [{"target_uid": tu, **row} for tu, row in pool.items()]

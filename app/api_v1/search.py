@@ -146,8 +146,6 @@ def search(req: SearchRequest):
             source_ids,
             normalized.query_terms,
             normalized.statute_filters,
-            normalized.exclude_terms,
-            normalized.exclude_statute_filters,
         )
     rows = list(all_rankings)
     ordered_indexes: dict[str, list[int]] = {}
@@ -336,8 +334,6 @@ def rerank(req: RerankRequest):
                 source_ids,
                 normalized.query_terms,
                 normalized.statute_filters,
-                normalized.exclude_terms,
-                normalized.exclude_statute_filters,
             )
         rows = list(all_rankings)
         ordered_indexes = {}

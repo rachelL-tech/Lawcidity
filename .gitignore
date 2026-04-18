@@ -25,6 +25,7 @@ data/downloads/
 /.codex/
 /.worktrees/
 /docs/
+/practices/
 AGENTS.md
 
 # Environments
