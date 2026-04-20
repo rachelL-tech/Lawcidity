@@ -71,68 +71,6 @@ def build_opensearch_query(
     return {"bool": bool_query}
 
 
-def _format_textual_statute_article(article: str) -> str:
-    if "之" not in article:
-        return f"第{article}條"
-    head, tail = article.split("之", 1)
-    return f"第{head}條之{tail}"
-
-
-def _build_opensearch_textual_statute_clause(
-    law: str,
-    article: str | None,
-    sub_ref: str | None,
-) -> dict[str, Any]:
-    must: list[dict[str, Any]] = [
-        {"match_phrase": {"clean_text": law}},
-    ]
-    if article is not None:
-        must.append({"match_phrase": {"clean_text": _format_textual_statute_article(article)}})
-    if sub_ref is not None:
-        must.append({"match_phrase": {"clean_text": sub_ref}})
-    return {"bool": {"must": must}}
-
-
-def build_opensearch_textual_statute_query(
-    query_terms: list[str],
-    case_types: list[str],
-    statute_filters: list[tuple[str, str | None, str | None]],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple[str, str | None, str | None]],
-) -> dict[str, Any]:
-    must = [
-        {"match_phrase": {"clean_text": term}}
-        for term in query_terms
-    ]
-    must.extend(
-        _build_opensearch_textual_statute_clause(law, article, sub_ref)
-        for law, article, sub_ref in statute_filters
-    )
-
-    filters: list[dict[str, Any]] = []
-    if case_types:
-        filters.append({"terms": {"case_type": case_types}})
-
-    must_not: list[dict[str, Any]] = [
-        {"match_phrase": {"clean_text": term}}
-        for term in exclude_terms
-    ]
-    must_not.extend(
-        _build_opensearch_textual_statute_clause(law, article, sub_ref)
-        for law, article, sub_ref in exclude_statute_filters
-    )
-
-    bool_query: dict[str, Any] = {}
-    if must:
-        bool_query["must"] = must
-    if filters:
-        bool_query["filter"] = filters
-    if must_not:
-        bool_query["must_not"] = must_not
-
-    return {"bool": bool_query}
-
-
 def _build_source_target_relevance_bool_query(
     query_terms: list[str],
     source_ids: list[int],
@@ -259,18 +197,7 @@ def search_source_ids_opensearch(
         exclude_terms=exclude_terms,
         exclude_statute_filters=exclude_statute_filters,
     )
-    source_ids = collect_source_ids(exact_query)
-    if source_ids or not query_terms or not statute_filters:
-        return source_ids
-
-    textual_query = build_opensearch_textual_statute_query(
-        query_terms=query_terms,
-        case_types=case_types,
-        statute_filters=statute_filters,
-        exclude_terms=exclude_terms,
-        exclude_statute_filters=exclude_statute_filters,
-    )
-    return collect_source_ids(textual_query)
+    return collect_source_ids(exact_query)
 
 
 def chunk_source_ids(source_ids: list[int], chunk_size: int) -> list[list[int]]:
