@@ -203,7 +203,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", type=str, default="損害賠償")
     parser.add_argument("--top", type=int, default=200)
-    parser.add_argument("--source-limit", type=int, default=None)
     parser.add_argument("--cap-a", type=int, default=40000, help="現版 max_hits")
     parser.add_argument("--cap-b", type=int, default=500000, help="放寬 max_hits")
     args = parser.parse_args()
@@ -219,7 +218,6 @@ def main():
         statute_filters=[],
         exclude_terms=[],
         exclude_statute_filters=[],
-        source_limit=args.source_limit,
     )
     print(f"  |source_ids| = {len(source_ids)}\n")
 

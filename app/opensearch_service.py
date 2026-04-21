@@ -23,13 +23,13 @@ def _build_opensearch_statute_nested_query(
     *,
     path: str = "statutes",
 ) -> dict[str, Any]:
-    nested_must: list[dict[str, Any]] = [{"term": {f"{path}.law": law}}]
+    nested_filter: list[dict[str, Any]] = [{"term": {f"{path}.law": law}}]
     if article is not None:
-        nested_must.append({"term": {f"{path}.article_raw": article}})
+        nested_filter.append({"term": {f"{path}.article_raw": article}})
     if sub_ref is not None:
         # prefix 比對：搜尋「第1項」可命中「第1項前段」、「第1項第1款」等
-        nested_must.append({"prefix": {f"{path}.sub_ref": sub_ref}})
-    return {"nested": {"path": path, "query": {"bool": {"must": nested_must}}}}
+        nested_filter.append({"prefix": {f"{path}.sub_ref": sub_ref}})
+    return {"nested": {"path": path, "query": {"bool": {"filter": nested_filter}}}}
 
 def build_opensearch_query(
     query_terms: list[str],
@@ -137,18 +137,11 @@ def search_source_ids_opensearch(
     statute_filters: list[tuple[str, str, str | None]],
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str, str | None]],
-    source_limit: int | None,
 ) -> list[int]:
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v3")
 
-    raw_page_size = (
-        os.environ.get("OPENSEARCH_SOURCE_RECALL_COMPOSITE_PAGE_SIZE", "1000") or ""
-    ).strip()
-    try:
-        page_size = max(1, int(raw_page_size))
-    except Exception:
-        page_size = 1000
+    page_size = 1000
 
     def collect_source_ids(bool_query: dict[str, Any]) -> list[int]:
         source_ids: list[int] = []
@@ -181,8 +174,6 @@ def search_source_ids_opensearch(
                     continue
                 seen.add(source_id)
                 source_ids.append(source_id)
-                if source_limit is not None and len(source_ids) >= source_limit:
-                    return source_ids
 
             after_key = agg.get("after_key")
             if not after_key:
@@ -221,20 +212,8 @@ def _aggregate_targets_at_msm(
     client = _get_opensearch_client()
     index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
 
-    raw_page_size = (
-        os.environ.get("OPENSEARCH_TARGET_AGG_COMPOSITE_PAGE_SIZE", "1000") or ""
-    ).strip()
-    raw_source_chunk_size = (
-        os.environ.get("OPENSEARCH_SOURCE_TARGET_SOURCE_CHUNK_SIZE", "5000") or ""
-    ).strip()
-    try:
-        page_size = max(1, int(raw_page_size))
-    except Exception:
-        page_size = 1000
-    try:
-        source_chunk_size = max(1, int(raw_source_chunk_size))
-    except Exception:
-        source_chunk_size = 5000
+    page_size = 1000
+    source_chunk_size = 5000
 
     counts: dict[str, dict[str, Any]] = {}
     for source_id_chunk in chunk_source_ids(source_ids, source_chunk_size):

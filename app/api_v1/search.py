@@ -73,7 +73,7 @@ def _ensure_ordered_indexes(
             range(len(rows)),
             key=lambda idx: (
                 -(rows[idx].get("total_citation_count") or 0),
-                -(rows[idx].get("score") or 0),
+                -(rows[idx].get("matched_citation_count") or 0),
                 rows[idx].get("court_level") if rows[idx].get("court_level") is not None else 99,
             ),
         )
@@ -134,7 +134,6 @@ def search(req: SearchRequest):
                 statute_filters=normalized.statute_filters,
                 exclude_terms=normalized.exclude_terms,
                 exclude_statute_filters=normalized.exclude_statute_filters,
-                source_limit=None,
             )
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
@@ -298,7 +297,6 @@ def rerank(req: RerankRequest):
                 statute_filters=normalized.statute_filters,
                 exclude_terms=normalized.exclude_terms,
                 exclude_statute_filters=normalized.exclude_statute_filters,
-                source_limit=None,
             )
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))

@@ -72,7 +72,6 @@ def _resolve_source_ids_for_citations(
             statute_filters=statute_filters,
             exclude_terms=exclude_terms,
             exclude_statute_filters=exclude_statute_filters,
-            source_limit=None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

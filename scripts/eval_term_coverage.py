@@ -231,7 +231,6 @@ def main():
     parser.add_argument("--query", type=str, required=True, help="space-separated terms")
     parser.add_argument("--top", type=int, default=200)
     parser.add_argument("--threshold", type=int, default=200)
-    parser.add_argument("--source-limit", type=int, default=None)
     args = parser.parse_args()
 
     query_terms = args.query.split()
@@ -244,7 +243,6 @@ def main():
         statute_filters=[],
         exclude_terms=[],
         exclude_statute_filters=[],
-        source_limit=args.source_limit,
     )
     t_recall = time.perf_counter() - t0
     print(f"[stage1] |source_ids| = {len(source_ids)}  ({t_recall:.2f}s)\n")
