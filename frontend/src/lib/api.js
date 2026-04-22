@@ -1,4 +1,4 @@
-const BASE = "/api/v1";
+const BASE = "/api";
 
 // 共用 POST 函式
 async function post(path, body) {
@@ -53,28 +53,28 @@ function citationParams(keywords, statutes, excludeKeywords, excludeStatutes, ca
   return p.toString(); // URLSearchParams 是物件，要轉成字串才能放在 URL 後面
 }
 
-// 打 GET /api/v1/{targetType}/{targetId}/citations?...
+// 打 GET /api/{targetType}/{targetId}/citations?...
 export function fetchCitations(targetType, targetId, keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, previewSourceIds = []) {
   const qs = citationParams(keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, previewSourceIds);
   return get(`/${targetType}/${targetId}/citations?${qs}`);
 }
 
-// 打 GET /api/v1/decisions/{id}
+// 打 GET /api/decisions/{id}
 export function fetchDecision(id) {
   return get(`/decisions/${id}`);
 }
 
-// GET /api/v1/laws?q=...，給法律 autocomplete 用（後端已按字數小到大排序）
+// GET /api/laws?q=...，給法律 autocomplete 用（後端已按字數小到大排序）
 export function fetchLaws(q) {
   return get(`/laws?q=${encodeURIComponent(q)}`);
 }
 
-// POST /api/v1/analyze — Gemini 爭點/法條提取
+// POST /api/analyze — Gemini 爭點/法條提取
 export function analyze(text) {
   return post("/analyze", { text });
 }
 
-// POST /api/v1/analyze/generate — RAG + Gemini 全文分析
+// POST /api/analyze/generate — RAG + Gemini 全文分析
 export function analyzeGenerate(req) {
   return post("/analyze/generate", req);
 }

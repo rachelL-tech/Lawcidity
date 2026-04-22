@@ -24,7 +24,7 @@ from app.search_cache import get_cached_source_ids
 from app.opensearch_service import (
     search_source_ids_opensearch,
 )
-from app.api_v1.schemas import (
+from app.api.schemas import (
     CitationQueryParams,
     CitationsResponse,
     ParsedCitationQuery,

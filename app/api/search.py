@@ -30,7 +30,7 @@ from app.query_normalization import (
 from app.opensearch_service import (
     search_source_ids_opensearch,
 )
-from app.api_v1.schemas import (
+from app.api.schemas import (
     SearchRequest,
     SearchResponse,
     SearchResultItem,

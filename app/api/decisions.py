@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from psycopg.rows import dict_row
 
-from app.api_v1.schemas import DecisionDetail, DecisionStatute
+from app.api.schemas import DecisionDetail, DecisionStatute
 from app.db import get_conn
 
 router = APIRouter()
