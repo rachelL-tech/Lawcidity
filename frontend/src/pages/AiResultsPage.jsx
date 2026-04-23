@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate, Link, useParams } from "react-router-dom";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import { analyzeGenerate, fetchDecision } from "../lib/api";
 
 /**
@@ -321,7 +321,6 @@ function renderPlainText(str, baseKey) {
 /* ── Citation Tag ── */
 
 function CiteTag({ type, id, children }) {
-  const { lang = "en" } = useParams();
   const isSupreme = type === "supreme";
   const isTarget = type === "target";
 
@@ -333,7 +332,7 @@ function CiteTag({ type, id, children }) {
 
   return (
     <Link
-      to={`/${lang}/decisions/${id}`}
+      to={`/decisions/${id}`}
       className={`inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded text-sm border cursor-pointer transition-colors ${
         isSupreme
           ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
@@ -407,7 +406,7 @@ function TargetCiteTag({ id, children }) {
                 </div>
               )}
               {/* <Link
-                to={`/${lang}/decisions/${id}`}
+                to={`/decisions/${id}`}
                 className="block mt-2 text-brand hover:underline"
               >
                 查看判決全文
@@ -433,7 +432,6 @@ function StatuteTag({ children }) {
 /* ── RAG 來源卡片 ── */
 
 function RagSourceCard({ item }) {
-  const { lang = "en" } = useParams();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -451,7 +449,7 @@ function RagSourceCard({ item }) {
               {item.root_norm}
             </span>
             <Link
-              to={`/${lang}/decisions/${item.decision_id}`}
+              to={`/decisions/${item.decision_id}`}
               className="text-sm font-medium text-gray-800 hover:text-brand truncate"
             >
               {item.display_title.startsWith(item.root_norm)

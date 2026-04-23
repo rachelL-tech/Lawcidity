@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 function Section({ children, className = "", delay = 0 }) {
   return (
@@ -89,9 +88,6 @@ function DemoCarousel({ steps, accent }) {
 }
 
 export default function PortfolioHomePage() {
-  const { t } = useTranslation();
-  const { lang = "en" } = useParams();
-
   const keywordSteps = [
     {
       desc: 'Enter keywords like "車禍" or "行車紀錄器". You can also optionally add a statute using autocomplete (e.g. "刑法" + "284") or filter by case type (e.g. "刑事").',
@@ -123,20 +119,20 @@ export default function PortfolioHomePage() {
       {/* Hero */}
       <Section className="max-w-3xl mx-auto px-6 pt-20 pb-16 text-center">
         <p className="text-sm font-semibold tracking-widest uppercase text-brand mb-6">
-          {t("hero.eyebrow")}
+          Legal Search Project
         </p>
         <h1 className="font-display text-4xl md:text-5xl leading-tight text-text-primary mb-5">
-          {t("hero.headline")}
+          Lawcidity, a legal search project using Taiwanese court decisions.
         </h1>
         <p className="text-lg text-text-secondary mb-8">
-          {t("hero.subheadline")}
+          Built on real court decisions, with separate paths for keyword search and AI-assisted (RAG) retrieval.
         </p>
         <div className="flex flex-wrap justify-center gap-4">
           <Link
-            to={`/${lang}/demo`}
+            to="/demo"
             className="bg-brand text-white font-semibold text-sm px-6 py-3 rounded-lg hover:bg-brand-dark transition-colors"
           >
-            {t("hero.cta_demo")}
+            Try Demo
           </Link>
           <a
             href="https://github.com/rachelL-tech/Lawcidity"
@@ -144,7 +140,7 @@ export default function PortfolioHomePage() {
             rel="noopener noreferrer"
             className="border border-brand text-brand font-semibold text-sm px-6 py-3 rounded-lg hover:bg-brand-light transition-colors"
           >
-            {t("hero.cta_github")}
+            View on GitHub
           </a>
         </div>
       </Section>
@@ -152,16 +148,16 @@ export default function PortfolioHomePage() {
       {/* Trust strip */}
       <Section className="max-w-3xl mx-auto px-6 pb-16" delay={100}>
         <div className="flex flex-wrap justify-center gap-x-8 gap-y-3 py-5 border-y border-divider">
-          <TrustBadge icon="&sect;" text={t("trust.lawyer")} />
-          <TrustBadge icon="&#9783;" text={t("trust.dataset")} />
-          <TrustBadge icon="&#9638;" text={t("trust.scale")} />
+          <TrustBadge icon="&sect;" text="Taiwan-qualified lawyer" />
+          <TrustBadge icon="&#9783;" text="Public court decisions, 2025-01 to 2026-01" />
+          <TrustBadge icon="&#9638;" text="1.4M decisions, 15GB across PostgreSQL and OpenSearch" />
         </div>
       </Section>
 
       {/* What I Built — demo carousel */}
       <Section className="max-w-4xl mx-auto px-6 pb-20" delay={200}>
         <h2 className="font-display text-3xl text-center mb-12">
-          {t("what_built.heading")}
+          Features
         </h2>
 
         <div className="grid md:grid-cols-2 gap-10">
@@ -192,15 +188,15 @@ export default function PortfolioHomePage() {
       {/* Final CTA */}
       <Section className="max-w-3xl mx-auto px-6 pb-24 text-center" delay={300}>
         <h2 className="font-display text-3xl mb-3">
-          {t("final_cta.heading")}
+          Explore the Project
         </h2>
-        <p className="text-text-secondary mb-8">{t("final_cta.body")}</p>
+        <p className="text-text-secondary mb-8">Read the full case study, inspect the architecture, or try the working demo.</p>
         <div className="flex flex-wrap justify-center gap-4">
           <Link
-            to={`/${lang}/demo`}
+            to="/demo"
             className="bg-brand text-white font-semibold text-sm px-6 py-3 rounded-lg hover:bg-brand-dark transition-colors"
           >
-            {t("final_cta.cta_demo")}
+            Try Demo
           </Link>
           <a
             href="https://github.com/rachelL-tech/Lawcidity"
@@ -208,7 +204,7 @@ export default function PortfolioHomePage() {
             rel="noopener noreferrer"
             className="border border-brand text-brand font-semibold text-sm px-6 py-3 rounded-lg hover:bg-brand-light transition-colors"
           >
-            {t("final_cta.cta_github")}
+            View on GitHub
           </a>
         </div>
       </Section>

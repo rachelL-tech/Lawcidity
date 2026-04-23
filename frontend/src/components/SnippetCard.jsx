@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { highlightText } from "../lib/highlight";
 
 // 單一引用來源的卡片：顯示來源判決的裁判字號、引用片段、涉及法條
@@ -7,7 +7,6 @@ import { highlightText } from "../lib/highlight";
 //   keywords: string[] — 用來在 snippet 裡 highlight 關鍵字
 //   searchStatutes: StatuteFilter[] — 搜尋條件的法條，用來在 snippet 裡 highlight（淺綠色）
 export default function SnippetCard({ citation, keywords, searchStatutes }) {
-  const { lang = "en" } = useParams();
   const caseRef = citation.case_ref || `來源 #${citation.source_id}`;
   const params = new URLSearchParams();
   if (keywords.length) params.set("kw", keywords.join(","));
@@ -19,7 +18,7 @@ export default function SnippetCard({ citation, keywords, searchStatutes }) {
       {/* 來源裁判字號（連結至判決詳情） + 法院 */}
       <div className="flex items-center gap-2 text-xs text-gray-500">
         <Link
-          to={`/${lang}/decisions/${citation.source_id}${queryStr}`}
+          to={`/decisions/${citation.source_id}${queryStr}`}
           className="font-medium text-brand hover:underline"
         >
           {caseRef}{citation.doc_type && citation.doc_type}

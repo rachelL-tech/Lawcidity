@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams, useNavigate, useParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import SearchForm from "../components/SearchForm";
 import Pagination from "../components/Pagination";
 import ResultCard from "../components/ResultCard";
@@ -14,7 +14,6 @@ import { paramsToSearchRequest, searchRequestToParams, buildSearchSignature } fr
 export default function SearchResultsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { lang = "en" } = useParams();
 
   const [results, setResults] = useState(null); // null = 未完成，[] = 空結果
   const [total, setTotal] = useState(0);
@@ -118,7 +117,7 @@ export default function SearchResultsPage() {
 
   // SearchForm 送出新搜尋條件時，更新 URL（會觸發上面的 useEffect）
   function handleSearch(newReq) {
-    navigate(`/${lang}/search?${searchRequestToParams(newReq)}`);
+    navigate(`/search?${searchRequestToParams(newReq)}`);
   }
 
   // 切換排序，page 重置為 1

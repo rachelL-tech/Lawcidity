@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import ModeToggle from "../components/ModeToggle";
 import SearchForm from "../components/SearchForm";
 import AiSearchForm from "../components/AiSearchForm";
@@ -40,36 +40,24 @@ const EMPTY_REQ = {
 export default function DemoPage() {
   const [mode, setMode] = useState("keyword");
   const navigate = useNavigate();
-  const { lang = "en" } = useParams();
-  const TYPING_TEXT = {
-    en: "What type of cases are you looking for?",
-    ja: "今日はどんな裁判例をお探しですか？",
-    "zh-TW": "您今天想探索什麼案件類型？",
-  };
-  const SUBTITLE_TEXT = {
-    en: "Search popular Taiwanese court holdings",
-    ja: "台湾の代表的な裁判例を検索",
-    "zh-TW": "台灣熱門實務見解搜尋",
-  };
-  const text = TYPING_TEXT[lang] || TYPING_TEXT.en;
-  const subtitle = SUBTITLE_TEXT[lang] || SUBTITLE_TEXT.en;
-  const speed = lang === "en" ? 50 : 90;
-  const { displayed, done, cursorVisible } = useTypingEffect(text, speed);
+  const text = "What type of cases are you looking for?";
+  const subtitle = "Search popular Taiwanese court holdings";
+  const { displayed, done, cursorVisible } = useTypingEffect(text, 50);
 
   function handleSearch(req) {
     const qs = searchRequestToParams(req);
-    navigate(`/${lang}/search?${qs}`);
+    navigate(`/search?${qs}`);
   }
 
   function handleAiSubmit({ query, issues, statutes }) {
-    navigate(`/${lang}/ai-results`, { state: { query, issues, statutes } });
+    navigate("/ai-results", { state: { query, issues, statutes } });
   }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-20 font-body">
       {/* Hero */}
       <div className="text-center mb-10">
-        <h1 className={`font-display text-brand mb-3 ${lang === "en" ? "text-4xl" : "text-5xl"}`}>
+        <h1 className="font-display text-brand mb-3 text-4xl">
           {displayed}
           {cursorVisible && <span className={`inline-block w-[3px] h-[1.1em] bg-brand ml-1 align-bottom ${done ? "animate-blink" : ""}`} />}
         </h1>
