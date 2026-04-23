@@ -140,13 +140,12 @@ def search(req: SearchRequest):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{e}")
 
-        all_rankings = fetch_target_rankings_by_relevance(
+        rows = fetch_target_rankings_by_relevance(
             conn,
             source_ids,
             normalized.query_terms,
             normalized.statute_filters,
         )
-    rows = list(all_rankings)
     ordered_indexes: dict[str, list[int]] = {}
     search_cache_key = create_search_cache(
         source_ids,
@@ -327,13 +326,12 @@ def rerank(req: RerankRequest):
 
     if cached_rankings is None:
         with get_conn() as conn:
-            all_rankings = fetch_target_rankings_by_relevance(
+            rows = fetch_target_rankings_by_relevance(
                 conn,
                 source_ids,
                 normalized.query_terms,
                 normalized.statute_filters,
             )
-        rows = list(all_rankings)
         ordered_indexes = {}
         if source_ids_from_cache:
             update_cached_rankings(req.search_cache_key, rows, ordered_indexes)

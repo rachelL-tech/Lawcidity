@@ -81,10 +81,10 @@ def _build_source_target_relevance_bool_query(
         {"match_phrase": {"window_text_snippet": term}}
         for term in query_terms
     ]
-    should.extend(
-        _build_opensearch_statute_nested_query(law, article, sub_ref)
-        for law, article, sub_ref in statute_filters
-    )
+    for law, article, sub_ref in statute_filters:
+        should.append(
+            _build_opensearch_statute_nested_query(law, article, sub_ref)
+        )
 
     bool_query: dict[str, Any] = {}
     if source_ids:
@@ -100,7 +100,7 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return raw.strip().lower() in {"true"}
 
 
 def _get_opensearch_client():
@@ -139,8 +139,7 @@ def search_source_ids_opensearch(
     exclude_statute_filters: list[tuple[str, str, str | None]],
 ) -> list[int]:
     client = _get_opensearch_client()
-    index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v3")
-
+    index_name = "decisions_v3"
     page_size = 1000
 
     def collect_source_ids(bool_query: dict[str, Any]) -> list[int]:
@@ -192,13 +191,17 @@ def search_source_ids_opensearch(
 
 
 def chunk_source_ids(source_ids: list[int], chunk_size: int) -> list[list[int]]:
-    """依固定大小切 source_id chunks，保留原順序。"""
+    """依固定大小切 source_id chunks。"""
     if chunk_size <= 0:
         raise ValueError("chunk_size 必須 > 0")
-    return [
-        source_ids[idx: idx + chunk_size]
-        for idx in range(0, len(source_ids), chunk_size)
-    ]
+    
+    chunks = []
+
+    for idx in range(0, len(source_ids), chunk_size):
+        chunk = source_ids[idx: idx + chunk_size]
+        chunks.append(chunk)
+
+    return chunks
 
 
 def _aggregate_targets_at_msm(
@@ -208,15 +211,17 @@ def _aggregate_targets_at_msm(
     statute_filters: list[tuple[str, str | None, str | None]],
     minimum_should_match: int | None,
 ) -> dict[str, dict[str, Any]]:
-    """某個 msm 下，composite agg 回傳 {target_uid: {matched_count, preview_source_ids}}。"""
+    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 target 統計，回傳 {target_uid: {matched_count, preview_source_ids}}。"""
     client = _get_opensearch_client()
-    index_name = os.environ.get("OPENSEARCH_SOURCE_TARGET_INDEX", "source_target_windows_v2")
 
-    page_size = 1000
-    source_chunk_size = 5000
+    index_name = "source_target_windows_v2"
+    page_size = 1000 # 設定 composite aggregation 每頁 1000 個 buckets
+    source_chunk_size = 5000 # 每次查詢限制在 5000 個 source_ids 以內，避免 bool terms source_id query 太大導致效能問題
 
     counts: dict[str, dict[str, Any]] = {}
+
     for source_id_chunk in chunk_source_ids(source_ids, source_chunk_size):
+        # 決定這批 source ids 中，哪些 source-target pair docs 算 matched
         bool_query = _build_source_target_relevance_bool_query(
             query_terms=query_terms,
             source_ids=source_id_chunk,
@@ -249,18 +254,25 @@ def _aggregate_targets_at_msm(
                     },
                 },
             }
+
             response = client.search(index=index_name, body=body)
+
             agg = (response.get("aggregations") or {}).get("targets") or {}
             buckets = agg.get("buckets") or []
+
             for bucket in buckets:
                 target_uid = (bucket.get("key") or {}).get("target_uid")
                 if not isinstance(target_uid, str) or not target_uid:
                     continue
+
+                # 如果 key(target_uid) 已經存在，就拿原本的 value；如果 key 不存在，就先建立一個預設 value，再回傳它
                 row = counts.setdefault(
                     target_uid,
                     {"matched_citation_count": 0, "preview_source_ids": []},
                 )
+
                 row["matched_citation_count"] += int(bucket.get("doc_count") or 0)
+
                 if len(row["preview_source_ids"]) < 5:
                     source_buckets = (
                         (bucket.get("preview_source_ids") or {}).get("buckets") or []
@@ -279,6 +291,7 @@ def _aggregate_targets_at_msm(
                             break
 
             after_key = agg.get("after_key")
+            # 沒有 after_key 時，代表這個 source_id_chunk 的 target buckets 都取完了，跳出 while，換下一個 source chunk
             if not after_key:
                 break
 
@@ -301,9 +314,7 @@ def search_target_rankings_step_down(
         return []
 
     should_count = len(query_terms) + len(statute_filters)
-    msm_ladder: list[int | None] = (
-        list(range(should_count, 0, -1)) + [None] if should_count else [None]
-    )
+    msm_ladder: list[int | None] = list(range(should_count, 0, -1)) + [None] # when should_count = 3, msm_ladder = [3, 2, 1, None]
 
     pool: dict[str, dict[str, Any]] = {}
     for msm in msm_ladder:

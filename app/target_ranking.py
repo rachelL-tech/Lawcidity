@@ -119,9 +119,6 @@ def fetch_target_rankings_by_relevance(
     source_ids: list[int],
     query_terms: list[str],
     statute_filters: list[tuple[str, str | None, str | None]],
-    *,
-    doc_types: list[str] | None = None,
-    court_levels: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     if not source_ids:
         return []
@@ -135,31 +132,28 @@ def fetch_target_rankings_by_relevance(
     if not raw_rows:
         return []
 
-    decision_ids = sorted(
-        int(r["target_uid"].split(":", 1)[1])
-        for r in raw_rows
-        if r["target_uid"].startswith("decision:")
-    )
-    authority_ids = sorted(
-        int(r["target_uid"].split(":", 1)[1])
-        for r in raw_rows
-        if r["target_uid"].startswith("authority:")
-    )
+    parsed_raw_rows: list[tuple[dict[str, Any], str, int]] = []
+    decision_ids: list[int] = []
+    authority_ids: list[int] = []
+    for raw in raw_rows:
+        kind, raw_id_str = raw["target_uid"].split(":", 1)
+        raw_id = int(raw_id_str)
+        parsed_raw_rows.append((raw, kind, raw_id))
+        if kind == "decision":
+            decision_ids.append(raw_id)
+        elif kind == "authority":
+            authority_ids.append(raw_id)
+
     decision_meta = _fetch_decision_target_metadata(conn, decision_ids)
     authority_meta = _fetch_authority_target_metadata(conn, authority_ids)
 
     rankings: list[dict[str, Any]] = []
-    for raw in raw_rows:
-        kind, raw_id = raw["target_uid"].split(":", 1)
+    for raw, kind, raw_id in parsed_raw_rows:
         meta = (
-            decision_meta.get(int(raw_id)) if kind == "decision"
-            else authority_meta.get(int(raw_id))
+            decision_meta.get(raw_id) if kind == "decision"
+            else authority_meta.get(raw_id)
         )
         if not meta:
-            continue
-        if doc_types and meta.get("doc_type") not in doc_types:
-            continue
-        if court_levels and meta.get("court_level") not in court_levels:
             continue
 
         rankings.append(
