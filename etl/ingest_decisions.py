@@ -504,6 +504,16 @@ def _get_decision_canonical_id(conn, target_id: int) -> Optional[int]:
     return row[0] if row else None
 
 
+def _require_citation_offsets(citation: dict) -> tuple[int, int]:
+    """所有 citation 都必須帶可用的 clean_text offset。"""
+    match_start = citation.get("match_start")
+    match_end = citation.get("match_end")
+    if match_start is None or match_end is None:
+        raw_match = citation.get("raw_match", "<unknown>")
+        raise ValueError(f"citation 缺少 match_start/match_end: {raw_match}")
+    return int(match_start), int(match_end)
+
+
 def ingest_citations(conn, source_id: int, clean_text: str,
                      court_root_norm: str = None,
                      source_self_key: Optional[tuple] = None,
@@ -525,6 +535,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     # Phase 1：解析所有 target ID
     resolved = []
     for c in raw_citations:
+        _require_citation_offsets(c)
         ctype = c.get("citation_type", "decision")
         if ctype == "authority":
             auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
@@ -546,64 +557,38 @@ def ingest_citations(conn, source_id: int, clean_text: str,
         current_ids: set = set()
         with conn.cursor() as cur:
             for ctype, target, c in resolved:
-                ms = c.get("match_start")
+                ms, me = _require_citation_offsets(c)
                 tct = c.get("target_case_type")   # target_case_type
                 tdt = c.get("doc_type")            # target_doc_type
 
                 if ctype == "authority":
-                    if ms is not None:
-                        cur.execute("""
-                            INSERT INTO citations
-                              (source_id, target_authority_id, raw_match, match_start, match_end, snippet)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source_id, target_authority_id, match_start) DO UPDATE
-                              SET snippet   = EXCLUDED.snippet,
-                                  match_end = EXCLUDED.match_end,
-                                  raw_match = EXCLUDED.raw_match
-                            RETURNING id
-                        """, (source_id, target, c["raw_match"], ms, c["match_end"], c["snippet"]))
-                    else:
-                        cur.execute("""
-                            INSERT INTO citations
-                              (source_id, target_authority_id, raw_match, match_start, match_end, snippet)
-                            VALUES (%s, %s, %s, NULL, NULL, %s)
-                            ON CONFLICT (source_id, target_authority_id, raw_match)
-                              WHERE match_start IS NULL DO UPDATE
-                              SET snippet = EXCLUDED.snippet
-                            RETURNING id
-                        """, (source_id, target, c["raw_match"], c["snippet"]))
+                    cur.execute("""
+                        INSERT INTO citations
+                          (source_id, target_authority_id, raw_match, match_start, match_end, snippet)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (source_id, target_authority_id, match_start) DO UPDATE
+                          SET snippet   = EXCLUDED.snippet,
+                              match_end = EXCLUDED.match_end,
+                              raw_match = EXCLUDED.raw_match
+                        RETURNING id
+                    """, (source_id, target, c["raw_match"], ms, me, c["snippet"]))
                 else:  # decision
                     target_canonical_id = _get_decision_canonical_id(conn, target)
-                    if ms is not None:
-                        cur.execute("""
-                            INSERT INTO citations
-                              (source_id, target_id, target_canonical_id, raw_match, match_start, match_end, snippet,
-                               target_case_type, target_doc_type)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source_id, target_id, match_start) DO UPDATE
-                              SET snippet          = EXCLUDED.snippet,
-                                  match_end        = EXCLUDED.match_end,
-                                  raw_match        = EXCLUDED.raw_match,
-                                  target_canonical_id = EXCLUDED.target_canonical_id,
-                                  target_case_type = EXCLUDED.target_case_type,
-                                  target_doc_type  = EXCLUDED.target_doc_type
-                            RETURNING id
-                        """, (source_id, target, target_canonical_id, c["raw_match"], ms, c["match_end"], c["snippet"],
-                              tct, tdt))
-                    else:
-                        cur.execute("""
-                            INSERT INTO citations
-                              (source_id, target_id, target_canonical_id, raw_match, match_start, match_end, snippet,
-                               target_case_type, target_doc_type)
-                            VALUES (%s, %s, %s, %s, NULL, NULL, %s, %s, %s)
-                            ON CONFLICT (source_id, target_id, raw_match)
-                              WHERE match_start IS NULL DO UPDATE
-                              SET snippet          = EXCLUDED.snippet,
-                                  target_canonical_id = EXCLUDED.target_canonical_id,
-                                  target_case_type = EXCLUDED.target_case_type,
-                                  target_doc_type  = EXCLUDED.target_doc_type
-                            RETURNING id
-                        """, (source_id, target, target_canonical_id, c["raw_match"], c["snippet"], tct, tdt))
+                    cur.execute("""
+                        INSERT INTO citations
+                          (source_id, target_id, target_canonical_id, raw_match, match_start, match_end, snippet,
+                           target_case_type, target_doc_type)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (source_id, target_id, match_start) DO UPDATE
+                          SET snippet          = EXCLUDED.snippet,
+                              match_end        = EXCLUDED.match_end,
+                              raw_match        = EXCLUDED.raw_match,
+                              target_canonical_id = EXCLUDED.target_canonical_id,
+                              target_case_type = EXCLUDED.target_case_type,
+                              target_doc_type  = EXCLUDED.target_doc_type
+                        RETURNING id
+                    """, (source_id, target, target_canonical_id, c["raw_match"], ms, me, c["snippet"],
+                          tct, tdt))
 
                 row = cur.fetchone()
                 if row:

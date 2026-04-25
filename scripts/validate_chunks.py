@@ -195,7 +195,7 @@ def process_decision(conn, decision_id: int) -> list[dict]:
     cites = conn.execute(
         "SELECT id, match_start, match_end, target_id, target_authority_id, "
         "       raw_match, snippet "
-        "FROM citations WHERE source_id = %s AND match_start IS NOT NULL "
+        "FROM citations WHERE source_id = %s "
         "ORDER BY match_start",
         (decision_id,)
     ).fetchall()
@@ -277,7 +277,6 @@ def main():
                 FROM citations c
                 JOIN decisions d ON d.id = c.source_id
                 WHERE d.case_type = %s
-                  AND c.match_start IS NOT NULL
                   AND d.clean_text IS NOT NULL
                 GROUP BY c.source_id
                 HAVING COUNT(*) BETWEEN 3 AND 8

@@ -257,7 +257,7 @@ def process_decision(conn, decision_id: int) -> int:
 
     cites = conn.execute(
         "SELECT id, match_start, match_end, target_id, target_authority_id, snippet "
-        "FROM citations WHERE source_id = %s AND match_start IS NOT NULL "
+        "FROM citations WHERE source_id = %s "
         "ORDER BY match_start",
         (decision_id,)
     ).fetchall()
@@ -350,14 +350,13 @@ def main():
         query_params = {"date_from": date_from, "date_to": date_to}
         print(f"月份 filter：{date_from} ~ {date_to}")
 
-    # 全量：找所有有 positioned citations 的 source decisions
+    # 全量：找所有有 citations 的 source decisions
     if args.resume:
         source_query = f"""
             SELECT DISTINCT c.source_id
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
-            WHERE c.match_start IS NOT NULL
-              AND d.clean_text IS NOT NULL
+            WHERE d.clean_text IS NOT NULL
               AND NOT EXISTS (
                   SELECT 1 FROM chunks cc WHERE cc.decision_id = c.source_id
               )
@@ -381,8 +380,7 @@ def main():
             SELECT DISTINCT c.source_id
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
-            WHERE c.match_start IS NOT NULL
-              AND d.clean_text IS NOT NULL
+            WHERE d.clean_text IS NOT NULL
               {date_filter}
             ORDER BY c.source_id
         """
@@ -395,8 +393,7 @@ def main():
             SELECT DISTINCT c.source_id
             FROM citations c
             JOIN decisions d ON d.id = c.source_id
-            WHERE c.match_start IS NOT NULL
-              AND d.clean_text IS NOT NULL
+            WHERE d.clean_text IS NOT NULL
             ORDER BY c.source_id
         """
 

@@ -2,11 +2,18 @@
 
 A citation-based legal search engine that helps lawyers find authoritative court holdings faster, with an AI-assisted flow that clarifies legal intent before analysis.
 
-**🔗 [Live Demo](https://lawcidity.rachel-create.com/)**
+**🔗 [Demo Page](https://lawcidity.rachel-create.com/)**
 
 > Try these searches:
 > - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」
 > - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」
+
+## TL;DR
+
+- **Problem**: Lawyers need authoritative precedents for specific legal questions
+- **Approach**: Rank precedents by citation patterns, not just text similarity
+- **Stack**: FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS
+- **Highlights**: Custom citation parser • Keyword search 73s → 2-4s • RAG retrieval 4700ms → 20ms • Offline-evaluated embedding selection (voyage-law-2)
 
 ## Why Citations?
 
