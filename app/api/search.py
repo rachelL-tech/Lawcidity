@@ -223,7 +223,6 @@ def analyze_generate(req: GenerateRequest):
             rag_results = rag_search(
                 conn,
                 req.query,
-                case_type=req.case_type,
                 top=req.top,
             )
         except RuntimeError as e:
@@ -247,7 +246,6 @@ def analyze_generate(req: GenerateRequest):
             display_title=r["display_title"],
             doc_type=r["doc_type"],
             decision_date=r["decision_date"],
-            case_type=r["case_type"],
             score=r["score"],
             sim=r["sim"],
             chunk_count=r["chunk_count"],

@@ -275,7 +275,6 @@ CREATE TABLE chunks (
   start_offset        INT NOT NULL,
   end_offset          INT NOT NULL,
   chunk_text          TEXT NOT NULL,
-  case_type           TEXT,
   embedding           vector(1024),         -- pgvector 語意向量（voyage-law-2，由 embed_and_index.py 填充）
   created_at          TIMESTAMPTZ DEFAULT now()
 );

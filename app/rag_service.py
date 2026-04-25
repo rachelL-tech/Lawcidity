@@ -50,7 +50,7 @@ def _vec_to_pg(vec: np.ndarray) -> str:
 CHUNK_SELECT = """
     cc.id AS chunk_id, cc.decision_id, cc.chunk_index,
     cc.citation_id, cc.target_id, cc.target_authority_id,
-    cc.case_type, cc.chunk_text,
+    cc.chunk_text,
     d.root_norm, d.display_title, d.doc_type, d.decision_date,
     d.total_citation_count,
     cc.embedding <=> %s::vector AS distance
@@ -59,13 +59,10 @@ CHUNK_SELECT = """
 
 def _knn(
     conn: psycopg.Connection, vec_str: str,
-    *, case_type: str | None, limit: int = 50,
+    *, limit: int = 50,
 ) -> list[dict]:
     where = ["cc.embedding IS NOT NULL"]
     params: list = [vec_str]
-    if case_type:
-        where.append("cc.case_type = %s")
-        params.append(case_type)
     params.extend([vec_str, limit])
 
     return conn.execute(f"""
@@ -117,7 +114,6 @@ def _aggregate(
             "display_title": best["display_title"],
             "doc_type": best["doc_type"],
             "decision_date": str(best["decision_date"]) if best.get("decision_date") else None,
-            "case_type": best["case_type"],
             "score": best["score"],
             "sim": best["sim"],
             "chunk_count": len(dec_chunks),
@@ -136,13 +132,12 @@ def rag_search(
     conn: psycopg.Connection,
     query: str,
     *,
-    case_type: str | None = None,
     top: int = 20,
 ) -> list[dict]:
     vec = embed_query(query)
     vec_str = _vec_to_pg(vec)
 
-    knn_rows = _knn(conn, vec_str, case_type=case_type, limit=50)
+    knn_rows = _knn(conn, vec_str, limit=50)
 
     results = _aggregate(knn_rows, top=top)
 

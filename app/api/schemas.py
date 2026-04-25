@@ -168,7 +168,6 @@ class RagResultItem(BaseModel):
     display_title: str
     doc_type: str | None
     decision_date: str | None
-    case_type: str | None
     score: float
     sim: float
     chunk_count: int
@@ -198,7 +197,6 @@ class GenerateRequest(BaseModel):
     query: str
     issues: list[str] = []
     statutes: list[AnalyzeStatute] = []
-    case_type: str | None = None
     top: int = 10
 
 
