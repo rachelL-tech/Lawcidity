@@ -163,7 +163,6 @@ class RagResultTarget(BaseModel):
 
 
 class RagResultItem(BaseModel):
-    type: str                   # "citation" | "supreme" | "supreme+citation"
     decision_id: int
     root_norm: str
     display_title: str
@@ -172,9 +171,7 @@ class RagResultItem(BaseModel):
     case_type: str | None
     score: float
     sim: float
-    statute_hit: bool
     chunk_count: int
-    chunk_types: list[str]
     best_chunk_text: str
     targets: list[RagResultTarget]
 

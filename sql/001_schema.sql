@@ -50,12 +50,6 @@ CREATE TABLE court_units (
 
 CREATE UNIQUE INDEX court_units_unit_uniq          ON court_units(unit_norm);
 
--- 可選索引（地圖 / 行政區篩選；目前 MVP 預設不建立）
--- CREATE INDEX        court_units_root_idx            ON court_units(root_norm);
--- CREATE INDEX        court_units_county_district_idx ON court_units(county, district);
--- CREATE INDEX        court_units_geo_idx             ON court_units(lat, lon);
-
-
 -- =========================
 -- 2) 判決節點（decisions = citation graph 唯一節點）
 --
@@ -126,13 +120,6 @@ CREATE INDEX decisions_canonical_idx  ON decisions(canonical_id);
 -- ingest 熱路徑：_set_canonical_id subquery + upsert_target_placeholder jid IS NOT NULL lookup
 CREATE INDEX decisions_case_lookup_idx ON decisions(unit_norm, jyear, jcase_norm, jno);
 
--- 現階段不必要的查詢索引（可日後補建）
--- CREATE INDEX decisions_ref_key_idx    ON decisions(ref_key);
--- CREATE INDEX decisions_root_year_idx  ON decisions(root_norm, jyear);
--- CREATE INDEX decisions_date_idx       ON decisions(decision_date);
--- CREATE INDEX decisions_title_trgm     ON decisions USING GIN (title gin_trgm_ops);
--- CREATE INDEX decisions_cleantext_trgm ON decisions USING GIN (clean_text gin_trgm_ops);
-
 -- =========================
 -- 3) 裁判外權威資料（會議決議、釋字、法律座談會等）
 --    doc_type 值：決議 / 釋字 / 法律座談會 / 研審小組意見 / 聯席會議決議
@@ -151,11 +138,6 @@ CREATE TABLE authorities (
   UNIQUE (doc_type, ref_key)
 );
 
--- 可選索引（authority 多維篩選；目前 MVP 預設不建立）
--- CREATE INDEX authorities_doctype_idx ON authorities(doc_type);
--- CREATE INDEX authorities_root_idx    ON authorities(root_norm);
-
-
 -- =========================
 -- 4) 引用邊（source -> target）
 --    source_id / target_id → decisions（citation graph 唯一節點）
@@ -172,8 +154,8 @@ CREATE TABLE citations (
   target_authority_id BIGINT          REFERENCES authorities(id) ON DELETE CASCADE,
 
   raw_match   TEXT NOT NULL,
-  match_start INT,    -- 在 source decision.clean_text 的起點（PDF 折行無法定位時為 NULL）
-  match_end   INT,
+  match_start INT NOT NULL,    -- 在 source decision.clean_text 的起點
+  match_end   INT NOT NULL,
   snippet     TEXT,
 
   target_case_type TEXT,  -- 快取：目標的案件類型（民事/刑事/行政）
@@ -187,22 +169,13 @@ CREATE TABLE citations (
   )
 );
 
--- 判決引用去重（match_start IS NOT NULL）
+-- 判決引用去重
 CREATE UNIQUE INDEX citations_uniq
   ON citations(source_id, target_id, match_start);
 
--- authority 引用去重（match_start IS NOT NULL）
+-- authority 引用去重
 CREATE UNIQUE INDEX citations_authority_uniq
   ON citations(source_id, target_authority_id, match_start);
-
--- match_start IS NULL 去重用 partial unique index
-CREATE UNIQUE INDEX citations_null_match_decision_uniq
-  ON citations(source_id, target_id, raw_match)
-  WHERE match_start IS NULL;
-
-CREATE UNIQUE INDEX citations_null_match_authority_uniq
-  ON citations(source_id, target_authority_id, raw_match)
-  WHERE match_start IS NULL;
 
 CREATE INDEX citations_target_idx       ON citations(target_id);
 CREATE INDEX citations_target_canonical_source_idx
@@ -288,14 +261,9 @@ CREATE TABLE ingest_error_log (
 );
 
 CREATE INDEX ingest_error_log_folder_idx   ON ingest_error_log(folder_name);
--- 可選索引（resolved 狀態看板；目前 MVP 預設不建立）
--- CREATE INDEX ingest_error_log_resolved_idx ON ingest_error_log(resolved);
-
 
 -- =========================
--- 9) 語意搜尋 chunks
---    chunk_type = 'citation_context'  : 引用前後文脈絡（由 etl/build_citation_chunks.py 填充）
---    chunk_type = 'supreme_reasoning' : 最高法院理由段（由 etl/build_supreme_chunks.py 填充）
+-- 9) 語意搜尋 chunks（引用前後文脈絡，由 etl/build_citation_chunks.py 填充）
 -- =========================
 CREATE TABLE chunks (
   id                  BIGSERIAL PRIMARY KEY,
@@ -308,18 +276,10 @@ CREATE TABLE chunks (
   end_offset          INT NOT NULL,
   chunk_text          TEXT NOT NULL,
   case_type           TEXT,
-  chunk_type          TEXT NOT NULL DEFAULT 'citation_context',  -- 'citation_context' | 'supreme_reasoning'
   embedding           vector(1024),         -- pgvector 語意向量（voyage-law-2，由 embed_and_index.py 填充）
   created_at          TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE UNIQUE INDEX cc_decision_citation_uniq ON chunks(decision_id, citation_id)
-  WHERE chunk_type = 'citation_context';
-CREATE UNIQUE INDEX cc_supreme_uniq ON chunks(decision_id, chunk_index)
-  WHERE chunk_type = 'supreme_reasoning';
+CREATE UNIQUE INDEX cc_decision_citation_uniq ON chunks(decision_id, citation_id);
 CREATE INDEX        cc_decision_chunk_idx     ON chunks(decision_id, chunk_index);
-CREATE INDEX        cc_citation_context_citation_idx ON chunks(citation_id)
-  WHERE chunk_type = 'citation_context' AND embedding IS NOT NULL;
--- HNSW index 在 embed_and_index.py 跑完後另行執行（見 sql/002_pgvector_migration.sql）
--- CREATE INDEX cc_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)
---   WITH (m = 16, ef_construction = 64);
+CREATE INDEX        cc_citation_idx           ON chunks(citation_id) WHERE embedding IS NOT NULL;

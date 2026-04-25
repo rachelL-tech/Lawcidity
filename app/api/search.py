@@ -218,16 +218,12 @@ def analyze_generate(req: GenerateRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不可為空")
 
-    statutes = [(s.law, s.article) for s in req.statutes]
-
     with get_conn() as conn:
         try:
             rag_results = rag_search(
                 conn,
                 req.query,
-                issues=req.issues,
                 case_type=req.case_type,
-                statutes=statutes,
                 top=req.top,
             )
         except RuntimeError as e:
@@ -246,7 +242,6 @@ def analyze_generate(req: GenerateRequest):
 
     items = [
         RagResultItem(
-            type=r["type"],
             decision_id=r["decision_id"],
             root_norm=r["root_norm"],
             display_title=r["display_title"],
@@ -255,9 +250,7 @@ def analyze_generate(req: GenerateRequest):
             case_type=r["case_type"],
             score=r["score"],
             sim=r["sim"],
-            statute_hit=r["statute_hit"],
             chunk_count=r["chunk_count"],
-            chunk_types=r["chunk_types"],
             best_chunk_text=r["best_chunk_text"],
             targets=[
                 RagResultTarget(
