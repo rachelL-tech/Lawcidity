@@ -13,7 +13,7 @@ A citation-based legal search engine that helps lawyers find authoritative court
 - **Problem**: Lawyers need authoritative precedents for specific legal questions
 - **Approach**: Rank precedents by citation patterns, not just text similarity
 - **Stack**: FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS
-- **Highlights**: Custom citation parser • Keyword search 73s → 2-4s • RAG retrieval 4700ms → 20ms • Offline-evaluated embedding selection (voyage-law-2)
+- **Highlights**: Custom citation parser • Keyword search 73s → 2-4s • Offline-evaluated embedding selection (voyage-law-2)
 
 ## Why Citations?
 
@@ -91,7 +91,7 @@ For a detailed version, see [er-diagram-detail.png](frontend/public/er-diagram-d
 |---|---|---|
 | `decisions` | 1.4M | Source and target court decisions with normalized metadata |
 | `citations` | 552K | Source → target citation relationships with full-text positions |
-| `chunks` | 575K | Embedding chunks (citation-context + supreme reasoning) |
+| `chunks` | 575K | Embedding chunks anchored to citation references |
 | `decision_reason_statutes` | 6.6M | Statute references extracted from decision reasoning sections |
 | `citation_snippet_statutes` | 458K | Statute references within citation snippets |
 | `authorities` | 1.6K | Other cited legal documents that are not court decisions, stored separately from `decisions` |
@@ -161,25 +161,9 @@ A case number in a court decision is not always a legal citation — it may refe
 
 **User flow.** The user describes a legal situation in natural language. Gemini extracts candidate legal issues and statutes, the user confirms which to keep, and the confirmed inputs drive both retrieval and AI-generated analysis.
 
-**Dual-path retrieval.** A single semantic search misses results that are topically relevant but not close enough in embedding space — especially when the user has specific statutes in mind. To address this, retrieval runs two paths:
+**Retrieval.** The user's query is embedded via Voyage API (voyage-law-2), then searched against pgvector using IVFFlat approximate nearest-neighbor search, returning the top 50 chunks ranked by cosine similarity. Results are aggregated to the decision level — each decision's score is determined by its best-matching chunk.
 
-- **Path A (semantic):** pgvector ivfflat approximate nearest-neighbor search for the top 50 chunks most similar to the user's query embedding.
-- **Path B (statute-guided):** finds chunks whose associated citations or decisions reference the user's confirmed statutes, then computes vector distances for all matching chunks without filtering any out.
-
-The two paths are merged by chunk ID. Each chunk is scored as cosine similarity plus a statute-match boost.
-
-<!-- placeholder: Path A / Path B 合流示意圖——
-     Path A：query embedding → ANN search → top 50 chunks
-     Path B：confirmed statutes → SQL filter → 全部 matching chunks → vector distance
-     兩路以 chunk ID merge，加分後排序輸出。
-
-     下方補 scoring 公式：score = cosine_similarity + statute_match_boost，
-     說明 boost 值與觸發條件。 -->
-
-**Chunk design.** Chunks are not arbitrary text splits — they are structured around two types of high-value legal text:
-
-- **Citation-context chunks:** text surrounding a citation reference in lower-court decisions. Each chunk is anchored to a specific citation and carries a link to the cited target. Boundaries expand outward from the citation position to the nearest section markers (㈠㈡㈢, ⒈⒉⒊, 一二三、, etc.); if the resulting span exceeds 2,000 characters, the boundary falls back to sentence endings (。). Hard limits prevent the chunk from extending before the reasoning section header or past the closing dateline (中華民國...). Overlapping chunks from adjacent citations are merged.
-- **Supreme-reasoning chunks:** complete reasoning sections from Supreme Court decisions. These chunks have no specific citation target — they represent the court's own legal reasoning. The reasoning section start is detected in priority order: 得心證之理由 → 本院判斷 → 惟查 → 經查 → 理由 section header. The section is then split by major section markers (一、二、壹、貳、); segments exceeding 2,000 characters are hard-split at sentence boundaries.
+**Chunk design.** Chunks are not arbitrary text splits — they are anchored to citation references. Each chunk is centered on a citation position in a court decision and carries a link to the cited target. Boundaries expand outward from the citation to the nearest section markers (㈠㈡㈢, ⒈⒉⒊, 一二三、, etc.); if the resulting span exceeds 2,000 characters, the boundary falls back to sentence endings (。). Hard limits prevent the chunk from extending before the reasoning section header or past the closing dateline (中華民國...). Overlapping chunks from adjacent citations are merged.
 
 <!-- placeholder: Chunk 邊界切割示意圖——
      用一段真實判決書原文，標出：
@@ -202,17 +186,6 @@ Text-level deduplication (via md5 hashing) ensures identical chunks are only emb
 
 voyage-law-2 led on avg gap (+18% over Qwen3, +15% over voyage-4-large) and won on all 6 targets individually. Its Recall@5 is slightly lower (0.882 vs 0.938), but the larger gap means its ranking is more stable — related snippets score further above unrelated ones even when not all land in the top 5. voyage-law-2 was selected for its legal-domain specialization and superior score separation.
 
-**Path B SQL optimization.** Path B was initially the dominant latency source within RAG retrieval:
-
-| Chunk type | Before | After |
-|---|---|---|
-| citation_context | ~4,700ms | ~20ms |
-| supreme_reasoning | ~2,100ms | ~50ms |
-
-The key optimizations: for citation_context, restructuring the query to let statute filtering happen before the vector scan (preventing the planner from going through the vector index first and returning empty). For supreme_reasoning, switching from a large decision_id universe join to an EXISTS-first approach since the chunk universe is much smaller. Additional SQL-level changes included CTE restructuring and selectivity-aware join ordering.
-
-After optimization, SQL is no longer the bottleneck in the RAG pipeline — the dominant costs are now Gemini generation and Voyage embedding.
-
 ---
 
 ## Development Journey
@@ -225,8 +198,8 @@ Nine weeks of iterative development, from raw court documents to a working searc
 | **2. Keyword search** | Feb 25 – Mar 3 | OpenSearch vs PostgreSQL GIN benchmark, IK → 2-gram ngram migration, citation expansion scoring |
 | **3. API & frontend** | Mar 5–13 | REST API with SQL aggregation, React search UI with filters, Docker + EC2 deployment |
 | **4. Parser refactor** | Mar 14–21 | Rewrote citation parser into traceable functions, tightened false positive rules, sibling citation dedup |
-| **5. Semantic search & RAG** | Mar 22–27 | Multi-round embedding evaluation, citation-context + supreme reasoning chunks, dual-path retrieval, Gemini AI analysis |
-| **6. Optimization & deploy** | Mar 26–30 | RAG merge layer optimization, chunk dedup, issue-based embedding search, HTTPS production deployment |
+| **5. Semantic search & RAG** | Mar 22–27 | Multi-round embedding evaluation, citation-context chunks, semantic retrieval, Gemini AI analysis |
+| **6. Optimization & deploy** | Mar 26–30 | Chunk dedup, HTTPS production deployment |
 | **7. Search & retrieval optimization** | Apr 7–19 | Source-target window index, step-down msm ladder, single ranking path across query shapes, rerank cache, citation preview optimization |
 
 ---
