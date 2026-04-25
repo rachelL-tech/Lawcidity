@@ -15,9 +15,68 @@ A citation-based legal search engine that helps lawyers find authoritative court
 - **Stack**: FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS
 - **Highlights**: Custom citation parser • Keyword search 73s → 2-4s • Offline-evaluated embedding selection (voyage-law-2)
 
+## How a Court Decision Becomes Data
+
+<!-- placeholder: 標註過的判決書截圖——
+     在一份真實判決書上標出：
+     - 這份判決 = source
+     - 理由段中「最高法院 88 年台上字第 5678 號」= target
+     - 包含該案號的那段文字 = citation (snippet)
+     - 「民法第 184 條」= statute
+     - chunk 的範圍（snippet 往外擴展到小節符的區域） -->
+
+| Term | Meaning |
+|---|---|
+| **decision** | A court decision (判決/裁定) — the node in the citation graph |
+| **authority** | A non-decision legal source (司法院釋字, 決議, etc.) — also a node, only appears as a target |
+| **source** | A decision that cites another |
+| **target** | A decision or authority being cited |
+| **citation** | A source → target reference, with the surrounding text (snippet) |
+| **chunk** | A snippet-anchored text segment, embedded for semantic search |
+| **statute** | A law article (e.g. 民法第184條) referenced in the text |
+
+### From JSON to structured tables
+
+```
+Judicial Yuan JSON → parse → decisions (source)
+                       ↓
+                  extract citations → decisions (target placeholders)
+                                    → authorities (non-decision targets)
+                                    → citations (source → target + snippet)
+                       ↓
+                  extract statutes → citation_snippet_statutes
+                                   → decision_reason_statutes
+                       ↓
+                  build chunks → chunks (snippet-anchored segments)
+                       ↓
+                  sync to OpenSearch → decisions_v3 (source decisions)
+                                     → source_target_windows_v2
+                                         (source-target pairs with citation snippets)
+                       ↓
+                  embed chunks → pgvector (voyage-law-2)
+```
+
+**Example: 臺灣臺北地方法院 114 年度訴字第 374 號判決**
+
+**Step 1 — Ingest decision.** The raw JSON from the Judicial Yuan contains metadata (court, case number, date) and the full text. The parser normalizes the court name, extracts case type (民事), and stores it as a row in `decisions`. This decision is a **source** — it cites other decisions.
+
+**Step 2 — Extract citations.** The citation parser scans the full text for case number patterns. When it finds「最高法院 88 年台上字第 5678 號」, it creates:
+- A `decisions` row for the **target** — initially a placeholder with no full text, only the normalized case number. If this target is later ingested from the Judicial Yuan data, the placeholder is upgraded to a full decision (and may itself become a source).
+- A `citations` row linking source → target, storing the surrounding text as the snippet.
+
+If the reference is to a non-decision source like「司法院釋字第 748 號」, the target goes into `authorities` — a separate table for non-decision sources, since the Judicial Yuan does not provide their full text.
+
+**Step 3 — Extract statutes.** Statute references (e.g.「民法第 184 條」) are extracted from two places: within citation snippets → `citation_snippet_statutes`, and from the decision's full text → `decision_reason_statutes`.
+
+**Step 4 — Build chunks.** For each citation in this decision, a chunk is cut from the text surrounding the citation snippet position. Boundaries expand to the nearest section markers; overlapping chunks are merged. Each chunk links back to its citation and target.
+
+**Step 5 — Index and embed.** Decisions, citation snippets, and authorities are synced to OpenSearch for keyword search. Separately, chunks are embedded via Voyage API (voyage-law-2) and stored in pgvector for semantic search.
+
+---
+
 ## Why Citations?
 
-During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. When I extracted citation relationships and examined the text surrounding each reference, a pattern emerged: **sources that cite the same target use nearly identical language — the citation appears in the same legal context every time**, which means the target represents a stable, established holding on a specific sub-issue.
+During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. When I extracted citation relationships and examined the text surrounding each reference (the citation snippet), a pattern emerged: **citation snippets from different sources citing the same target are nearly identical — each represents a stable, established holding on a specific sub-issue.** For lawyers, this is directly useful: the target provides the authoritative holding, while the snippets show how other courts applied it to specific cases — both are essential for building arguments and assessing litigation risk.
 
 For example, searching「車禍」(traffic accident): the most-cited target appears across dozens of sources, and every snippet discusses the definition of「突發狀況」(sudden circumstances). The second most-cited target's snippets all address「逃逸」(fleeing the scene). Each top target maps to one specific legal question — not vague thematic similarity, but the same holding cited in the same way.
 
@@ -130,6 +189,25 @@ A case number in a court decision is not always a legal citation — it may refe
 
 ### Keyword search: retrieval and ranking
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant OpenSearch
+    participant PostgreSQL
+
+    User->>Frontend: keywords + statutes + case type
+    Frontend->>Backend: POST /search
+    Backend->>OpenSearch: Stage 1: match_phrase on decisions_v3
+    OpenSearch-->>Backend: source_ids
+    Backend->>OpenSearch: Stage 2: composite agg on source_target_windows_v2 (step-down MSM)
+    OpenSearch-->>Backend: target rankings
+    Backend->>PostgreSQL: fetch target metadata
+    PostgreSQL-->>Backend: display info
+    Backend-->>Frontend: ranked targets + preview source_ids
+```
+
 **How search works today.** The pipeline has two OpenSearch stages:
 
 - **Stage 1 — source recall.** The query is tokenized against `decisions_v3` using a 2-gram ngram analyzer and matched with `match_phrase`, so the 2-grams must appear contiguously in the decision text (this avoids coincidental substring hits that pure ngram matching would produce). Returns a set of source IDs — decisions that might cite something relevant.
@@ -158,6 +236,34 @@ A case number in a court decision is not always a legal citation — it may refe
 | Citation expansion | 13–16s | ~0.8–1.0s |
 
 ### RAG search: retrieval and generation
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant Gemini
+    participant Voyage
+    participant pgvector
+    participant PostgreSQL
+
+    User->>Frontend: case description
+    Frontend->>Backend: POST /analyze
+    Backend->>Gemini: extract issues + statutes
+    Gemini-->>Backend: issues, statutes
+    Backend-->>Frontend: candidate issues + statutes
+    User->>Frontend: confirm selection
+    Frontend->>Backend: POST /analyze/generate
+    Backend->>Voyage: embed query
+    Voyage-->>Backend: query vector
+    Backend->>pgvector: ANN top 50 chunks
+    pgvector-->>Backend: chunks + distances
+    Backend->>PostgreSQL: enrich target info
+    PostgreSQL-->>Backend: display info
+    Backend->>Gemini: generate analysis (chunks + issues + statutes)
+    Gemini-->>Backend: analysis text
+    Backend-->>Frontend: analysis + rag results
+```
 
 **User flow.** The user describes a legal situation in natural language. Gemini extracts candidate legal issues and statutes, the user confirms which to keep, and the confirmed inputs drive both retrieval and AI-generated analysis.
 
