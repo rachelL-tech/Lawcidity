@@ -439,13 +439,7 @@ function RagSourceCard({ item }) {
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <span
-              className={`px-2 py-0.5 rounded text-xs font-medium ${
-                item.type.includes("supreme")
-                  ? "bg-blue-50 text-blue-700"
-                  : "bg-brand-light text-brand"
-              }`}
-            >
+            <span className="px-2 py-0.5 rounded text-xs font-medium bg-brand-light text-brand">
               {item.root_norm}
             </span>
             <Link
@@ -459,7 +453,6 @@ function RagSourceCard({ item }) {
           </div>
           <div className="text-xs text-gray-400">
             相似度: {(item.sim * 100).toFixed(1)}%
-            {item.statute_hit && " · 法條命中"}
           </div>
         </div>
         <button
