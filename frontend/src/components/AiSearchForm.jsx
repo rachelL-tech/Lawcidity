@@ -8,8 +8,8 @@ import { analyze } from "../lib/api";
  * Props:
  *   onSubmit({ query, issues, statutes, case_type }) — 確認後觸發
  */
-export default function AiSearchForm({ onSubmit }) {
-  const [text, setText] = useState("");
+export default function AiSearchForm({ onSubmit, defaultText = "" }) {
+  const [text, setText] = useState(defaultText);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 

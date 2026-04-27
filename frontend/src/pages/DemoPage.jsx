@@ -37,6 +37,16 @@ const EMPTY_REQ = {
   page_size: 20,
 };
 
+const DEFAULT_KEYWORD_REQ = {
+  ...EMPTY_REQ,
+  keywords: ["殺人", "無罪"],
+  statutes: [{ law: "刑法", article: "271", sub_ref: null }],
+  case_types: ["刑事"],
+};
+
+const DEFAULT_AI_TEXT =
+  "我在十字路口等紅燈時，被後方車輛追撞，導致頸椎受傷。對方聲稱是煞車失靈，但我懷疑對方有超速的嫌疑。請問我可以向對方主張哪些賠償？對方是否構成過失傷害罪？";
+
 export default function DemoPage() {
   const [mode, setMode] = useState("keyword");
   const navigate = useNavigate();
@@ -72,11 +82,11 @@ export default function DemoPage() {
       {/* Search form */}
       {mode === "keyword" ? (
         <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-6">
-          <SearchForm initialReq={EMPTY_REQ} onSearch={handleSearch} />
+          <SearchForm initialReq={DEFAULT_KEYWORD_REQ} onSearch={handleSearch} />
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-6">
-          <AiSearchForm onSubmit={handleAiSubmit} />
+          <AiSearchForm onSubmit={handleAiSubmit} defaultText={DEFAULT_AI_TEXT} />
         </div>
       )}
     </div>
