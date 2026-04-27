@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import FilterChip from "./FilterChip";
 import LawCombobox from "./LawCombobox";
 
-const CASE_TYPES = ["民事", "刑事", "行政", "憲法"];
+const CASE_TYPES = ["民事", "刑事", "行政"];
 
 // 主要搜尋表單元件
 // Props:

@@ -130,6 +130,7 @@ def generate_analysis(
         )
         targets_block = f"\n[targets:\n{targets_lines}\n]" if targets_lines else ""
         header = (
+            f"[cite_type: source]\n"
             f"[source: {root_norm} {display_title}, decision_id={decision_id}]"
             f"{targets_block}"
         )
