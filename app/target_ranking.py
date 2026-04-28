@@ -33,6 +33,7 @@ COURT_LEVEL_MAP = {
 def _fetch_decision_target_metadata(
     conn: psycopg.Connection,
     target_ids: list[int],
+    source_ids: list[int],
 ) -> dict[int, dict[str, Any]]:
     if not target_ids:
         return {}
@@ -50,13 +51,20 @@ def _fetch_decision_target_metadata(
             canonical.jno,
             canonical.display_title,
             COALESCE(canonical.canonical_doc_type, canonical.doc_type) AS doc_type,
-            canonical.total_citation_count
+            canonical.total_citation_count,
+            COALESCE(mc.cnt, 0) AS matched_citation_count
         FROM raw_targets rt
         JOIN decisions td ON td.id = rt.raw_target_id
         JOIN decisions canonical ON canonical.id = COALESCE(td.canonical_id, td.id)
+        LEFT JOIN LATERAL (
+            SELECT COUNT(DISTINCT c.source_id)::int AS cnt
+            FROM citations c
+            WHERE c.target_canonical_id = canonical.id
+              AND c.source_id = ANY(%(source_ids)s::bigint[])
+        ) mc ON true
     """
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, {"target_ids": target_ids})
+        cur.execute(sql, {"target_ids": target_ids, "source_ids": source_ids})
         rows = cur.fetchall()
 
     return {
@@ -71,6 +79,7 @@ def _fetch_decision_target_metadata(
             "display_title": row["display_title"],
             "doc_type": row["doc_type"],
             "total_citation_count": int(row["total_citation_count"] or 0),
+            "matched_citation_count": int(row["matched_citation_count"]),
         }
         for row in rows
     }
@@ -79,6 +88,7 @@ def _fetch_decision_target_metadata(
 def _fetch_authority_target_metadata(
     conn: psycopg.Connection,
     authority_ids: list[int],
+    source_ids: list[int],
 ) -> dict[int, dict[str, Any]]:
     if not authority_ids:
         return {}
@@ -89,12 +99,19 @@ def _fetch_authority_target_metadata(
             a.root_norm AS court,
             a.display AS display_title,
             a.doc_type,
-            a.total_citation_count
+            a.total_citation_count,
+            COALESCE(mc.cnt, 0) AS matched_citation_count
         FROM authorities a
+        LEFT JOIN LATERAL (
+            SELECT COUNT(DISTINCT c.source_id)::int AS cnt
+            FROM citations c
+            WHERE c.target_authority_id = a.id
+              AND c.source_id = ANY(%(source_ids)s::bigint[])
+        ) mc ON true
         WHERE a.id = ANY(%(authority_ids)s::bigint[])
     """
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, {"authority_ids": authority_ids})
+        cur.execute(sql, {"authority_ids": authority_ids, "source_ids": source_ids})
         rows = cur.fetchall()
 
     return {
@@ -109,6 +126,7 @@ def _fetch_authority_target_metadata(
             "display_title": row["display_title"],
             "doc_type": row["doc_type"],
             "total_citation_count": int(row["total_citation_count"] or 0),
+            "matched_citation_count": int(row["matched_citation_count"]),
         }
         for row in rows
     }
@@ -144,8 +162,8 @@ def fetch_target_rankings_by_relevance(
         elif kind == "authority":
             authority_ids.append(raw_id)
 
-    decision_meta = _fetch_decision_target_metadata(conn, decision_ids)
-    authority_meta = _fetch_authority_target_metadata(conn, authority_ids)
+    decision_meta = _fetch_decision_target_metadata(conn, decision_ids, source_ids)
+    authority_meta = _fetch_authority_target_metadata(conn, authority_ids, source_ids)
 
     rankings: list[dict[str, Any]] = []
     for raw, kind, raw_id in parsed_raw_rows:
@@ -168,7 +186,7 @@ def fetch_target_rankings_by_relevance(
                 "display_title": meta.get("display_title"),
                 "doc_type": meta.get("doc_type"),
                 "total_citation_count": int(meta.get("total_citation_count") or 0),
-                "matched_citation_count": int(raw["matched_citation_count"]),
+                "matched_citation_count": int(meta.get("matched_citation_count") or 0),
                 "reached_at_msm": int(raw["reached_at_msm"]),
                 "preview_source_ids": list(raw["preview_source_ids"]),
             }
