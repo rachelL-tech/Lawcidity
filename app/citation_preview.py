@@ -191,14 +191,12 @@ def fetch_citation_preview_rows(
                 LEFT JOIN excluded e ON e.source_id = c.source_id
                 WHERE {target_filter}
                   AND e.source_id IS NULL
-                ORDER BY c.source_id, c.id
+                ORDER BY c.source_id DESC, c.id
+                LIMIT %(limit)s
             )
             SELECT deduped.citation_id
             FROM deduped
-            JOIN decisions src ON src.id = deduped.source_id
-            LEFT JOIN court_units cu ON cu.id = src.court_unit_id
-            ORDER BY cu.level ASC NULLS LAST, deduped.source_id DESC
-            LIMIT %(limit)s
+            ORDER BY deduped.source_id DESC
         """
         rows_sql = """
             WITH candidate_ids AS (
