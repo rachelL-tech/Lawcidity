@@ -326,6 +326,15 @@ def search_target_rankings_step_down(
         )
         for target_uid, stats in level.items():
             if target_uid in pool:
+                existing = pool[target_uid]["preview_source_ids"]
+                if len(existing) < 5:
+                    seen = set(existing)
+                    for sid in stats["preview_source_ids"]:
+                        if sid not in seen:
+                            existing.append(sid)
+                            seen.add(sid)
+                        if len(existing) >= 5:
+                            break
                 continue
             pool[target_uid] = {
                 **stats,
