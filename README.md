@@ -1,19 +1,83 @@
 # Lawcidity
 
-A citation-based legal search engine that helps lawyers find authoritative court holdings faster, with an AI-assisted flow that clarifies legal intent before analysis.
+**PageRank for Taiwan court decisions.** A citation-based search engine that surfaces the precedents courts actually rely on — not just documents that mention the search terms — with keyword (OpenSearch) and semantic search (RAG) modes.
 
 **🔗 [Demo Page](https://lawcidity.rachel-create.com/)**
 
 > Try these searches:
-> - **Keyword search**: keyword「行車紀錄器」「車禍」＋ statute「刑法」「284」
+> - **Keyword search**: keyword「殺人」(homicide)「無罪」(not guilty) ＋ statute「刑法」(Criminal Code)「271」
 > - **RAG search**: 「如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？」
+>   *(If I'm riding a scooter and the other party stages a collision, but I have no dashcam, how do I argue I wasn't at fault?)*
+
+## What You Get
+
+**Keyword search**
+- Input: keyword(s) + optional statute + case type
+- Output: ranked list of precedents (targets) by citation count — expand any precedent to see how source decisions quote it (snippets), then drill into a source decision's full text.
+
+**Semantic search (RAG)**
+- Input: natural language description of a legal situation
+- Output: Gemini-extracted issues and statutes → AI-generated analysis per issue, with decisions ranked by semantic similarity to citation-anchored chunks.
 
 ## TL;DR
 
-- **Problem**: Lawyers need authoritative precedents for specific legal questions
-- **Approach**: Rank precedents by citation patterns, not just text similarity
+- **Problem**: Traditional legal search has two blind spots:
+  1. **Positional blindness** — full-text search checks whether a keyword appears *anywhere* in the document, but ignores *where*. In court decisions, different sections carry different weight (court's own reasoning > party's arguments). Full-text search treats them equally.
+  2. **Lexical gap** — the same legal concept can be phrased in many ways. If the lawyer doesn't pick the exact keyword the court used, relevant decisions are missed.
+
+- **Approach**:
+  1. **Citation-based ranking** — use citations as importance signals: extract what each decision (source) cites (targets) and the surrounding text (snippets), then rank by citation frequency (73s → 2–4s).
+  2. **RAG-based semantic search** — vectorize queries and citation-anchored chunks, enabling retrieval by meaning rather than exact keyword match.
+
 - **Stack**: FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS
-- **Highlights**: Custom citation parser • Keyword search 73s → 2-4s • Offline-evaluated embedding selection (voyage-law-2)
+
+## Why Citations?
+
+Legal citations work like academic citations — and in theory, like PageRank: a decision cited by many others is likely foundational. Citation count is a reasonable authority proxy.
+
+You'd expect the surrounding text of each citation (the snippet) to be noisy — dozens of different courts, different cases, different facts, all citing the same target for different reasons. But while working as a legal intern, I found the opposite: **snippets from different sources pointing to the same target are nearly identical.** Each high-citation target doesn't just happen to be popular — it establishes one or a few specific legal rules, and every source quotes it in the same way.
+
+For example, running a keyword search for「車禍」(traffic accident) in Lawcidity: the most-cited target appears across dozens of sources, and every snippet discusses the definition of「突發狀況」(sudden circumstances). The second most-cited target's snippets all address「逃逸」(fleeing the scene). Each top target consistently maps to one or a few closely related legal questions — not vague thematic similarity, but the same holding cited in the same way.
+
+This makes citation count a semantic signal, not just a popularity signal. A highly-cited target under a specific keyword isn't just frequently mentioned — it's the established answer to the legal question that keyword raises. Full-text search finds decisions that *mention* the same words; citation ranking finds decisions that *settle* the legal question. The retrieval strategy follows: find all decisions matching a keyword or statute (**sources**), identify what they commonly cite (**targets**), and rank by citation count. Targets rank higher when their snippets match more of the search keywords — if the keyword appears in the same snippet as the citation, it means the source cited that target specifically while discussing that legal question, not for some other reason.
+
+<!-- placeholder: 「車禍」實際 snippet 對比——
+     並排 3–4 個來自不同 source 的 citation snippet，
+     它們引用同一個 target，且文字幾乎一樣（都在講突發狀況定義）。
+     視覺上直接說明「相同 target → 相同法律脈絡」的假說。 -->
+![](frontend/public/why_citations_snippet.png)
+
+The same citation structure also powers semantic search. Citation snippets concentrate the most legally relevant text in a decision — the court's own reasoning at the moment of citation. Using these snippets as anchors for text chunks means the embedded segments are inherently high-signal, making them better retrieval targets for vector search than arbitrary splits of the full document.
+
+---
+
+## Features
+
+### Keyword Search
+
+(1) Enter keywords like「車禍」(traffic accident) or「行車紀錄器」(dashcam). You can also optionally add a statute using autocomplete (e.g.「刑法」*Criminal Code* +「284」) or filter by case type (e.g.「刑事」*criminal*).
+
+![](frontend/public/gif/keyword-1-input.gif)
+
+(2) Sort by relevance or citation count; filter by documentation type and court level.
+
+![](frontend/public/gif/keyword-2-sort-filter.gif)
+
+(3) Click a target to see matched and unmatched citation snippets, then drill into the full decision with jump-to-snippet.
+
+![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
+
+### RAG Search
+
+(1) Describe a case in natural language → Gemini extracts legal issues and statutes → confirm before submitting.
+
+![](frontend/public/gif/rag-1-analyze.gif)
+
+(2) Browse Gemini-generated analysis per issue with supporting decisions; click a source (orange) to open the full decision or a target (gray) to see citation counts.
+
+![](frontend/public/gif/rag-2-analysis-page.gif)
+
+---
 
 ## How a Court Decision Becomes Data
 
@@ -27,13 +91,13 @@ A citation-based legal search engine that helps lawyers find authoritative court
 
 | Term | Meaning |
 |---|---|
-| **decision** | A court decision (判決/裁定) — the node in the citation graph |
-| **authority** | A non-decision legal source (司法院釋字, 決議, etc.) — also a node, only appears as a target |
+| **decision** | A court decision (判決 *judgment* / 裁定 *ruling*) — the node in the citation graph |
+| **authority** | A non-decision legal source (司法院釋字 *Constitutional Interpretation*, 決議 *resolution*, etc.) — also a node, only appears as a target |
 | **source** | A decision that cites another |
 | **target** | A decision or authority being cited |
 | **citation** | A source → target reference, with the surrounding text (snippet) |
 | **chunk** | A snippet-anchored text segment, embedded for semantic search |
-| **statute** | A law article (e.g. 民法第184條) referenced in the text |
+| **statute** | A law article (e.g. 民法第184條 *Civil Code Art. 184*) referenced in the text |
 
 ### From JSON to structured tables
 
@@ -56,65 +120,21 @@ Judicial Yuan JSON → parse → decisions (source)
                   embed chunks → pgvector (voyage-law-2)
 ```
 
-**Example: 臺灣臺北地方法院 114 年度訴字第 374 號判決**
+**Example: 臺灣臺北地方法院 114 年度訴字第 374 號判決** *(Taipei District Court, Case 114-Su-374)*
 
-**Step 1 — Ingest decision.** The raw JSON from the Judicial Yuan contains metadata (court, case number, date) and the full text. The parser normalizes the court name, extracts case type (民事), and stores it as a row in `decisions`. This decision is a **source** — it cites other decisions.
+**Step 1 — Ingest decision.** The raw JSON from the Judicial Yuan contains metadata (court, case number, date) and the full text. The parser normalizes the court name, extracts case type (民事 *civil*), and stores it as a row in `decisions`. This decision is a **source** — it cites other decisions.
 
-**Step 2 — Extract citations.** The citation parser scans the full text for case number patterns. When it finds「最高法院 88 年台上字第 5678 號」, it creates:
-- A `decisions` row for the **target** — initially a placeholder with no full text, only the normalized case number. If this target is later ingested from the Judicial Yuan data, the placeholder is upgraded to a full decision (and may itself become a source).
+**Step 2 — Extract citations.** The citation parser scans the full text for case number patterns. When it finds「最高法院 88 年台上字第 5678 號」(*Supreme Court, 88-Tai-Shang-5678*), it creates:
+- A `decisions` row. This decision is a **target** — initially a placeholder with no full text, only the normalized case number. If this target is later ingested from the Judicial Yuan data, the placeholder is upgraded to a full decision (and may itself become a source).
 - A `citations` row linking source → target, storing the surrounding text as the snippet.
 
-If the reference is to a non-decision source like「司法院釋字第 748 號」, the target goes into `authorities` — a separate table for non-decision sources, since the Judicial Yuan does not provide their full text.
+If the reference is to a non-decision source like「司法院釋字第 748 號」(*Constitutional Interpretation No. 748*), the target goes into `authorities` — a separate table for non-decision sources, since the Judicial Yuan does not provide their full text.
 
-**Step 3 — Extract statutes.** Statute references (e.g.「民法第 184 條」) are extracted from two places: within citation snippets → `citation_snippet_statutes`, and from the decision's full text → `decision_reason_statutes`.
+**Step 3 — Extract statutes.** Statute references (e.g.「民法第 184 條」*Civil Code Art. 184*) are extracted from two places: within citation snippets → `citation_snippet_statutes`, and from the decision's full text → `decision_reason_statutes`.
 
 **Step 4 — Build chunks.** For each citation in this decision, a chunk is cut from the text surrounding the citation snippet position. Boundaries expand to the nearest section markers; overlapping chunks are merged. Each chunk links back to its citation and target.
 
 **Step 5 — Index and embed.** Decisions, citation snippets, and authorities are synced to OpenSearch for keyword search. Separately, chunks are embedded via Voyage API (voyage-law-2) and stored in pgvector for semantic search.
-
----
-
-## Why Citations?
-
-During a legal internship, I noticed that similar cases consistently cite the same precedents as their legal basis. When I extracted citation relationships and examined the text surrounding each reference (the citation snippet), a pattern emerged: **citation snippets from different sources citing the same target are nearly identical — each represents a stable, established holding on a specific sub-issue.** For lawyers, this is directly useful: the target provides the authoritative holding, while the snippets show how other courts applied it to specific cases — both are essential for building arguments and assessing litigation risk.
-
-For example, searching「車禍」(traffic accident): the most-cited target appears across dozens of sources, and every snippet discusses the definition of「突發狀況」(sudden circumstances). The second most-cited target's snippets all address「逃逸」(fleeing the scene). Each top target maps to one specific legal question — not vague thematic similarity, but the same holding cited in the same way.
-
-This became the core retrieval strategy — find all decisions containing a keyword or statute (**sources**), identify the decisions they commonly cite (**targets**), and rank by citation count.
-
-<!-- placeholder: 「車禍」實際 snippet 對比——
-     並排 3–4 個來自不同 source 的 citation snippet，
-     它們引用同一個 target，且文字幾乎一樣（都在講突發狀況定義）。
-     視覺上直接說明「相同 target → 相同法律脈絡」的假說。 -->
-![](frontend/public/why_citations_snippet.png)
-
----
-
-## Features
-
-### Keyword Search
-
-(1) Enter keywords like "車禍" or "行車紀錄器". You can also optionally add a statute using autocomplete (e.g. "刑法" + "284") or filter by case type (e.g. "刑事").
-
-![](frontend/public/gif/keyword-1-input.gif)
-
-(2) Sort by relevance or citation count; filter by documentation type and court level.
-
-![](frontend/public/gif/keyword-2-sort-filter.gif)
-
-(3) Click a target to see matched and unmatched citation snippets, then drill into the full decision with jump-to-snippet.
-
-![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
-
-### RAG Search
-
-(1) Describe a case in natural language → Gemini extracts legal issues and statutes → confirm before submitting.
-
-![](frontend/public/gif/rag-1-analyze.gif)
-
-(2) Browse Gemini-generated analysis per issue with supporting decisions; click a source (orange) to open the full decision or a target (gray) to see citation counts.
-
-![](frontend/public/gif/rag-2-analysis-page.gif)
 
 ---
 
@@ -171,9 +191,9 @@ For a detailed version, see [er-diagram-detail.png](frontend/public/er-diagram-d
 
 ### Citation parsing
 
-A case number in a court decision is not always a legal citation — it may refer to an attachment, a procedural history, or a summary of another ruling. Citations do not always appear with clear signals like「最高法院…判決意旨參照」; often only a bare case number is mentioned, so the extraction regex must be broad enough to catch them — which inevitably pulls in many false positives.
+A case number in a court decision is not always a legal citation — it may refer to an attachment, a procedural history, or a summary of another ruling. Citations do not always appear with clear signals like「最高法院…判決意旨參照」(*see Supreme Court ... decision*); often only a bare case number is mentioned, so the extraction regex must be broad enough to catch them — which inevitably pulls in many false positives.
 
-**Why this is hard:** There is no universal rule for identifying false positives. Even within the court's own reasoning section, a case number may appear as evidence on file (「有該裁定在卷可參」), as prior case history (「判決上訴駁回確定」), or as a party's argument being summarized rather than the court's own citation. If these false positives are not filtered early, they propagate into the citation index and degrade both retrieval quality and query speed downstream.
+**Why this is hard:** There is no universal rule for identifying false positives. Even within the court's own reasoning section, a case number may appear as evidence on file (「有該裁定在卷可參」*"said ruling is on file for reference"*), as prior case history (「判決上訴駁回確定」*"appeal dismissed, judgment finalized"*), or as a party's argument being summarized rather than the court's own citation. If these false positives are not filtered early, they propagate into the citation index and degrade both retrieval quality and query speed downstream.
 
 <!-- placeholder A: 判決書原文截圖（左）vs 解析後結果（右）——
      左側：真實原文，密密麻麻、充滿 \n 和空格、案號夾在句子中間，
@@ -213,7 +233,7 @@ sequenceDiagram
 - **Stage 1 — source recall.** The query is tokenized against `decisions_v3` using a 2-gram ngram analyzer and matched with `match_phrase`, so the 2-grams must appear contiguously in the decision text (this avoids coincidental substring hits that pure ngram matching would produce). Returns a set of source IDs — decisions that might cite something relevant.
 - **Stage 2 — target ranking.** `source_target_windows_v2` stores one doc per (source, target) citation pair, pre-loaded with the citation snippet text and cited statutes. Stage 2 filters that index by the Stage 1 source IDs and runs a composite aggregation bucketed by `target_uid`; each bucket is one cited target. Metadata for the final top-K is fetched from PostgreSQL.
 
-**Why two stages.** The original pipeline did everything in PostgreSQL: an ILIKE scan over every decision's `clean_text` to recall sources, then another ILIKE scan over each recalled source's citation snippets to score targets. A broad query like「詐欺」took ~73 seconds.
+**Why two stages.** The original pipeline did everything in PostgreSQL: an ILIKE scan over every decision's `clean_text` to recall sources, then another ILIKE scan over each recalled source's citation snippets to score targets. A broad query like「詐欺」(fraud) took ~73 seconds.
 
 *Stage 1 — moving full-text source recall to OpenSearch.* PostgreSQL GIN was the natural first candidate, but OpenSearch was 27× faster on cited-decision retrieval with less than a third of the index size. IK segmentation wasn't predictable on legal vocabulary, so tokenization became 2-gram ngram + match_phrase. At this point, per-target scoring was still a PostgreSQL ILIKE over the citation snippets of each recalled source — fast enough while the source count per query was moderate.
 
@@ -231,7 +251,7 @@ sequenceDiagram
 
 | Operation | Before | After |
 |---|---|---|
-| Keyword search (「詐欺」) | ~73s | 2–4s |
+| Keyword search (「詐欺」*fraud*) | ~73s | 2–4s |
 | Rerank | ~1.27s | ~0.04s (cache hit: <1ms) |
 | Citation expansion | 13–16s | ~0.8–1.0s |
 
@@ -269,7 +289,7 @@ sequenceDiagram
 
 **Retrieval.** The user's query is embedded via Voyage API (voyage-law-2), then searched against pgvector using IVFFlat approximate nearest-neighbor search, returning the top 50 chunks ranked by cosine similarity. Results are aggregated to the decision level — each decision's score is determined by its best-matching chunk.
 
-**Chunk design.** Chunks are not arbitrary text splits — they are anchored to citation references. Each chunk is centered on a citation position in a court decision and carries a link to the cited target. Boundaries expand outward from the citation to the nearest section markers (㈠㈡㈢, ⒈⒉⒊, 一二三、, etc.); if the resulting span exceeds 2,000 characters, the boundary falls back to sentence endings (。). Hard limits prevent the chunk from extending before the reasoning section header or past the closing dateline (中華民國...). Overlapping chunks from adjacent citations are merged.
+**Chunk design.** Chunks are not arbitrary text splits — they are anchored to citation references. Each chunk is centered on a citation position in a court decision and carries a link to the cited target. Boundaries expand outward from the citation to the nearest section markers (㈠㈡㈢, ⒈⒉⒊, 一二三、, etc.); if the resulting span exceeds 2,000 characters, the boundary falls back to sentence endings (。). Hard limits prevent the chunk from extending before the reasoning section header or past the closing dateline (中華民國… *Republic of China [date]*). Overlapping chunks from adjacent citations are merged.
 
 <!-- placeholder: Chunk 邊界切割示意圖——
      用一段真實判決書原文，標出：
