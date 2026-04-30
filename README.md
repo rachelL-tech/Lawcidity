@@ -55,6 +55,25 @@ The same citation structure also powers semantic search. Citation snippets conce
 
 ### Keyword Search
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant OpenSearch
+    participant PostgreSQL
+
+    User->>Frontend: keywords + statutes + case type
+    Frontend->>Backend: POST /search
+    Backend->>OpenSearch: Stage 1: match_phrase on decisions_v3
+    OpenSearch-->>Backend: source_ids
+    Backend->>OpenSearch: Stage 2: composite agg on source_target_windows_v2 (step-down MSM)
+    OpenSearch-->>Backend: target rankings
+    Backend->>PostgreSQL: fetch target metadata
+    PostgreSQL-->>Backend: display info
+    Backend-->>Frontend: ranked targets + preview source_ids
+```
+
 (1) Enter keywords like「車禍」(traffic accident) or「行車紀錄器」(dashcam). You can also optionally add a statute using autocomplete (e.g.「刑法」*Criminal Code* +「284」) or filter by case type (e.g.「刑事」*criminal*).
 
 ![](frontend/public/gif/keyword-1-input.gif)
@@ -68,6 +87,34 @@ The same citation structure also powers semantic search. Citation snippets conce
 ![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
 
 ### RAG Search
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant Gemini
+    participant Voyage
+    participant pgvector
+    participant PostgreSQL
+
+    User->>Frontend: case description
+    Frontend->>Backend: POST /analyze
+    Backend->>Gemini: extract issues + statutes
+    Gemini-->>Backend: issues, statutes
+    Backend-->>Frontend: candidate issues + statutes
+    User->>Frontend: confirm selection
+    Frontend->>Backend: POST /analyze/generate
+    Backend->>Voyage: embed query
+    Voyage-->>Backend: query vector
+    Backend->>pgvector: ANN top 50 chunks
+    pgvector-->>Backend: chunks + distances
+    Backend->>PostgreSQL: enrich target info
+    PostgreSQL-->>Backend: display info
+    Backend->>Gemini: generate analysis (chunks + issues + statutes)
+    Gemini-->>Backend: analysis text
+    Backend-->>Frontend: analysis results
+```
 
 (1) Describe a case in natural language → Gemini extracts legal issues and statutes → confirm before submitting.
 
@@ -209,25 +256,6 @@ A case number in a court decision is not always a legal citation — it may refe
 
 ### Keyword search: retrieval and ranking
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Frontend
-    participant Backend
-    participant OpenSearch
-    participant PostgreSQL
-
-    User->>Frontend: keywords + statutes + case type
-    Frontend->>Backend: POST /search
-    Backend->>OpenSearch: Stage 1: match_phrase on decisions_v3
-    OpenSearch-->>Backend: source_ids
-    Backend->>OpenSearch: Stage 2: composite agg on source_target_windows_v2 (step-down MSM)
-    OpenSearch-->>Backend: target rankings
-    Backend->>PostgreSQL: fetch target metadata
-    PostgreSQL-->>Backend: display info
-    Backend-->>Frontend: ranked targets + preview source_ids
-```
-
 **How search works today.** The pipeline has two OpenSearch stages:
 
 - **Stage 1 — source recall.** The query is tokenized against `decisions_v3` using a 2-gram ngram analyzer and matched with `match_phrase`, so the 2-grams must appear contiguously in the decision text (this avoids coincidental substring hits that pure ngram matching would produce). Returns a set of source IDs — decisions that might cite something relevant.
@@ -256,34 +284,6 @@ sequenceDiagram
 | Citation expansion | 13–16s | ~0.8–1.0s |
 
 ### RAG search: retrieval and generation
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Frontend
-    participant Backend
-    participant Gemini
-    participant Voyage
-    participant pgvector
-    participant PostgreSQL
-
-    User->>Frontend: case description
-    Frontend->>Backend: POST /analyze
-    Backend->>Gemini: extract issues + statutes
-    Gemini-->>Backend: issues, statutes
-    Backend-->>Frontend: candidate issues + statutes
-    User->>Frontend: confirm selection
-    Frontend->>Backend: POST /analyze/generate
-    Backend->>Voyage: embed query
-    Voyage-->>Backend: query vector
-    Backend->>pgvector: ANN top 50 chunks
-    pgvector-->>Backend: chunks + distances
-    Backend->>PostgreSQL: enrich target info
-    PostgreSQL-->>Backend: display info
-    Backend->>Gemini: generate analysis (chunks + issues + statutes)
-    Gemini-->>Backend: analysis text
-    Backend-->>Frontend: analysis + rag results
-```
 
 **User flow.** The user describes a legal situation in natural language. Gemini extracts candidate legal issues and statutes, the user confirms which to keep, and the confirmed inputs drive both retrieval and AI-generated analysis.
 
