@@ -211,7 +211,7 @@ def _aggregate_targets_at_msm(
     statute_filters: list[tuple[str, str | None, str | None]],
     minimum_should_match: int | None,
 ) -> dict[str, dict[str, Any]]:
-    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 target 統計，回傳 {target_uid: {matched_count, preview_source_ids}}。"""
+    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 target 統計，回傳 {target_uid: {preview_source_ids}}。"""
     client = _get_opensearch_client()
 
     index_name = "source_target_windows_v2"
@@ -268,10 +268,8 @@ def _aggregate_targets_at_msm(
                 # 如果 key(target_uid) 已經存在，就拿原本的 value；如果 key 不存在，就先建立一個預設 value，再回傳它
                 row = counts.setdefault(
                     target_uid,
-                    {"matched_citation_count": 0, "preview_source_ids": []},
+                    {"preview_source_ids": []},
                 )
-
-                row["matched_citation_count"] += int(bucket.get("doc_count") or 0)
 
                 if len(row["preview_source_ids"]) < 5:
                     source_buckets = (
