@@ -1,93 +1,93 @@
 # Lawcidity
 
-[繁體中文](README.zh-TW.md)
+[English](README.en.md) | [繁體中文](README.zh-TW.md)
 
-**A Taiwan court decision retrieval system built around citation relationships.**
+**「引用関係」に基づく台湾の裁判検索システム。**
 
-> From keywords and citation relationships to semantic understanding, Lawcidity helps users find the court views that truly carry precedential value.
+> キーワード検索、引用関係、そして意味理解まで。Lawcidity は、実務上本当に参照価値のある裁判所の見解を見つける手助けをします。
 
 **[Demo](https://lawcidity.rachel-create.com/)**
 
-> Try these searches:
-> - **Keyword search**: keywords `殺人` (`homicide`), `無罪` (`not guilty`) + statute `刑法` (`Criminal Code`), `271`
-> - **RAG search**: `如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？` ("If I was riding a scooter, the other party staged an accident, and I had no dashcam, how can I argue that I was not at fault?")
+> 次の検索を試せます。
+> - **キーワード検索**: キーワード `殺人`（殺人）, `無罪`（無罪） + 法条 `刑法`（刑法）, `271`
+> - **RAG検索**: `如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？`（「私がスクーターに乗っていて、相手が当たり屋だったが、ドライブレコーダーがない場合、どうすれば自分に過失がないと主張できるか」）
 
 ---
 
-## Project Snapshot
+## プロジェクト概要
 
-| Item | Details |
+| 項目 | 内容 |
 |---|---|
-| **Core idea** | Use **citation relationships** between decisions as the ranking signal, inspired by the core intuition behind PageRank, to surface legal views that courts repeatedly rely on |
-| **Search modes** | Keyword search (OpenSearch) + semantic search (RAG) |
-| **Data scale** | `1.4M` decisions, `552K` citations, `575K` chunks |
-| **Technical focus** | citation parsing, citation-based ranking, citation-anchored chunking |
-| **Performance result** | Keyword search improved from about `73s` to `2-4s` |
-| **Tech stack** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
+| **核となる発想** | 判決同士の **引用関係** をランキングの主軸にし、PageRank の発想を応用して、裁判所が繰り返し参照する法的見解を浮かび上がらせる |
+| **検索モード** | キーワード検索（OpenSearch）+ セマンティック検索（RAG） |
+| **データ規模** | `1.4M` 件の判決、`552K` citations、`575K` chunks |
+| **技術上の焦点** | 引用解析、引用ベースのランキング、引用位置をアンカーにしたチャンク分割 |
+| **性能改善** | キーワード検索を約 `73s` から `2-4s` に短縮 |
+| **技術スタック** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
 
 ---
 
-## What Problem Is This Project Solving?
+## このプロジェクトが解こうとしている問題
 
-Traditional legal search has two recurring blind spots:
+従来の法律検索には、主に二つの盲点があります。
 
-### 1. Ignoring positional signal
-Full-text search only checks whether a keyword appears in a document, not where it appears.
+### 1. 位置情報を無視
+全文検索は、キーワードが文書中に出現するかどうかしか見ず、どこに出現したかを見ません。
 
-But not every part of a court decision carries the same weight:
-- the court's own legal reasoning
-- the parties' arguments
-- procedural background
-- factual or evidentiary descriptions
+しかし、判決文の中では段落ごとの重要度は同じではありません。
+- 裁判所自身の法的理由付け
+- 当事者の主張
+- 手続の経過
+- 証拠や事実の記載
 
-Full-text search only checks whether the keyword appears, without considering the context in which it appears. In legal research, the same keyword hit is usually more valuable when it appears in the court's own reasoning.
+全文検索はキーワードが出てくるかどうかだけを見て、その前後の文脈を見ません。法律実務では、同じキーワードのヒットでも、裁判所自身の法的理由付けに現れる方が通常は参考価値が高くなります。
 
-### 2. Vocabulary mismatch
-The same legal concept is often expressed in different ways. For example:
-- `詐欺` (`fraud`) vs `詐騙` (`scam`)
-- `資遣` (`layoff`) vs `終止勞動契約` (`termination of an employment contract`)
+### 2. 用語のずれ
+同じ法的概念でも、表現の仕方が複数あります。たとえば、
+- `詐欺`（詐欺） vs `詐騙`（だまし）
+- `資遣`（整理解雇・レイオフ） vs `終止勞動契約`（労働契約の終了）
 
-If the user does not happen to use the same wording preferred by courts, a traditional keyword search can easily miss relevant decisions.
+利用者が入力した語が、判決で一般的に用いられる表現と一致しない場合、従来のキーワード検索では関連判決を取りこぼしやすくなります。
 
 ---
 
-## How Lawcidity Approaches It
+## Lawcidity のアプローチ
 
-| Mode | How it works | What it solves |
+| モード | 仕組み | 解決すること |
 |---|---|---|
-| **Keyword search** | First recall source decisions from full text, then use each source's citation snippets to find the targets they collectively point to, and rank those targets by citation strength | It does not just find decisions that mention the same words; it finds the decisions courts most often rely on when discussing that legal issue |
-| **Semantic search (RAG)** | Vectorize the user's query and citation-anchored chunks, then retrieve by semantic similarity | Reduces dependence on exact keyword overlap and instead finds similar cases through legal meaning |
+| **キーワード検索** | まず全文から関連する判決を拾い、その判決群が共通して引用している判決を集め、関連度と引用の多さで並べる | 単に「同じ語を含む判決」を探すのではなく、「その法律争点を論じる際に裁判所が最もよく引用する判決」を探す |
+| **セマンティック検索（RAG）** | 利用者のクエリと、引用付近から切り出した本文断片をベクトル化し、意味的類似度で再現する | 厳密なキーワード一致への依存を下げ、法的意味の近い事例を見つける |
 
 ---
 
-## Project Highlights
+## プロジェクトの見どころ
 
-- **Citation relationships are the core ranking signal.**  
-  The system moves beyond "which documents mention this term" to "which decisions courts actually use to resolve this legal issue."
+- **引用関係をランキングの中心に据えている。**  
+  「どの文書がこの語を含むか」から一歩進み、「どの判決がこの法的問題を処理するために実際に裁判所で使われているか」を見に行きます。
 
-- **It focuses on high-signal legal text.**  
-  By anchoring on citation positions, it targets the places where courts actually enter legal reasoning, which improves recall quality and semantic retrieval quality.
+- **高シグナルな法的テキストに焦点を当てている。**  
+  citation の位置を起点にすることで、裁判所が実際に法的理由付けに入る箇所を捉え、検索再現性とベクトル検索の質を高めています。
 
-- **It works on a real, large-scale court dataset.**  
-  The project handles public court decisions at scale, including citation parsing, false-positive filtering, OpenSearch index design, and performance optimization.
+- **実際の大規模裁判データを扱っている。**  
+  citation parsing、false positive の除去、OpenSearch の索引設計、性能最適化まで含めて、公開された実際の裁判データを処理しています。
 
-- **The performance gains are concrete.**  
-  Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can fall below `1 ms` on cache hits.
+- **性能改善が明確に出ている。**  
+  キーワード検索は約 `73 秒` から `2-4 秒` に短縮され、再ランキングはキャッシュヒット時に `1 ms` 未満まで下がります。
 
 ---
 
-## Feature Demo
+## 機能デモ
 
-### Keyword Search
+### キーワード検索
 
 ![Keyword Search](frontend/public/keyword_search_diagram.png)
 
-**What you can do:**
-- search with keywords such as `車禍` (`traffic accident`) and `行車紀錄器` (`dashcam`)
-- add statute filters such as `刑法` (`Criminal Code`) + `284`
-- further filter by case type, court level, and document type
-- inspect the context in which a target is cited by different sources
-- open the full source decision directly
+**できること:**
+- `車禍`（交通事故）や `行車紀錄器`（ドライブレコーダー）などのキーワードで検索
+- `刑法`（刑法）+ `284` のように法条条件を追加
+- 事件類型、裁判所レベル、文書種別で絞り込み
+- ある target が異なる source からどのような文脈で引用されているかを確認
+- source 判決の原文をそのまま開く
 
 ![](frontend/public/gif/keyword-1-input.gif)
 
@@ -95,14 +95,14 @@ If the user does not happen to use the same wording preferred by courts, a tradi
 
 ![](frontend/public/gif/keyword-3-snippets-and-decisions.gif)
 
-### RAG Search
+### RAG 検索
 
 ![RAG Search](frontend/public/RAG_search_diagram.png)
 
-**What you can do:**
-- describe the facts of a case in natural language
-- let Gemini extract candidate legal issues and statutes
-- confirm them and get issue-by-issue analysis grounded in court decisions
+**できること:**
+- 事案の事実関係を自然言語で入力
+- Gemini に候補となる法律争点と法条を抽出させる
+- 内容を確認したうえで、争点ごとの分析とそれを支える判決を得る
 
 ![](frontend/public/gif/rag-1-analyze.gif)
 
@@ -110,326 +110,344 @@ If the user does not happen to use the same wording preferred by courts, a tradi
 
 ---
 
-## Why Rank by Citation Relationships?
+## なぜ「引用関係」でランキングするのか
 
 ![Citation Concept](frontend/public/citation_concept.png)
 
-Legal citations work a lot like academic citations. Structurally, they are also close to the intuition behind **PageRank**:
+法律上の引用は学術論文の引用によく似ています。データ構造の観点から見ると、**PageRank** の直感にもかなり近いものです。
 
-> If a decision is cited frequently by other decisions, it usually carries real weight in practice.
+> ある判決が他の判決から頻繁に引用されているなら、実務上それなりの重みを持っている可能性が高い。
 
-During my internship at a law firm, I noticed that citation snippets from different **source decisions** pointing to the same **target decision** often contain highly similar language. That suggests a highly cited target is not merely being mentioned by chance. Rather, it has articulated one or more concrete legal positions, and different courts quote it in similar ways when handling similar issues.
+法律事務所でのインターン中、異なる **source decisions** から同じ **target decision** に向かう citation snippets に、非常によく似た文言が現れることに気づきました。これは、引用数の多い target が単に偶然多く言及されているのではなく、その判決自体が一つまたは複数の明確な法的見解を定立しており、類似した問題を扱う裁判所が似た形でそれを引用していることを示しています。
 
-For example, when searching for `車禍` (`traffic accident`):
-- the most-cited target is repeatedly cited in snippets about "sudden situations"
-- the second most-cited target is cited in snippets centered on "fleeing the scene"
+たとえば `車禍`（交通事故）で検索すると、
+- 最も多く引用される target は、「突発状況」に関する snippets で繰り返し現れる
+- 二番目に多い target は、「逃逸」に関する snippets に集中している
 
-This shows that courts repeatedly rely on the same legal view when dealing with the same legal issue.
+これは、裁判所が同じ法的問題を扱うとき、同じ法的見解を繰り返し援用していることを示しています。
 
 ![](frontend/public/why_citations_snippet.png)
 
-**So citation count reflects more than popularity. It also reflects the stable line of case law courts have formed around a particular issue.**
+**したがって、引用回数は単なる人気ではなく、特定の法的問題について裁判所が形成してきた安定した実務見解も反映します。**
 
-- Full-text search asks: which decisions **mention** the same term?
-- Citation ranking asks: which decisions are actually used by courts to resolve legal disputes related to that term?
+- 全文検索が問うのは: 同じ語を **言及している** 判決はどれか
+- 引用ランキングが問うのは: その語に関連する法的争点を処理するために、裁判所が実際に使っている判決はどれか
 
 ---
 
-## Terminology and Data Units
+## 用語とデータ単位
 
 ![Mark Terms](frontend/public/mark_terms.png)
 
-In practice, the system first uses case numbers mentioned in a decision to locate citation candidates, then uses surrounding context to determine whether they are true citations.
+実装上は、まず判決文中の案号を手がかりに citation 候補を特定し、その前後の文脈から真の引用かどうかを判定します。
 
-| Term | Meaning |
+| 用語 | 説明 |
 |---|---|
-| **decision** | A court decision, including both judgments and rulings; acts as a node in the citation graph |
-| **authority** | A non-decision legal authority, such as Constitutional Court interpretations or judicial resolutions; also treated as a node |
-| **source** | A decision that cites another decision or legal authority |
-| **target** | The decision or legal authority being cited |
-| **citation** | One citation record in which a source cites a target |
-| **citation snippet** | The local legal reasoning text around a citation, used to show the concrete context in which a target is cited |
-| **statute** | A statute mentioned in the full decision text or in a citation snippet, such as Civil Code Article 184 |
-| **chunk** | A text segment cut around a citation position and used as the retrieval unit for semantic search |
-| **embedding** | The vector representation of a chunk, used for semantic similarity search |
+| **decision** | 判決・裁定を含む裁判所の裁判文書。引用関係のグラフではノードとして扱う |
+| **authority** | 司法院釈字や決議など、裁判ではない法的権威資料。これもノードとして扱う |
+| **source** | 他の裁判や法的権威資料を引用する裁判 |
+| **target** | 引用される裁判または法的権威資料 |
+| **citation** | source が target を一度引用した記録 |
+| **citation snippet** | 各 citation の周辺にある法的理由付けの断片で、target がどの文脈で引用されたかを示す |
+| **statute** | 判決全文または citation snippet に現れる法条。たとえば民法第184条 |
+| **chunk** | citation の位置を起点に切り出されたテキスト単位で、セマンティック検索の検索単位になる |
+| **embedding** | chunk のベクトル表現で、意味的類似検索に用いる |
 
 ---
 
-## Search Performance and Optimization Results
+## 検索性能と最適化結果
 
-| Operation | Before | After |
+| 操作 | 改善前 | 改善後 |
 |---|---|---|
-| Keyword search (`詐欺` / `fraud`) | ~73s | 2-4s |
-| Reranking | ~1.27s | ~0.04s (`<1 ms` on cache hit) |
-| Citation expansion | 13-16s | ~0.8-1.0s |
+| キーワード検索（`詐欺` / fraud） | ~73s | 2-4s |
+| 再ランキング | ~1.27s | ~0.04s（キャッシュヒット時は `<1 ms`） |
+| 引用展開 | 13-16s | ~0.8-1.0s |
 
 ---
 
-## System Architecture
+## アーキテクチャ
 
 ![Architecture](frontend/public/Architecture.png)
 
-| Layer | Technology |
+| 層 | 技術 |
 |---|---|
-| Frontend | React 19, Tailwind CSS 4 |
-| Backend | FastAPI |
-| Keyword search | OpenSearch (2-gram ngram analyzer) |
-| Semantic search | pgvector (ivfflat) |
-| Database | PostgreSQL |
-| AI services | Gemini Flash, Voyage API (`voyage-law-2`) |
-| Deployment | AWS EC2, RDS, ALB, nginx |
+| フロントエンド | React 19, Tailwind CSS 4 |
+| バックエンド | FastAPI |
+| キーワード検索 | OpenSearch（2-gram ngram analyzer） |
+| セマンティック検索 | pgvector（ivfflat） |
+| データベース | PostgreSQL |
+| AI サービス | Gemini Flash, Voyage API（`voyage-law-2`） |
+| デプロイ | AWS EC2, RDS, ALB, nginx |
 
 ---
 
-## Data Source and Data Model
+## データソースとデータモデル
 
-### Data Source
-[Judicial Yuan Open Data Platform](https://opendata.judicial.gov.tw/)  
-Contains public Taiwan court decisions from January 2025 through January 2026.
+### データソース
+[司法院オープンデータプラットフォーム](https://opendata.judicial.gov.tw/)  
+2025 年 1 月から 2026 年 1 月までの公開裁判データを収録しています。
 
-Raw decision JSON example (original filename preserved):  
+Raw decision JSON example（元のファイル名はそのまま保持）:  
 [data/PCDV,113,訴,2272,20250210,1.json](data/PCDV,113,訴,2272,20250210,1.json)
 
-### Data Size
+### データ規模
 
-PostgreSQL: **17 GB** (RDS)  
-OpenSearch: **3.2 GB** (EC2)
+PostgreSQL: **17 GB**（RDS）  
+OpenSearch: **3.2 GB**（EC2）
 
-### ETL Flow
+### ETL フロー
 
 ![Flowchart](frontend/public/flow_chart.png)
 
-### PostgreSQL ER Diagram
+### PostgreSQL ER 図
 
 ![PostgreSQL ER Diagram](frontend/public/er-diagram.png)
 
-### Core Tables
+### 主要テーブル
 
-| Table | Rows | Description |
+| テーブル | 件数 | 説明 |
 |---|---|---|
-| `decisions` | 1.4M | Normalized court decision records, including both source and target decisions |
-| `citations` | 552K | Citation records from source to target, including citation snippets and citation positions in the full text |
-| `chunks` | 575K | Text segments anchored on citation positions, with embeddings, used for semantic search |
-| `decision_reason_statutes` | 6.6M | Statute references extracted from full decision texts |
-| `citation_snippet_statutes` | 458K | Statute references extracted from citation snippets |
-| `authorities` | 1.6K | Non-decision legal authorities such as Constitutional Court interpretations and judicial resolutions |
+| `decisions` | 1.4M | 正規化済みの裁判データ。source と target の両方を含む |
+| `citations` | 552K | source から target への引用記録。citation snippets と全文中の位置情報を含む |
+| `chunks` | 575K | citation 位置を起点に切り出したテキスト片。embedding を持ち、セマンティック検索に使用 |
+| `decision_reason_statutes` | 6.6M | 判決全文から抽出した法条引用 |
+| `citation_snippet_statutes` | 458K | citation snippets から抽出した法条引用 |
+| `authorities` | 1.6K | 司法院釈字や決議など、裁判ではない法的権威資料 |
 
-### OpenSearch Indexes and Document Structure
+### OpenSearch インデックスと文書構造
 
 ![OpenSearch Index](frontend/public/opensearch_index_documents.png)
 
-| Index | Documents | Size | Description |
+| インデックス | 文書数 | サイズ | 説明 |
 |---|---:|---:|---|
-| `decisions_v3` | 3.0M | 2.8 GB | Full-text keyword index used to first recall matching source IDs |
-| `source_target_windows_v2` | 997K | 456 MB | Source-target pair documents with citation snippets, used to identify highly relevant citation snippets among recalled sources and then recover the targets they collectively point to |
+| `decisions_v3` | 3.0M | 2.8 GB | 全文キーワード検索用のインデックス。まず条件に合う source IDs を再現するために使う |
+| `source_target_windows_v2` | 997K | 456 MB | citation snippets を持つ source-target ペア文書。再現された source 群から関連度の高い citation snippets を見つけ、その先にある target を取り出すために使う |
 
 ---
 
-## Key Technical Decisions
+## 主要な技術判断
 
 ### 1. Citation Parsing
 
 ![Raw JSON vs Parsed](frontend/public/raw_vs_parsed.png)
 
-**Cleaning and parsing**  
-Court decisions from the Judicial Yuan come as raw JSON. The full text is inconsistently formatted and mixed with whitespace and unstructured content, so it cannot be queried directly.
+**クリーニングと解析**  
+司法院が提供する裁判データは raw JSON で、全文の形式が一定せず、空白や非構造化内容も混ざっています。そのままでは検索に使えません。
 
 ![True vs False](frontend/public/true_vs_false.png)
 
-**The real difficulty**  
-Case numbers appearing in a decision do not automatically represent legal citations. They may instead refer to:
-- evidentiary references
-- procedural history
-- historical case records
-- case numbers mentioned in the parties' arguments
+**本当の難しさ**  
+判決文に現れる案号は、必ずしも法的引用を意味しません。たとえば、
+- 証拠への参照
+- 手続の経過
+- 過去事件の記録
+- 当事者の主張の中に出てくる案号
 
-Only when the court cites a prior decision as part of its own reasoning should that case number count as a true citation.
+などである可能性があります。
 
-For example, all of the following strings may be captured as citation candidates, but only some are true legal citations:
+裁判所が自らの法的理由付けの中で、先行判決を論拠として引用している場合に限って、それを真の citation とみなすべきです。
 
-- `按最高法院 112 年度台上字第 1234 號判決意旨……` ("According to the holding of Supreme Court Decision 112-Tai-Shang-1234 ...")
-- `本件前經最高法院 112 年度台上字第 1234 號判決發回更審` ("This case was previously remanded by Supreme Court Decision 112-Tai-Shang-1234")
-- `有臺灣高等法院 111 年度上字第 567 號裁定在卷可參` ("The Taiwan High Court Ruling 111-Shang-567 is in the record for reference")
+たとえば、次の文字列はいずれも citation 候補として拾われ得ますが、真の法的引用とは限りません。
 
-All three contain case numbers, but only the first is the court relying on an existing legal view. The latter two are merely procedural history or references to materials in the record.
+- `按最高法院 112 年度台上字第 1234 號判決意旨……`（「最高法院 112 年度台上字第 1234 號判決の趣旨によれば……」）
+- `本件前經最高法院 112 年度台上字第 1234 號判決發回更審`（「本件は以前、最高法院 112 年度台上字第 1234 號判決により差戻しとなった」）
+- `有臺灣高等法院 111 年度上字第 567 號裁定在卷可參`（「臺灣高等法院 111 年度上字第 567 號裁定が記録にあり参照できる」）
 
-**Approach**
-- add contextual filtering rules
-- separate extraction and filtering logic into smaller functions so each part can be tested and adjusted independently
+三つとも案号を含みますが、裁判所が既存の法的見解を援用しているのは最初の例だけで、後の二つは手続の経過や記録資料への言及にすぎません。
 
-At a high level, the workflow is:
+**アプローチ**
+- 前後文を見るためのルールを追加してフィルタする
+- 抽出とフィルタのロジックを小さな関数に分け、個別にテスト・調整できるようにする
+
+大まかな流れは次のとおりです。
 
 ```text
-1. Use a permissive regex to extract possible case-number candidates from the decision text
-2. Inspect the surrounding context and section position of each candidate
-3. Use that context to filter out procedural history, evidentiary references, party arguments, and other non-citation usages
-4. Treat the remaining candidates as citations
-5. Cut a legal reasoning snippet around each accepted citation
+1. 緩めの regex を使って、判決全文から案号候補を抽出する
+2. 各候補の前後文と段落位置を調べる
+3. その文脈に基づいて、手続の経過、証拠参照、当事者の主張など、真の引用ではない用法を除外する
+4. 残ったものを citation とみなす
+5. 受理された citation の周囲から法的理由付けの snippet を切り出す
 ```
 
-**Result**  
-The current pytest cases cover more than 27 edge cases drawn from real decisions, including:
-- filtering exhibits in the record
-- detecting procedural-history references
-- distinguishing party-argument sections from the court's own reasoning sections
+**結果**  
+現在の pytest テストケースは、実データから取った 27 件以上の edge cases をカバーしており、たとえば次のようなものがあります。
+- 記録中の証拠物の除外
+- 手続経過の検出
+- 当事者主張の段落と裁判所自身の理由付け段落の区別
 
 ---
 
-### 2. Keyword Search: Retrieval and Ranking
+### 2. キーワード検索: Retrieval と Ranking
 
 ![retrieval](frontend/public/retrieval.png)
 
-### Why split it into two stages?
+### なぜ二段階に分けるのか
 
-The earliest pipeline ran entirely in PostgreSQL:
-1. scan each decision's `clean_text` with `ILIKE` to recall sources
-2. scan each recalled source's `citation snippets`
-3. compute a snippet match score for each target
-4. rank targets by the total score
+初期のパイプラインはすべて PostgreSQL 上で処理していました。
+1. 各判決の `clean_text` を `ILIKE` で走査して source を再現
+2. 再現された source ごとに `citation snippets` を走査
+3. 各 target の snippet ヒットスコアを計算
+4. 合計スコアで target を並べる
 
-That works at smaller scale, but with broad queries such as `詐欺` (`fraud`), the first stage recalls a very large number of sources, and snippet scanning becomes the main bottleneck.
+この方法はデータ量が少ないうちは動きますが、`詐欺`（fraud）のような広いクエリでは、第一段階で非常に多くの source が再現され、snippet 走査がボトルネックになります。
 
 ### Stage 1: Source recall
 
-**Approach**  
-First find the source IDs whose full text matches the search conditions.
+**アプローチ**  
+まず、全文が検索条件に合う source IDs を見つけます。
 
-**Why not PostgreSQL GIN?**  
-In measurement, OpenSearch source recall was:
-- about **27 times faster**
-- less than **one third** of the index size
+**なぜ PostgreSQL GIN ではないのか**  
+測定では、OpenSearch の source recall は
+- 約 **27 倍** 高速
+- インデックスサイズは **3 分の 1 未満**
 
-**Chinese retrieval strategy**  
-The commonly used IK tokenizer in OpenSearch is mainly designed for simplified Chinese. Court decisions, however, contain a large amount of specialized legal vocabulary that is not covered by the tokenizer's dictionary, which made tokenization unstable.
+でした。
 
-The final choice was:
+**中国語テキストの検索戦略**  
+OpenSearch でよく使われる IK tokenizer は主に簡体字中国語向けです。一方、裁判文には tokenizer の辞書に載っていない専門的な法律語彙が大量に含まれ、分かち書きが安定しませんでした。
+
+最終的に選んだのは、
 
 **2-gram ngram + `match_phrase`**
 
-That means:
-- each document is split into overlapping 2-character pieces
-- `match_phrase` requires those pieces to appear contiguously and in order
+です。つまり、
+- 文書を重なり合う 2 文字単位に分割し
+- `match_phrase` でそれらが順序どおり連続して現れることを要求する
 
-This keeps keywords from being scattered across unrelated parts of a document while preserving near phrase-level precision.
+ことで、キーワードが文書の離れた場所に散ってヒットしてしまうのを防ぎつつ、フレーズに近い精度を維持しています。
 
 ### Stage 2: Target recall
 
-**Approach**  
-Within the set of sources recalled by Stage 1, inspect their citation snippets, keep the snippets that match the query conditions, and then count which targets those snippets collectively point to.
+**アプローチ**  
+Stage 1 で再現した source 群を対象に、それぞれの citation snippets を見て、検索条件にヒットした snippets だけを残し、それらが共通して指している target を数えます。
 
-**Why move this stage to OpenSearch too?**  
-In the earlier version, once Stage 1 returned source IDs, PostgreSQL had to scan the citation snippets one source at a time. Once the recalled source count reached the tens of thousands, performance also degraded sharply.
+**なぜこの段階も OpenSearch に移したのか**  
+初期版では、Stage 1 が source IDs を返した後、PostgreSQL が source ごとに citation snippets を順番に走査していました。再現 source 数が数万件規模になると、ここでも性能が大きく悪化しました。
 
-To solve this, I built the `source_target_windows_v2` index:
+そこで `source_target_windows_v2` index を作りました。
 
-- each document represents one `(source, target)` pair
-- all citation snippets and statute data for that pair are pre-stored together
-- keyword and statute matching on citation snippets can therefore be handled directly inside OpenSearch
+- 各文書は 1 組の `(source, target)` ペアを表す
+- そのペアに属する citation snippets と法条データをまとめて保持する
+- citation snippets に対するキーワード条件や法条条件の照合を OpenSearch 内で処理できる
 
-PostgreSQL is left with only the final metadata lookup and aggregation.
+ようにしています。
 
-*MSM ladder: layered collection of matched snippets*
+PostgreSQL は最後の metadata 取得と集計だけを担当します。
 
-Target collection in Stage 2 uses a step-down MSM ladder.
+*MSM ladder: ヒットした snippets を段階的に集める仕組み*
 
-MSM (`minimum_should_match`) controls how many query clauses a source-target pair must match in its citation snippets before it qualifies.
+Stage 2 の target 収集では、step-down 形式の MSM ladder を使います。
 
-A query clause can be:
-- a keyword, such as `過失` (`negligence`) or `車禍` (`traffic accident`)
-- a statute condition, such as Criminal Code Article 284 or Civil Code Article 185
+MSM（`minimum_should_match`）は、ある source-target ペアが citation snippets の中で何個の query clauses を満たせば条件適合とみなすかを制御します。
 
-For example, if a query contains 3 clauses, the system tries:
+query clause には、
+- `過失`（過失）や `車禍`（交通事故）のようなキーワード
+- 刑法第 284 条や民法第 185 条のような法条条件
+
+があります。
+
+たとえば query clauses が 3 個あるなら、システムは
 
 1. MSM = 3
 2. MSM = 2
 3. MSM = 1
 
-The pipeline starts at the strictest level, MSM = N, and progressively relaxes the condition until the candidate pool reaches 200 targets.
+の順に試します。
 
-Each target records the MSM level at which it first entered the pool, stored as `reached_at_msm`.
+最も厳しい MSM = N から始め、条件を徐々に緩めながら、候補プールが 200 個の target に達するまで集めます。
 
-This means:
-- if a target is recalled at the highest MSM level, it is more likely to match the user's search conditions precisely
-- if it only appears at a lower MSM level, its citation context is more loosely related to the query
+各 target には、最初にプールへ入った MSM レベルを `reached_at_msm` として記録します。
 
-### How are targets ranked?
+これはつまり、
+- 最も高い MSM レベルで再現された target ほど、利用者の検索条件により正確に対応している可能性が高い
+- より低い MSM レベルで初めて現れる target は、引用文脈との関連が相対的に弱い
+
+ということです。
+
+### target はどう並べるのか
 
 ![ranking](frontend/public/ranking.png)
 
-Target ranking is mainly based on two signals:
+target ranking は主に次の二つのシグナルに基づきます。
 
 1. **`reached_at_msm`**  
-   Targets first recalled at a higher MSM level are ranked first.
+   より高い MSM レベルで最初に再現された target を優先する
 
 2. **`matched_citation_count`**  
-   Within the same MSM level, targets are secondarily ranked by the number of distinct source decisions that point to them.
+   同じ MSM レベル内では、その target を指している distinct source 数で二次的に並べる
 
-In other words, Lawcidity is not just finding decisions that mention the searched keywords or statutes. It is asking:
+つまり Lawcidity が見ているのは、単に検索キーワードや法条を含む判決ではなく、
 
-> Within court reasoning that is relevant to the user's search conditions, which targets are repeatedly relied on by the largest number of courts?
+> 利用者の検索条件に関連する裁判所の理由付けの中で、どの target が最も多くの裁判所に繰り返し参照されているか
 
-### How is follow-up interaction latency reduced?
+という点です。
 
-**Ranking cache**  
-The first version cached only the Stage 1 source IDs. That meant users had to rerun Stage 2 whenever they:
-- changed the sort order
-- moved to another page
-- added filters
+### その後の操作の待ち時間をどう下げたか
 
-The later version caches the full target ranking order after the initial search, so subsequent interactions can be handled in memory.
+**ランキングキャッシュ**  
+最初の版では Stage 1 の source IDs しかキャッシュしていなかったため、利用者が
+- 並び替え条件を変える
+- ページを変える
+- 絞り込みを追加する
 
-**Faster citation expansion**  
-The earlier version rescored every matching snippet from every source in order to decide snippet order. The later version has OpenSearch return 5 representative source IDs during Stage 2, and PostgreSQL only scans those 5 sources to pick a representative citation.
+たびに Stage 2 を再実行する必要がありました。
 
-This reduced citation expansion time from about `3 seconds` to about `0.8 seconds`.
+後の版では、最初の検索時点で target ranking 全体をキャッシュし、その後の操作はメモリ上で処理できるようにしました。
 
-**SQL-level optimizations**  
-Other changes included:
-- refactoring `DISTINCT ON`
-- denormalization
-- adding indexes for high-frequency query columns
-- improving the query shapes for citation preview and reranking
+**引用展開の高速化**  
+以前は、すべての matching snippet を source ごとに再採点して snippet の表示順を決めていました。現在は Stage 2 の段階で OpenSearch が 5 件の代表的な source IDs を返し、PostgreSQL はその 5 source だけを見て代表的な citation を 1 件選びます。
+
+これにより、引用展開は約 `3 秒` から約 `0.8 秒` に短縮されました。
+
+**SQL レベルの最適化**  
+そのほかにも、
+- `DISTINCT ON` の書き直し
+- 非正規化
+- 高頻度に使う列へのインデックス追加
+- citation preview と reranking の query shape 改善
+
+を行っています。
 
 ---
 
-### 3. RAG Search: Retrieval and Generation
+### 3. RAG 検索: Retrieval と Generation
 
-### RAG Flow
-Users begin by describing their legal problem in natural language. Gemini first extracts candidate legal issues and relevant statutes. After the user confirms them, the system proceeds through the rest of the RAG pipeline:
+### RAG の流れ
+利用者はまず自然言語で法的問題を記述します。Gemini が候補となる法律争点と関連法条を抽出し、利用者が確認した後、残りの RAG pipeline に進みます。
 
 - **Query understanding**  
-  Structure the user's input into explicit legal issues and statute conditions, which then serve as structured input for generated analysis.
+  利用者入力を明示的な法律争点と法条条件に整理し、後続の生成分析に渡す構造化入力にする
 
 - **R — Retrieval**  
-  Convert the user's query into an embedding, retrieve the most semantically similar citation-anchored chunks from pgvector, and aggregate them at the decision level.
+  利用者クエリを embedding に変換し、pgvector から意味的に近い citation-anchored chunks を再現し、判決単位へ集約する
 
 - **A — Augmentation**  
-  Package the retrieved chunks, source decision metadata, and related target references into the prompt as context for downstream analysis.
+  再現された chunks、source 判決の metadata、関連 target references を prompt にまとめ、後続の分析の文脈として使う
 
 - **G — Generation**  
-  Gemini generates issue-by-issue analysis grounded in real court decisions returned by retrieval.
+  Gemini が retrieval で得た実際の判決を根拠に、争点ごとの分析を生成する
 
 ### Retrieval
-- convert the query into an embedding through the Voyage API (`voyage-law-2`)
-- run approximate search through PostgreSQL / pgvector with an IVFFlat index
-- return the top 50 most similar chunks by cosine similarity
-- aggregate the results to the decision level, using the highest-scoring chunk to represent the decision's score
+- Voyage API（`voyage-law-2`）で query を embedding に変換
+- PostgreSQL / pgvector の IVFFlat index で近似検索を実行
+- 余弦類似度で最も近い上位 50 chunks を返す
+- 判決単位に集約し、最も高得点の chunk をその判決の代表スコアとする
 
-### Chunk Design
+### Chunk 設計
 
-Each chunk is anchored on a citation position in the decision, rather than cut randomly from the full text. That ensures the text sent for embedding comes from places where the court is entering substantive legal reasoning and where the signal is strongest.
+各 chunk は全文を無作為に切るのではなく、判決中の citation 位置を基点に切り出します。これにより、embedding に送られるのは、裁判所が実質的な法的理由付けに入る箇所であり、シグナルの強いテキストになります。
 
-- **center point**: the citation position in the decision
-- **boundaries**: expand outward from the citation position to the nearest structural markers such as `㈠㈡㈢`, `⒈⒉⒊`, or `一二三` (Chinese numeral headings)
-- **overlength handling**: if the span exceeds 2,000 characters, fall back to sentence boundaries marked by `。` (the Chinese full stop)
-- **hard limits**: do not extend before the heading of the reasoning section, and do not extend past the date line at the end of the document
-- **overlap handling**: if neighboring citation-based chunks overlap, merge them; if two chunks are identical, deduplicate them with MD5 to avoid redundant embedding work
+- **中心点**: 判決中の citation 位置
+- **境界**: citation 位置から、最も近い構造マーカー `㈠㈡㈢`、`⒈⒉⒊`、`一二三` などまで広げる
+- **長すぎる場合**: 範囲が 2,000 文字を超えるときは、`。` を文境界として切り直す
+- **ハード制約**: 理由欄の見出しより前には伸ばさず、文末の日付行も越えない
+- **重複処理**: 隣接する citation 由来の chunks が重なれば統合し、完全に同一なら MD5 で重複除去して冗長な embedding を避ける
 
 ![Chunk Design](frontend/public/chunk_design.png)
 
-### Embedding Model Selection
+### Embedding モデル選定
 
-I ran three rounds of embedding model evaluation covering:
+embedding モデルは 3 ラウンド評価し、次を比較しました。
 
 - `BAAI bge-m3`
 - `Qwen3-Embedding (0.6B / 4B)`
@@ -438,15 +456,15 @@ I ran three rounds of embedding model evaluation covering:
 - `voyage-law-2`
 - `voyage-4-large`
 
-Each round used the same evaluation set:
-- 6 target decisions covering civil, criminal, administrative, and IP cases
-- the citation snippets that originally pointed to each target as the positive examples
-- 20 unrelated snippets added as negative examples
+各ラウンドでは同じ評価セットを使いました。
+- 民事・刑事・行政・知財を含む 6 件の target 判決
+- 各 target をもともと指していた citation snippets を正例として使用
+- 無関係な snippets 20 件を負例として追加
 
-### Evaluation Metrics
+### 評価指標
 
-- **`avg gap`**: the average score of relevant snippets minus the average score of irrelevant snippets, used to measure how consistently the model separates the two groups
-- **`Recall@5`**: the proportion of relevant snippets that appear in the top 5 results, used to measure how well the model ranks relevant snippets near the top
+- **`avg gap`**: 関連 snippets の平均スコアから無関係 snippets の平均スコアを引いた値。関連・無関係の分離をどれだけ安定して行えるかを見る
+- **`Recall@5`**: 関連 snippets が上位 5 件に入る割合。関連断片を上位に押し上げられるかを見る
 
 | Model | avg gap | min gap | Recall@5 |
 |---|---:|---:|---:|
@@ -456,34 +474,34 @@ Each round used the same evaluation set:
 | voyage-4-large | 0.351 | 0.230 | 0.938 |
 | **voyage-law-2** | **0.404** | **0.241** | 0.882 |
 
-**Final choice: `voyage-law-2`**
+**最終選択: `voyage-law-2`**
 
-The main reason is that it performed best on **avg gap**, which means it was the most consistent at separating relevant from irrelevant snippets.
+主な理由は、**avg gap** が最も高く、関連 snippets と無関係 snippets を最も安定して分離できたからです。
 
-- compared with `Qwen3-Embedding-0.6B`, its avg gap was about **18% higher**
-- compared with `voyage-4-large`, its avg gap was about **15% higher**
+- `Qwen3-Embedding-0.6B` と比べて avg gap は約 **18%** 高い
+- `voyage-4-large` と比べても約 **15%** 高い
 
-Although its `Recall@5` is slightly lower than some other models, it creates a clearer score gap between relevant and irrelevant snippets, which makes it less likely that irrelevant passages will creep into the highest-scoring results.
+`Recall@5` は一部モデルよりやや低いものの、関連 snippets と無関係 snippets のスコア差をより明確に作れるため、無関係な断片が高得点結果に紛れ込みにくくなります。
 
 ---
 
-## Development Journey
+## 開発の流れ
 
-Seven weeks of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
+7 週間にわたる反復開発で、司法院の raw JSON から出発し、実際に使える検索プロダクトへと段階的に仕上げました。
 
-| Phase | Time | Main work |
+| フェーズ | 期間 | 主な作業 |
 |---|---|---|
-| **1. Parsing and normalization** | Feb 12-24 | Built the citation parser (state machine), statute extraction, and false-positive filtering; iterated the schema from v1 to v4 |
-| **2. Keyword search** | Feb 25-Mar 3 | Compared OpenSearch with PostgreSQL GIN, replaced IK tokenization with 2-gram ngram, and built target ranking based on citation snippet matches |
-| **3. API and frontend** | Mar 5-13 | Built REST APIs and SQL aggregation, the React search interface and filtering UI, and completed Docker + EC2 deployment |
-| **4. Parser refactor** | Mar 14-21 | Refactored the citation parser into traceable, testable small functions and tightened false-positive filtering rules |
-| **5. Semantic search and RAG** | Mar 22-27 | Ran multiple rounds of embedding evaluation, designed citation-anchored chunks, and integrated pgvector retrieval with Gemini analysis |
-| **6. Optimization and deployment** | Mar 26-30 | Completed chunk deduplication, production HTTPS deployment, and baseline performance tuning |
-| **7. Search and retrieval optimization** | Apr 7-19 | Built `source_target_windows_v2`, introduced step-down MSM recall, and reduced follow-up query latency through caching |
+| **1. 解析と正規化** | 2 月 12-24 日 | citation parser（状態機械）、法条抽出、false positive 除去を作り、schema を v1 から v4 へ反復 |
+| **2. キーワード検索** | 2 月 25 日-3 月 3 日 | OpenSearch と PostgreSQL GIN を比較し、IK tokenizer を 2-gram ngram に置き換え、citation snippet マッチに基づく target ranking を構築 |
+| **3. API とフロントエンド** | 3 月 5-13 日 | REST API と SQL 集約、React の検索 UI とフィルタ UI を実装し、Docker + EC2 デプロイを完了 |
+| **4. パーサ再設計** | 3 月 14-21 日 | citation parser を追跡可能でテストしやすい小さな関数群に再構成し、false positive 除去ルールを強化 |
+| **5. セマンティック検索と RAG** | 3 月 22-27 日 | embedding 評価を複数回実施し、citation 起点の chunks を設計し、pgvector retrieval と Gemini 分析を統合 |
+| **6. 最適化とデプロイ** | 3 月 26-30 日 | chunk の重複除去、本番 HTTPS デプロイ、基礎的な性能調整を実施 |
+| **7. 検索・再現の最適化** | 4 月 7-19 日 | `source_target_windows_v2` を構築し、step-down MSM recall を導入し、キャッシュで後続操作の待ち時間を削減 |
 
 ---
 
-## Future Work
+## 今後の課題
 
-- redesign chunk boundaries, including semantic segmentation or LLM-assisted segmentation, so factual narratives, party arguments, and the court's own legal reasoning can be separated more cleanly
-- test whether using an LLM to rewrite user queries into more precise legal issues and practitioner-style terminology can improve retrieval recall and relevance
+- chunk の境界設計を見直し、意味分割や LLM 補助分割を含めて、事実記述・当事者主張・裁判所自身の法的理由付けをよりきれいに分ける
+- 利用者 query をより精密な法律争点や実務用語に LLM で書き換えることで、検索再現率と関連性が改善するか検証する

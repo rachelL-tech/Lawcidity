@@ -45,7 +45,7 @@ const DEFAULT_KEYWORD_REQ = {
 };
 
 const DEFAULT_AI_TEXT =
-  "我在十字路口等紅燈時，被後方車輛追撞，導致頸椎受傷。對方聲稱是煞車失靈，但我懷疑對方有超速的嫌疑。請問我可以向對方主張哪些賠償？對方是否構成過失傷害罪？";
+  "如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？";
 
 export default function DemoPage() {
   const [mode, setMode] = useState("keyword");

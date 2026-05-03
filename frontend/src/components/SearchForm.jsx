@@ -100,7 +100,7 @@ export default function SearchForm({ initialReq, onSearch }) {
                 setKwInput("");
               }
             }}
-            placeholder="e.g. 行車紀錄器, 車禍 — press Enter to add"
+            placeholder="press Enter to add"
             className="border border-brand-border rounded px-3 py-1.5 text-sm flex-1 focus:outline-none focus:border-brand"
           />
         </div>
