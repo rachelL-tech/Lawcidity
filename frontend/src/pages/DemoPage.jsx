@@ -40,7 +40,7 @@ const EMPTY_REQ = {
 const DEFAULT_KEYWORD_REQ = {
   ...EMPTY_REQ,
   keywords: ["殺人", "無罪"],
-  statutes: [{ law: "刑法", article: "271", sub_ref: null }],
+  statutes: [{ law: "刑事訴訟法", article: "161", sub_ref: null }],
   case_types: ["刑事"],
 };
 
