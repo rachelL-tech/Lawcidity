@@ -3,11 +3,11 @@ import { highlightText } from "../lib/highlight";
 
 // 單一引用來源的卡片：顯示來源判決的裁判字號、引用片段、涉及法條
 // Props:
-//   citation: { source_id, source_court, case_ref, snippet, statutes, doc_type, ... }
+//   citation: { source_id, source_court, display_title, snippet, statutes, doc_type, ... }
 //   keywords: string[] — 用來在 snippet 裡 highlight 關鍵字
 //   searchStatutes: StatuteFilter[] — 搜尋條件的法條，用來在 snippet 裡 highlight（淺綠色）
 export default function SnippetCard({ citation, keywords, searchStatutes }) {
-  const caseRef = citation.case_ref || `來源 #${citation.source_id}`;
+  const displayTitle = citation.display_title || `來源 #${citation.source_id}`;
   const params = new URLSearchParams();
   if (keywords.length) params.set("kw", keywords.join(","));
   if (citation.snippet) params.set("anchor", citation.snippet);
@@ -21,7 +21,7 @@ export default function SnippetCard({ citation, keywords, searchStatutes }) {
           to={`/decisions/${citation.source_id}${queryStr}`}
           className="font-medium text-brand hover:underline"
         >
-          {caseRef}{citation.doc_type && citation.doc_type}
+          {displayTitle}{citation.doc_type && citation.doc_type}
         </Link>
         {citation.source_court && (
           <span className="text-gray-400">· {citation.source_court}</span>

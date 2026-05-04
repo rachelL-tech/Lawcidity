@@ -2,15 +2,22 @@
 
 [日本語](README.md) | [English](README.en.md)
 
+[![Frontend](https://img.shields.io/badge/frontend-React%2019-61DAFB?style=flat-square&logo=react&logoColor=0b0f19)](./frontend)
+[![Backend](https://img.shields.io/badge/backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](./app)
+[![Search](https://img.shields.io/badge/search-OpenSearch-005EB8?style=flat-square&logo=opensearch&logoColor=white)](#)
+[![Vector](https://img.shields.io/badge/vector-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](#)
+[![AI](https://img.shields.io/badge/AI-Gemini%20%2B%20Voyage-FF6F00?style=flat-square)](#)
+[![Data](https://img.shields.io/badge/data-1.4M%20decisions-6A1B9A?style=flat-square)](#)
+
 **基於「引用關係」的台灣法院判決檢索系統。**
 
-> 從關鍵字、引用關係到語意理解，Lawcidity 協助使用者找出真正具有參考價值的法院見解。
+從關鍵字、引用關係到語意理解，Lawcidity 協助使用者找出真正具有參考價值的法院見解。
 
-**🔗 [Demo](https://lawcidity.rachel-create.com/)**
+**Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
-> 可以先試試這組搜尋：
-> - **關鍵字搜尋**：關鍵字「殺人」「無罪」＋ 法條「刑法」「271」
-> - **RAG搜尋**：「如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？」
+**可以先試試這組搜尋**
+- **關鍵字搜尋**：關鍵字「殺人」「無罪」＋ 法條「刑法」「271」
+- **RAG搜尋**：「如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？」
 
 ---
 
@@ -381,16 +388,16 @@ Target ranking 主要依據兩個訊號：
 後來改成在首次搜尋後直接快取完整的 target ranking 順序，讓後續操作可以在記憶體中完成。
 
 **引用展開優化**  
-早期版本會對所有符合 source 的每一筆 snippet 重新評分，決定 snippets 的排序順序。後來改成 opensearch 在 Stage 2 會一起回傳 5 個代表性 source IDs，由 PostgreSQL 從這 5 個 source 裡做掃描、挑一筆代表性引用即可。
+- 先以 OpenSearch 回傳的 `preview source IDs` 作為候選範圍，再從每個 `source` 對應的 `citation` 中選出分數最高的一筆，最後補上判決資訊
+- 其餘引用則先按 `source` 各取一筆 `citation`，再結合判決資訊，以減少不必要的 join 與 sort
 
 這一段把引用展開時間從約 `3 秒` 降到約 `0.8 秒`。
 
-**SQL 層級優化**  
-其他調整還包括：
-- 重構 `DISTINCT ON`
-- 反正規化
-- 為高頻查詢欄位建立索引
-- 引用預覽與重新排名查詢的 query shape 優化
+**預先計算常用值**  
+- 將 UI 顯示用的案號與引用數先算好，避免搜尋時每次臨時重算
+
+**調整索引**  
+- 依 `WHERE` / `JOIN` / `ORDER BY` 最常出現的查詢模式重建複合索引
 
 ---
 

@@ -90,7 +90,7 @@ class CitationSource(BaseModel):
     source_id: int
     source_court: str       # unit_norm (簡易庭截到地方法院)
     source_court_level: int | None
-    case_ref: str
+    display_title: str | None
     doc_type: str | None
     decision_date: str | None
     snippet: str | None

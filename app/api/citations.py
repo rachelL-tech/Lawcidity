@@ -12,7 +12,9 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from app.citation_preview import (
     CITATIONS_PREVIEW_LIMIT,
-    fetch_citation_preview_rows,
+    fetch_citation_counts,
+    fetch_matched_preview_rows,
+    fetch_other_preview_rows,
 )
 from app.db import get_conn
 from app.query_normalization import (
@@ -32,12 +34,6 @@ from app.api.schemas import (
 )
 
 router = APIRouter()
-
-
-def _fmt_case_ref(jyear, jcase_norm, jno):
-    if jyear is None or jcase_norm is None or jno is None:
-        return ""
-    return f"{jyear}年度{jcase_norm}字第{jno}號"
 
 
 def _simplify_court(unit_norm: str) -> str:
@@ -154,7 +150,7 @@ def _build_citations_response(
             source_id=r["source_id"],
             source_court=_simplify_court(r["source_court_raw"] or ""),
             source_court_level=r["source_court_level"],
-            case_ref=_fmt_case_ref(r["jyear"], r["jcase_norm"], r["jno"]),
+            display_title=r.get("display_title"),
             doc_type=r["doc_type"],
             decision_date=str(r["decision_date"]) if r["decision_date"] else None,
             snippet=r["snippet"],
@@ -178,6 +174,8 @@ def get_decision_citations_matched(
     params: CitationQueryParams = Depends(),
 ):
     parsed = _parse_citation_query(params)
+    if parsed.preview_source_ids is None:
+        raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
     with get_conn() as conn:
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
@@ -187,25 +185,25 @@ def get_decision_citations_matched(
             parsed.case_types,
             parsed.search_cache_key,
         )
-        matched_rows, matched_total, others_total = fetch_citation_preview_rows(
+        matched_total, others_total = fetch_citation_counts(
             conn,
             "c.target_canonical_id",
             target_id,
-            parsed.query_terms,
-            parsed.statute_list,
             resolved_source_ids,
-            True,
-            preview_source_ids=parsed.preview_source_ids,
         )
-        others_rows, _matched_total, _others_total = fetch_citation_preview_rows(
+        matched_rows = fetch_matched_preview_rows(
             conn,
             "c.target_canonical_id",
             target_id,
             parsed.query_terms,
             parsed.statute_list,
+            parsed.preview_source_ids,
+        )
+        others_rows = fetch_other_preview_rows(
+            conn,
+            "c.target_canonical_id",
+            target_id,
             resolved_source_ids,
-            False,
-            shared_counts=(matched_total + others_total, matched_total),
         )
     return _build_citations_response(
         matched_total=matched_total,
@@ -222,6 +220,8 @@ def get_authority_citations_matched(
     params: CitationQueryParams = Depends(),
 ):
     parsed = _parse_citation_query(params)
+    if parsed.preview_source_ids is None:
+        raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
     with get_conn() as conn:
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
@@ -231,25 +231,25 @@ def get_authority_citations_matched(
             parsed.case_types,
             parsed.search_cache_key,
         )
-        matched_rows, matched_total, others_total = fetch_citation_preview_rows(
+        matched_total, others_total = fetch_citation_counts(
             conn,
             "c.target_authority_id",
             authority_id,
-            parsed.query_terms,
-            parsed.statute_list,
             resolved_source_ids,
-            True,
-            preview_source_ids=parsed.preview_source_ids,
         )
-        others_rows, _matched_total, _others_total = fetch_citation_preview_rows(
+        matched_rows = fetch_matched_preview_rows(
             conn,
             "c.target_authority_id",
             authority_id,
             parsed.query_terms,
             parsed.statute_list,
+            parsed.preview_source_ids,
+        )
+        others_rows = fetch_other_preview_rows(
+            conn,
+            "c.target_authority_id",
+            authority_id,
             resolved_source_ids,
-            False,
-            shared_counts=(matched_total + others_total, matched_total),
         )
     return _build_citations_response(
         matched_total=matched_total,

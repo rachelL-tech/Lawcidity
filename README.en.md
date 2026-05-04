@@ -2,15 +2,22 @@
 
 [日本語](README.md) | [繁體中文](README.zh-TW.md)
 
+[![Frontend](https://img.shields.io/badge/frontend-React%2019-61DAFB?style=flat-square&logo=react&logoColor=0b0f19)](./frontend)
+[![Backend](https://img.shields.io/badge/backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](./app)
+[![Search](https://img.shields.io/badge/search-OpenSearch-005EB8?style=flat-square&logo=opensearch&logoColor=white)](#)
+[![Vector](https://img.shields.io/badge/vector-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](#)
+[![AI](https://img.shields.io/badge/AI-Gemini%20%2B%20Voyage-FF6F00?style=flat-square)](#)
+[![Data](https://img.shields.io/badge/data-1.4M%20decisions-6A1B9A?style=flat-square)](#)
+
 **A Taiwan court decision retrieval system built around citation relationships.**
 
-> From keywords and citation relationships to semantic understanding, Lawcidity helps users find the court views that truly carry precedential value.
+From keywords and citation relationships to semantic understanding, Lawcidity helps users find the court views that truly carry precedential value.
 
-**[Demo](https://lawcidity.rachel-create.com/)**
+**Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
-> Try these searches:
-> - **Keyword search**: keywords `殺人` (`homicide`), `無罪` (`not guilty`) + statute `刑法` (`Criminal Code`), `271`
-> - **RAG search**: `如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？` ("If I was riding a scooter, the other party staged an accident, and I had no dashcam, how can I argue that I was not at fault?")
+**Try these searches**
+- **Keyword search**: keywords `殺人` (`homicide`), `無罪` (`not guilty`) + statute `刑法` (`Criminal Code`), `271`
+- **RAG search**: `如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？` ("If I was riding a scooter, the other party staged an accident, and I had no dashcam, how can I argue that I was not at fault?")
 
 ---
 
@@ -379,16 +386,16 @@ The first version cached only the Stage 1 source IDs. That meant users had to re
 The later version caches the full target ranking order after the initial search, so subsequent interactions can be handled in memory.
 
 **Faster citation expansion**  
-The earlier version rescored every matching snippet from every source in order to decide snippet order. The later version has OpenSearch return 5 representative source IDs during Stage 2, and PostgreSQL only scans those 5 sources to pick a representative citation.
+- OpenSearch first returns only `preview source IDs`, and PostgreSQL then picks the highest-scoring `citation` within each `source` before hydrating decision metadata
+- For the remaining citations, PostgreSQL first selects one `citation` per `source`, then joins decision metadata to reduce unnecessary joins and sorts
 
 This reduced citation expansion time from about `3 seconds` to about `0.8 seconds`.
 
-**SQL-level optimizations**  
-Other changes included:
-- refactoring `DISTINCT ON`
-- denormalization
-- adding indexes for high-frequency query columns
-- improving the query shapes for citation preview and reranking
+**Precomputed UI values**  
+- Precomputed the display titles and citation counts used in the UI so they do not need to be recalculated during search
+
+**Index tuning**  
+- Rebuilt composite indexes around the `WHERE` / `JOIN` / `ORDER BY` patterns used most often
 
 ---
 
