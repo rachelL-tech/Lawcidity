@@ -1,12 +1,23 @@
 """
-Phase 1: find_all_candidates — 純掃描，直接在 clean_text 上跑，不做任何過濾。
-Phase 2: filter_candidates  — 8 條 rule pipeline，決定 accept/reject。
+法律引用抽取器。
 
-設計原則：
-- 不呼叫 preprocess_text；text_cleaner 已合併折行、壓縮空白
-- Phase 1：本院無法解析 → 不產出 candidate（取代舊 R010），其餘無過濾
-- Phase 2：R007→R006→R001→R002→R009→R003→R011→R005，第一條命中即 reject
-- ACCEPT_RE 統一用於 R002/R009/R005（取代舊的窄 _CITE_INTENT_RE）
+此模組負責把已清理完成的判決全文（clean_text）轉成結構化引用資料，
+供 ingest_decisions.py 寫入 citations / authorities 等資料表。
+
+Pipeline 分三階段：
+1. find_all_candidates
+   在 clean_text 上做寬鬆掃描，找出所有可能的裁判或非裁判性引用，
+   只處理解析與正規化，不在這一層判斷是否應保留。
+2. filter_candidates
+   依固定順序套用規則，利用文書結構、引用意圖與上下文訊號排除 false positive。
+   規則順序以 _RULES 為準，第一條命中即 reject。
+3. build_snippets
+   對通過過濾的引用切出 snippet，輸出下游可直接落表的 CitationResult。
+
+重要設計原則：
+- 不呼叫 preprocess_text；預設 text_cleaner 已完成折行合併與空白壓縮。
+- Phase 1 以 recall 優先；像「本院」這類需展開的引用若無法 resolve，則不產出 candidate。
+- Phase 2 才集中處理 precision；像程序經過、卷證參照、當事人主張等情境都在此排除。
 """
 from __future__ import annotations
 

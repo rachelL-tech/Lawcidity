@@ -1,16 +1,28 @@
 """
-判決 JSON 匯入腳本（Schema v4：decisions 為 citation graph 唯一節點）
+判決匯入與引用落表的 ETL orchestrator。
 
-流程：
-1. 掃描資料夾內的所有 JSON 檔案
-2. 解析每個判決的 8 個欄位
-3. 正規化 jcase_norm, decision_date
-4. Upsert 到 decisions 表（含識別欄位 + 文書內容）；若有 placeholder 則升級
-5. 從 clean_text 抽取 citations，寫入 citations 表
+負責把司法院判決 JSON 匯入資料庫，並串接 citation_parser，
+將判決本文中的引用關係轉成 citation graph 所需的節點與邊。
+
+主要資料流：
+1. 讀取判決 JSON，解析法院資訊與判決欄位。
+2. 清理與正規化資料，例如 court/unit、jcase_norm、decision_date、clean_text。
+3. Upsert source 判決到 decisions；若先前已有 placeholder，則將其升級為完整判決。
+4. 呼叫 citation_parser 從 clean_text 抽取結構化引用。
+5. 將引用目標落到 decisions placeholder 或 authorities，並寫入 citations。
+6. 視需要重算 citation count，維持 citation graph 的一致性。
+
+此檔案關心的是 ETL 流程、冪等寫入、placeholder 升級、錯誤記錄與資料一致性；
+引用是否成立、如何排除 false positive、snippet 怎麼切，則由 citation_parser.py 負責。
+
+支援的執行模式：
+- 單一資料夾匯入
+- batch 批次匯入
 """
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict
 import re
@@ -32,7 +44,7 @@ def get_db_connection():
 
 
 def log_error(conn, folder_name: str, file_name: str, error_type: str, error_msg: str):
-    """記錄匯入錯誤到 ingest_error_log（error_type: 'A'=JSON讀取, 'B'=判決匯入, 'D'=Citation寫入）"""
+    """記錄匯入錯誤到 ingest_error_log。"""
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -50,7 +62,7 @@ def log_error(conn, folder_name: str, file_name: str, error_type: str, error_msg
 # =========================
 def upsert_court_unit(conn, court_info: Dict) -> int:
     """Insert court_units 若不存在，回傳 court_unit_id。"""
-    generic_root = to_generic_root_norm(court_info["unit_norm"], court_info["level"])
+    generic_root = to_generic_root_norm(court_info["unit_norm"])
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO court_units (unit_norm, root_norm, level, county, district)
@@ -75,6 +87,19 @@ def upsert_court_unit(conn, court_info: Dict) -> int:
 # =========================
 # 正規化函式
 # =========================
+@dataclass(frozen=True)
+class PreparedSourceDecision:
+    jid: Optional[str]
+    jyear: int
+    jcase_norm: str
+    jno: int
+    decision_date: Optional[str]
+    title: Optional[str]
+    clean_text: Optional[str]
+    doc_type: Optional[str]
+    pdf_url: Optional[str]
+
+
 def normalize_jcase(jcase: str) -> str:
     return jcase.replace("臺", "台")
 
@@ -89,7 +114,7 @@ def parse_decision_date(jdate: str) -> Optional[str]:
 
 
 # =========================
-# 判決匯入（Schema v4）
+# 判決匯入（Schema）
 # =========================
 def _extract_doc_type(jfull: str) -> Optional[str]:
     """從 JFULL 開頭推斷 doc_type（判決 / 裁定 / 憲判字 / 宣判筆錄 / 調解筆錄 / 和解筆錄）"""
@@ -116,8 +141,29 @@ def _extract_doc_type(jfull: str) -> Optional[str]:
     return None
 
 
+def prepare_source_decision(json_data: Dict) -> tuple:
+    """將單份 source 判決 JSON 整理為可重用的 normalization 結果。"""
+    try:
+        jcase = json_data.get("JCASE")
+        jfull = json_data.get("JFULL")
+        prepared = PreparedSourceDecision(
+            jid=json_data.get("JID"),
+            jyear=int(json_data.get("JYEAR")),
+            jcase_norm=normalize_jcase(jcase),
+            jno=int(json_data.get("JNO")),
+            decision_date=parse_decision_date(json_data.get("JDATE")),
+            title=json_data.get("JTITLE"),
+            clean_text=clean_judgment_text(jfull) if jfull else None,
+            doc_type=_extract_doc_type(jfull),
+            pdf_url=json_data.get("JPDF"),
+        )
+        return True, prepared
+    except Exception as e:
+        return False, str(e)
+
+
 def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
-                    case_type: Optional[str], json_data: Dict) -> tuple:
+                    case_type: Optional[str], prepared: PreparedSourceDecision) -> tuple:
     """
     Upsert 單一判決到 decisions 表（v4：decisions 同時承擔識別 + 文書內容）
 
@@ -133,22 +179,18 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
         (True, decision_id) 成功，(False, error_msg) 失敗
     """
     try:
-        jid = json_data.get("JID")
-        jyear = int(json_data.get("JYEAR"))
-        jcase = json_data.get("JCASE")
-        jno = int(json_data.get("JNO"))
-        jdate = json_data.get("JDATE")
-        jtitle = json_data.get("JTITLE")
-        jfull = json_data.get("JFULL")
-        jpdf = json_data.get("JPDF")
+        jid = prepared.jid
+        jyear = prepared.jyear
+        jcase_norm = prepared.jcase_norm
+        jno = prepared.jno
+        decision_date = prepared.decision_date
+        jtitle = prepared.title
+        clean_text = prepared.clean_text
+        doc_type = prepared.doc_type
+        jpdf = prepared.pdf_url
 
         if not jid:
             return False, "JID 欄位缺失，無法匯入 decisions"
-
-        jcase_norm = normalize_jcase(jcase)
-        decision_date = parse_decision_date(jdate)
-        clean_text = clean_judgment_text(jfull) if jfull else None
-        doc_type = _extract_doc_type(jfull)
 
         # jid 已存在時直接回傳（冪等）；後續 UPDATE/INSERT 均假設 jid 尚未存在
         with conn.cursor() as cur:
@@ -255,7 +297,7 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
 
 
 # =========================
-# Citation 處理（Schema v4）
+# Citation 處理
 # =========================
 def _insert_placeholder(conn, unit_norm: str, jyear: int, jcase_norm: str, jno: int,
                          doc_type: Optional[str], case_type: Optional[str],
@@ -331,23 +373,10 @@ def _recompute_citation_counts(conn) -> int:
     conn.commit()
     return updated
 
-
-def _infer_level(unit_norm: str) -> int:
-    """從 unit_norm 推導 court level，供 to_generic_root_norm 使用"""
-    if '憲法法庭' in unit_norm:                                  return 0
-    if '最高' in unit_norm:                                       return 1
-    if '智慧財產' in unit_norm:                                   return 2
-    if '高等行政法院' in unit_norm and '地方庭' in unit_norm:     return 3
-    if '高等' in unit_norm:                                       return 2
-    if '少年' in unit_norm or '家事' in unit_norm:                return 3
-    if '簡易庭' in unit_norm:                                     return 4
-    return 3  # 地方法院
-
-
 def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
-                               target_doc_type: Optional[str] = None,
-                               target_case_type: Optional[str] = None,
-                               source_case_type: Optional[str] = None) -> Optional[int]:
+                              target_doc_type: Optional[str] = None,
+                              target_case_type: Optional[str] = None,
+                              source_case_type: Optional[str] = None) -> Optional[int]:
     """
     在 decisions 表 upsert target placeholder（jid IS NULL），回傳 decision_id
 
@@ -374,7 +403,7 @@ def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno
     # 正規化法院名：台→臺，與 court_parser 一致，確保 placeholder 能被 source ingest 正確找到
     court = court.replace('台', '臺')
     # 推導 root_norm（通用層級分類），與 court_parser.to_generic_root_norm 一致
-    root_norm = to_generic_root_norm(court, level=_infer_level(court))
+    root_norm = to_generic_root_norm(court)
 
     try:
         ct = target_case_type or source_case_type  # source fallback
@@ -525,35 +554,36 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     citations.source_id / target_id 均指向 decisions.id（Schema v4）
 
     Returns:
-        (成功寫入/更新的 citation 數量, 錯誤訊息清單)
+        (True, 成功寫入/更新的 citation 數量, 錯誤訊息清單)
+        (False, 成功寫入/更新的 citation 數量, 錯誤訊息清單)
     """
-    raw_citations = [c.to_dict() for c in extract_citations_next(
-        clean_text, court_root_norm=court_root_norm, self_key=source_self_key)]
     inserted = 0
     errors = []
-
-    # Phase 1：解析所有 target ID
-    resolved = []
-    for c in raw_citations:
-        _require_citation_offsets(c)
-        ctype = c.get("citation_type", "decision")
-        if ctype == "authority":
-            auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
-            if auth_id is not None:
-                resolved.append((ctype, auth_id, c))
-        else:  # "decision"
-            target_id = upsert_target_placeholder(
-                conn,
-                c["court"], c["jyear"], c["jcase_norm"], c["jno"],
-                target_doc_type=c.get("doc_type"),
-                target_case_type=c.get("target_case_type"),
-                source_case_type=source_case_type,
-            )
-            if target_id is not None:
-                resolved.append((ctype, target_id, c))
-
-    # Phase 2：增量 upsert citations
     try:
+        raw_citations = [c.to_dict() for c in extract_citations_next(
+            clean_text, court_root_norm=court_root_norm, self_key=source_self_key)]
+
+        # Phase 1：解析所有 target ID
+        resolved = []
+        for c in raw_citations:
+            _require_citation_offsets(c)
+            ctype = c.get("citation_type", "decision")
+            if ctype == "authority":
+                auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
+                if auth_id is not None:
+                    resolved.append((ctype, auth_id, c))
+            else:  # "decision"
+                target_id = upsert_target_placeholder(
+                    conn,
+                    c["court"], c["jyear"], c["jcase_norm"], c["jno"],
+                    target_doc_type=c.get("doc_type"),
+                    target_case_type=c.get("target_case_type"),
+                    source_case_type=source_case_type,
+                )
+                if target_id is not None:
+                    resolved.append((ctype, target_id, c))
+
+        # Phase 2：增量 upsert citations
         current_ids: set = set()
         with conn.cursor() as cur:
             for ctype, target, c in resolved:
@@ -605,13 +635,13 @@ def ingest_citations(conn, source_id: int, clean_text: str,
                 cur.execute("DELETE FROM citations WHERE source_id = %s", (source_id,))
 
         conn.commit()
+        return True, inserted, errors
     except Exception as e:
         msg = f"source_id={source_id} transaction failed: {e}"
         print(f"錯誤：citation 交易失敗 - {msg}")
         errors.append(msg)
         conn.rollback()
-
-    return inserted, errors
+        return False, inserted, errors
 
 
 # =========================
@@ -645,56 +675,63 @@ def main(folder_path: str, skip_recompute: bool = False):
     fail_count = 0
 
     for json_file in json_files:
-        # A 類：JSON 讀取失敗
+        # 讀取 JSON
         try:
             with open(json_file, "r", encoding="utf-8") as f:
                 json_data = json.load(f)
         except Exception as e:
             msg = str(e)
             print(f"錯誤(A)：無法讀取 {json_file.name} - {msg}")
-            log_error(conn, folder_name, json_file.name, "A", msg)
+            log_error(conn, folder_name, json_file.name, "json_read", msg)
             fail_count += 1
             continue
 
-        # B 類：判決匯入失敗
+        # 處理 source 判決
+        ok, prepared_or_error = prepare_source_decision(json_data)
+        if not ok:
+            fail_count += 1
+            msg = prepared_or_error or "prepare_source_decision failed"
+            log_error(conn, folder_name, json_file.name, "source_decision", msg)
+            continue
+        prepared = prepared_or_error
+
         ok, result = ingest_decision(
             conn, court_unit_id,
-            to_generic_root_norm(court_info["unit_norm"], court_info["level"]),
+            to_generic_root_norm(court_info["unit_norm"]),
             court_info["unit_norm"],
             court_info.get("case_type"),
-            json_data
+            prepared=prepared,
         )
         if not ok:
             fail_count += 1
-            log_error(conn, folder_name, json_file.name, "B", result or "ingest_decision failed")
-        else:
-            success_count += 1
-            decision_id = result
+            log_error(conn, folder_name, json_file.name, "source_decision", result or "ingest_decision failed")
+            continue
 
-            # 憲法法庭判決不作為來源，跳過 citation 抽取
-            if court_info["unit_norm"] == "憲法法庭":
-                continue
+        success_count += 1
+        decision_id = result
 
-            jfull = json_data.get("JFULL", "") or ""
-            if jfull and decision_id:
-                clean_text = clean_judgment_text(jfull)
-                _self_jcase = normalize_jcase(json_data.get("JCASE", ""))
-                _self_key = (
-                    court_info["court_root_norm"].replace('臺', '台'),
-                    int(json_data.get("JYEAR")),
-                    _self_jcase,
-                    int(json_data.get("JNO")),
-                )
-                n, cite_errors = ingest_citations(
-                    conn, decision_id, clean_text,
-                    court_root_norm=court_info["court_root_norm"],
-                    source_self_key=_self_key,
-                    source_case_type=court_info.get("case_type"),
-                )
-                if n > 0:
-                    print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
-                for ce in cite_errors:
-                    log_error(conn, folder_name, json_file.name, "D", ce)
+        # 處理 citation
+        # 憲法法庭判決不作為來源，跳過 citation 處理
+        if court_info["unit_norm"] == "憲法法庭":
+            continue
+
+        if prepared.clean_text and decision_id:
+            _self_key = (
+                court_info["court_root_norm"].replace('臺', '台'),
+                prepared.jyear,
+                prepared.jcase_norm,
+                prepared.jno,
+            )
+            ok, n, cite_errors = ingest_citations(
+                conn, decision_id, prepared.clean_text,
+                court_root_norm=court_info["court_root_norm"],
+                source_self_key=_self_key,
+                source_case_type=court_info.get("case_type"),
+            )
+            if n > 0:
+                print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
+            for ce in cite_errors:
+                log_error(conn, folder_name, json_file.name, "citation", ce)
 
         if (success_count + fail_count) % 100 == 0:
             print(f"  進度：{success_count + fail_count}/{len(json_files)}")
@@ -760,166 +797,16 @@ def main_batch(base_dir: str, keyword: str = ""):
 
     if error_rows:
         total_errors = sum(cnt for _, cnt in error_rows)
-        detail = ", ".join(f"{t}類 {cnt} 筆" for t, cnt in error_rows)
+        detail = ", ".join(f"{t} {cnt} 筆" for t, cnt in error_rows)
         print(f"\n⚠ 本次 batch 共有 {total_errors} 筆未解決錯誤（{detail}）")
-        print(f"  執行以下指令重跑：")
-        print(f"  python etl/ingest_decisions.py --retry {base_dir}")
     else:
         print("\n✓ 本次 batch 無錯誤")
-
-
-def main_retry(base_dir: str):
-    """重跑所有未解決的錯誤（ingest_error_log.resolved = false）"""
-    from collections import defaultdict
-
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT folder_name, file_name, error_type
-            FROM ingest_error_log
-            WHERE resolved = false
-            ORDER BY folder_name, file_name
-        """)
-        rows = cur.fetchall()
-
-    if not rows:
-        print("沒有未解決的錯誤。")
-        conn.close()
-        return
-
-    print(f"找到 {len(rows)} 筆未解決錯誤")
-
-    by_folder = defaultdict(list)
-    for folder_name, file_name, error_type in rows:
-        by_folder[folder_name].append((file_name, error_type))
-
-    for folder_name, files in sorted(by_folder.items()):
-        folder_path = Path(base_dir) / folder_name
-        if not folder_path.exists():
-            print(f"警告：資料夾不存在，跳過 - {folder_path}")
-            continue
-
-        court_info = parse_court_from_folder(folder_path.name)
-        if not court_info:
-            print(f"錯誤：無法解析法院 - {folder_name}")
-            continue
-
-        court_unit_id = upsert_court_unit(conn, court_info)
-        print(f"\n{'='*40}")
-        print(f"重跑：{folder_name}（{len(files)} 筆錯誤）")
-
-        for file_name, error_type in files:
-            json_file = folder_path / file_name
-            if not json_file.exists():
-                print(f"  警告：檔案不存在 - {file_name}")
-                continue
-
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    json_data = json.load(f)
-            except Exception as e:
-                print(f"  A 仍失敗：{file_name} - {e}")
-                continue
-
-            ok, result = ingest_decision(
-                conn, court_unit_id,
-                to_generic_root_norm(court_info["unit_norm"], court_info["level"]),
-                court_info["unit_norm"],
-                court_info.get("case_type"),
-                json_data
-            )
-            if not ok:
-                print(f"  B 仍失敗：{file_name} - {result}")
-                continue
-
-            decision_id = result
-
-            jfull = json_data.get("JFULL", "") or ""
-            if jfull and decision_id:
-                clean_text = clean_judgment_text(jfull)
-                _self_key_retry = (
-                    court_info["court_root_norm"].replace('臺', '台'),
-                    int(json_data.get("JYEAR")),
-                    normalize_jcase(json_data.get("JCASE", "")),
-                    int(json_data.get("JNO")),
-                )
-                n, cite_errors = ingest_citations(
-                    conn, decision_id, clean_text,
-                    court_root_norm=court_info["court_root_norm"],
-                    source_self_key=_self_key_retry
-                )
-                if cite_errors:
-                    print(f"  D 仍有錯：{file_name} - {cite_errors[0]}")
-                    continue
-
-            # 成功：標記為 resolved
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE ingest_error_log
-                    SET resolved = true, resolved_at = now()
-                    WHERE folder_name = %s AND file_name = %s AND resolved = false
-                """, (folder_name, file_name))
-            conn.commit()
-            print(f"  ✓ 已修復：{file_name}")
-
-    conn.close()
-
-
-def main_regen(unit_norm_filter: str = ""):
-    """
-    用 DB 裡現有的 clean_text 重跑 citation 抽取（不重讀 JSON）。
-    主要用途：更新 parser 邏輯後，刷新 citation 並自動清理孤兒 placeholder。
-
-    unit_norm_filter：若指定，只重跑該法院的 source 判決（模糊比對 unit_norm）。
-    """
-    conn = get_db_connection()
-
-    with conn.cursor() as cur:
-        sql = """
-            SELECT d.id, d.clean_text, d.root_norm, d.unit_norm,
-                   d.jyear, d.jcase_norm, d.jno, d.case_type
-            FROM decisions d
-            WHERE d.jid IS NOT NULL AND d.clean_text IS NOT NULL
-        """
-        if unit_norm_filter:
-            cur.execute(sql + " AND d.unit_norm LIKE %s ORDER BY d.id",
-                        (f"%{unit_norm_filter}%",))
-        else:
-            cur.execute(sql + " ORDER BY d.id")
-        rows = cur.fetchall()
-
-    total = len(rows)
-    print(f"重跑 {total} 筆 source 判決的 citation 抽取...")
-
-    for i, (decision_id, clean_text, root_norm, unit_norm,
-            jyear, jcase_norm, jno, case_type) in enumerate(rows, 1):
-        self_key = (
-            (root_norm or unit_norm).replace('臺', '台'),
-            jyear, jcase_norm, jno,
-        )
-        _, errors = ingest_citations(
-            conn, decision_id, clean_text,
-            court_root_norm=root_norm,
-            source_self_key=self_key,
-            source_case_type=case_type,
-        )
-        for e in errors:
-            print(f"  ⚠ id={decision_id}: {e}")
-        if i % 200 == 0:
-            print(f"  進度：{i}/{total}")
-
-    _recompute_citation_counts(conn)
-    conn.close()
-    print(f"\n完成！重跑 {total} 筆")
-
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("使用方式：")
         print("  單一資料夾：python etl/ingest_decisions.py <資料夾路徑>")
         print("  批次匯入：  python etl/ingest_decisions.py --batch <基底目錄>")
-        print("  重跑錯誤：  python etl/ingest_decisions.py --retry <基底目錄>")
-        print("  重跑 parser：python etl/ingest_decisions.py --regen [法院關鍵字]")
         sys.exit(1)
 
     if sys.argv[1] == "--batch":
@@ -928,13 +815,5 @@ if __name__ == "__main__":
             sys.exit(1)
         keyword = sys.argv[3] if len(sys.argv) > 3 else ""
         main_batch(sys.argv[2], keyword)
-    elif sys.argv[1] == "--retry":
-        if len(sys.argv) < 3:
-            print("錯誤：--retry 需要指定基底目錄")
-            sys.exit(1)
-        main_retry(sys.argv[2])
-    elif sys.argv[1] == "--regen":
-        unit_norm_filter = sys.argv[2] if len(sys.argv) > 2 else ""
-        main_regen(unit_norm_filter)
     else:
         main(sys.argv[1])

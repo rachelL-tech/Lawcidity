@@ -3,14 +3,14 @@
 
 命名慣例：
   court_root_norm  具體法院聚合名稱（如「臺灣高等法院」），供 citation parser / self_key 使用
-  root_norm        通用7種分類（如「高等法院」），由 to_generic_root_norm() 計算，存入 DB
+  root_norm        通用7種分類（如「高等法院」），由 to_generic_root_norm(unit_norm) 計算，存入 DB
 """
 import re
 from typing import Optional, Dict
 from court_mapping import SIMPLE_COURT_MAPPING, DISTRICT_COURT_MAPPING, HAC_COUNTY_MAPPING
 
 
-def to_generic_root_norm(unit_norm: str, level: int) -> str:
+def to_generic_root_norm(unit_norm: str) -> str:
     """
     將具體法院 unit_norm 轉換為 DB 用通用層級分類（decisions.root_norm / court_units.root_norm）
 
@@ -20,15 +20,15 @@ def to_generic_root_norm(unit_norm: str, level: int) -> str:
         智財商業法院 / 少家法院
         地方法院 / 地方法院簡易庭
     """
-    if level == 0:                                         return "憲法法庭"
+    if "憲法法庭" in unit_norm:                              return "憲法法庭"
     if "最高行政法院" in unit_norm:                          return "最高行政法院"
     if "最高法院" in unit_norm:                             return "最高法院"
     if "智慧財產" in unit_norm:                             return "智財商業法院"
-    if level == 4:                                         return "地方法院簡易庭"
+    if "簡易庭" in unit_norm:                               return "地方法院簡易庭"
     if "地方庭" in unit_norm:                               return "高等行政法院地方庭"
     if "行政法院" in unit_norm:                             return "高等行政法院"
     if "高等法院" in unit_norm:                             return "高等法院"
-    if "少年" in unit_norm:                                return "少家法院"
+    if "少年" in unit_norm or "家事" in unit_norm:          return "少家法院"
     if "地方法院" in unit_norm:                             return "地方法院"
     return unit_norm  # fallback
 
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     for case in test_cases:
         result = parse_court_from_folder(case)
         if result:
-            generic = to_generic_root_norm(result["unit_norm"], result["level"])
+            generic = to_generic_root_norm(result["unit_norm"])
             print(f"\n{case}")
             print(f"  court_root_norm = {result['court_root_norm']}")
             print(f"  root_norm (generic) = {generic}")
