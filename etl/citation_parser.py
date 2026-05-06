@@ -33,12 +33,11 @@ from typing import List, Optional, Set
 
 ANY_COURT_CITATION = re.compile(
     r'(?<!原審)'
-    r'((?:最高(?:行政)?法院|憲法法庭|本院|'
+    r'((?:最高(?:行政)?法院|憲法法庭|本院(?:地方庭)?|'
     r'(?:臺灣|台灣|福建)[\u4e00-\u9fff]*?法院|'
     r'[\u4e00-\u9fff]+高等行政法院(?:地方庭)?|'
     r'北高行|中高行|高高行)'
     r'(?:[\u4e00-\u9fff]+分院)?)'
-    r'(?:[\u4e00-\u9fff]{0,8}(?:庭|法庭))?'
     r'(?:(?:刑事|民事|行政)?大法庭)?'
     r'(?:（[^）\r\n]{0,10}）\s*)?'
     r'\s*(\d{2,3})\s*年\s*度?\s*'
@@ -139,6 +138,29 @@ _COURT_ABBR = {
 def _normalize_court(court: str) -> str:
     court = court.replace('臺', '台').strip()
     return _COURT_ABBR.get(court, court)
+
+
+def _resolve_contextual_court(
+    normalized_token: str,
+    *,
+    court_root_norm: Optional[str],
+    source_unit_norm: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """把 court token 解析成實際要寫入 candidate 的法院名稱。"""
+    if normalized_token not in ('本院', '本院地方庭'):
+        return normalized_token, None
+
+    if (
+        normalized_token == '本院地方庭'
+        and source_unit_norm
+        and source_unit_norm.endswith('地方庭')
+    ):
+        return _normalize_court(source_unit_norm), '本院'
+
+    if court_root_norm:
+        return _normalize_court(court_root_norm), '本院'
+
+    return None, None
 
 
 def _normalize_doc_type(raw_doc_type: Optional[str]) -> Optional[str]:
@@ -319,6 +341,7 @@ def find_all_candidates(
     clean_text: str,
     *,
     court_root_norm: Optional[str] = None,
+    source_unit_norm: Optional[str] = None,
     target_courts: Set[str] = TARGET_COURTS,
 ) -> List[RawCandidate]:
     """
@@ -326,7 +349,13 @@ def find_all_candidates(
     本院無法解析時不產出 candidate。
     """
     candidates: List[RawCandidate] = []
-    _scan_decisions(clean_text, candidates, court_root_norm=court_root_norm, target_courts=target_courts)
+    _scan_decisions(
+        clean_text,
+        candidates,
+        court_root_norm=court_root_norm,
+        source_unit_norm=source_unit_norm,
+        target_courts=target_courts,
+    )
     _scan_authorities(clean_text, candidates, court_root_norm=court_root_norm)
     return candidates
 
@@ -338,6 +367,7 @@ def _scan_decisions(
     candidates: List[RawCandidate],
     *,
     court_root_norm: Optional[str],
+    source_unit_norm: Optional[str],
     target_courts: Set[str],
 ) -> None:
     current_court: Optional[str] = None
@@ -409,26 +439,22 @@ def _scan_decisions(
             break
 
         raw_court_str = full.group(1)
-        resolved = _normalize_court(raw_court_str)
-
-        if resolved == '本院':
-            if court_root_norm:
-                current_court = _normalize_court(court_root_norm)
-                chain_court_source = '本院'
-            else:
-                # 解析不出 → 不產出 candidate，chain 中斷
-                current_court = None
-                chain_court_source = None
-                pos = full.end()
-                continue
-            # 解析成功：fall through 繼續產出 candidate
-        else:
-            current_court = resolved
-            chain_court_source = None
+        normalized_token = _normalize_court(raw_court_str)
+        current_court, chain_court_source = _resolve_contextual_court(
+            normalized_token,
+            court_root_norm=court_root_norm,
+            source_unit_norm=source_unit_norm,
+        )
+        if current_court is None:
+            # 本院解析不出 → 不產出 candidate，chain 中斷
+            pos = full.end()
+            continue
 
         if current_court in target_courts:
+            jyear = int(full.group(2))
             raw_jcase = full.group(3)
             jcase = _jcase_norm(raw_jcase)
+            jno = int(full.group(4))
             doc_type = _normalize_doc_type(full.group(5))
             is_const = jcase in ('憲判', '憲判字')
 
@@ -444,9 +470,9 @@ def _scan_decisions(
                 raw_match=full.group(0),
                 match_start=full.start(),
                 match_end=full.end(),
-                jyear=int(full.group(2)),
+                jyear=jyear,
                 jcase_norm=jcase,
-                jno=int(full.group(4)),
+                jno=jno,
                 doc_type='憲判字' if is_const else doc_type,
                 is_abbreviated=False,
                 chain_court_source=chain_court_source,
@@ -472,7 +498,7 @@ def _scan_decisions(
                         raw_match=am.group(0),
                         match_start=am.start(),
                         match_end=am.end(),
-                        jyear=int(full.group(2)),
+                        jyear=jyear,
                         jcase_norm=jcase,
                         jno=int(am.group(1)),
                         doc_type='憲判字',
@@ -1169,16 +1195,17 @@ def extract_citations_next(
     clean_text: str,
     *,
     court_root_norm: Optional[str] = None,
+    source_unit_norm: Optional[str] = None,
     self_key: Optional[tuple] = None,
 ) -> List[CitationResult]:
     """
     Phase 1 → Phase 2 → Phase 3 完整 pipeline。
-
-    等同舊版 extract_citations，但：
-    - 直接在 clean_text 上 regex（不呼叫 preprocess_text）
-    - snippet 邏輯更簡潔（無 citation boundary advancement）
     """
-    candidates = find_all_candidates(clean_text, court_root_norm=court_root_norm)
+    candidates = find_all_candidates(
+        clean_text,
+        court_root_norm=court_root_norm,
+        source_unit_norm=source_unit_norm,
+    )
     ctx = make_filter_context(
         clean_text,
         self_key=self_key,

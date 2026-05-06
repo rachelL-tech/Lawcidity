@@ -32,14 +32,12 @@ def to_generic_root_norm(unit_norm: str) -> str:
     if "地方法院" in unit_norm:                             return "地方法院"
     return unit_norm  # fallback
 
-
 def parse_court_from_folder(folder_name: str) -> Optional[Dict[str, any]]:
     """
     從資料夾名稱解析法院資訊，並回傳 case_type。
 
     Args:
-        folder_name: 例如 "臺灣高等法院民事", "三重簡易庭刑事",
-                     "臺北高等行政法院 地方庭行政", "臺灣高雄少年及家事法院民事"
+        folder_name: 例如 "臺灣高等法院民事", "三重簡易庭刑事", "臺北高等行政法院 地方庭行政", "臺灣高雄少年及家事法院民事"
 
     Returns:
         {
@@ -53,10 +51,14 @@ def parse_court_from_folder(folder_name: str) -> Optional[Dict[str, any]]:
         若無法解析則回傳 None
     """
     # 提取案件類別後綴；家事歸入民事（最高法院家事庭屬民事範疇）
-    suffix_match = re.search(r'(民事|刑事|行政|憲法|家事)$', folder_name)
-    raw_suffix = suffix_match.group(1) if suffix_match else None
-    case_type = '民事' if raw_suffix == '家事' else raw_suffix
-    court_name = folder_name[:-len(raw_suffix)] if raw_suffix else folder_name
+    match = re.search(r'(民事|刑事|行政|憲法|家事)$', folder_name)
+    if match:
+        raw_case_type = match.group()
+        case_type = '民事' if raw_case_type == '家事' else raw_case_type
+        court_name = folder_name[:match.start()]
+    else:
+        case_type = None
+        court_name = folder_name
 
     # ── 順序很重要：子字串必須先於父字串檢查 ──
 

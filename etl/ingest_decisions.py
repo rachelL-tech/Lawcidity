@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict
 import re
-
 import psycopg
 from dotenv import load_dotenv
 from court_parser import parse_court_from_folder, to_generic_root_norm
@@ -62,23 +61,28 @@ def log_error(conn, folder_name: str, file_name: str, error_type: str, error_msg
 # =========================
 def upsert_court_unit(conn, court_info: Dict) -> int:
     """Insert court_units 若不存在，回傳 court_unit_id。"""
-    generic_root = to_generic_root_norm(court_info["unit_norm"])
+    unit_norm = court_info["unit_norm"]
+    generic_root = to_generic_root_norm(unit_norm)
     with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM court_units WHERE unit_norm = %s",
+            (unit_norm,)
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0]
+
         cur.execute("""
             INSERT INTO court_units (unit_norm, root_norm, level, county, district)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (unit_norm) DO NOTHING
+            RETURNING id
         """, (
-            court_info["unit_norm"],
+            unit_norm,
             generic_root,
             court_info["level"],
-            court_info.get("county"),
-            court_info.get("district"),
+            court_info["county"],
+            court_info["district"],
         ))
-        cur.execute(
-            "SELECT id FROM court_units WHERE unit_norm = %s",
-            (court_info["unit_norm"],)
-        )
         court_unit_id = cur.fetchone()[0]
         conn.commit()
         return court_unit_id
@@ -545,6 +549,7 @@ def _require_citation_offsets(citation: dict) -> tuple[int, int]:
 
 def ingest_citations(conn, source_id: int, clean_text: str,
                      court_root_norm: str = None,
+                     source_unit_norm: str = None,
                      source_self_key: Optional[tuple] = None,
                      source_case_type: Optional[str] = None) -> tuple:
     """
@@ -561,7 +566,11 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     errors = []
     try:
         raw_citations = [c.to_dict() for c in extract_citations_next(
-            clean_text, court_root_norm=court_root_norm, self_key=source_self_key)]
+            clean_text,
+            court_root_norm=court_root_norm,
+            source_unit_norm=source_unit_norm,
+            self_key=source_self_key,
+        )]
 
         # Phase 1：解析所有 target ID
         resolved = []
@@ -699,7 +708,7 @@ def main(folder_path: str, skip_recompute: bool = False):
             conn, court_unit_id,
             to_generic_root_norm(court_info["unit_norm"]),
             court_info["unit_norm"],
-            court_info.get("case_type"),
+            court_info["case_type"],
             prepared=prepared,
         )
         if not ok:
@@ -725,8 +734,9 @@ def main(folder_path: str, skip_recompute: bool = False):
             ok, n, cite_errors = ingest_citations(
                 conn, decision_id, prepared.clean_text,
                 court_root_norm=court_info["court_root_norm"],
+                source_unit_norm=court_info["unit_norm"],
                 source_self_key=_self_key,
-                source_case_type=court_info.get("case_type"),
+                source_case_type=court_info["case_type"],
             )
             if n > 0:
                 print(f"  ↳ {json_file.name}: 寫入 {n} 筆 citation")
@@ -736,25 +746,15 @@ def main(folder_path: str, skip_recompute: bool = False):
         if (success_count + fail_count) % 100 == 0:
             print(f"  進度：{success_count + fail_count}/{len(json_files)}")
 
-    # 計算本次寫入的 citation 總數
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT COUNT(*) FROM citations c
-            JOIN decisions d ON d.id = c.source_id
-            WHERE d.court_unit_id = %s
-        """, (court_unit_id,))
-        total_citations = cur.fetchone()[0]
-
     # 寫入 ingest_log
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO ingest_log (folder_name, decision_count, citation_count)
-            VALUES (%s, %s, %s)
+            INSERT INTO ingest_log (folder_name, decision_count)
+            VALUES (%s, %s)
             ON CONFLICT (folder_name) DO UPDATE
                 SET ingested_at     = now(),
-                    decision_count  = EXCLUDED.decision_count,
-                    citation_count  = EXCLUDED.citation_count
-        """, (folder_name, success_count, total_citations))
+                    decision_count  = EXCLUDED.decision_count
+        """, (folder_name, success_count))
     conn.commit()
 
     if not skip_recompute:

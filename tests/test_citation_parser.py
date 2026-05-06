@@ -88,3 +88,38 @@ def test_authority_snippet_keeps_full_quoted_sentence():
     snip = extract_snippet(text, start, end, authority_mode=True)
     assert "理由書闡釋略以：" in snip
     assert snip.endswith("有別。」")
+
+
+def test_benyuan_local_court_keeps_local_court_granularity():
+    text = "理由\r\n本院地方庭113年度交字第94號判決可資參照。"
+    results = extract_citations(
+        text,
+        court_root_norm="臺北高等行政法院",
+        source_unit_norm="臺北高等行政法院地方庭",
+    )
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1
+    assert decision_results[0]["court"] == "台北高等行政法院地方庭"
+
+
+def test_benyuan_without_local_hint_stays_on_root_court():
+    text = "理由\r\n本院113年度交字第94號判決可資參照。"
+    results = extract_citations(
+        text,
+        court_root_norm="臺北高等行政法院",
+        source_unit_norm="臺北高等行政法院地方庭",
+    )
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 1
+    assert decision_results[0]["court"] == "台北高等行政法院"
+
+
+def test_constitutional_chain_keeps_year_for_abbreviated_followup():
+    text = "理由\r\n憲法法庭111年憲判字第11號判決、第12號判決足供參照。"
+    results = extract_citations(text)
+    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    assert len(decision_results) == 2
+    assert decision_results[0]["jyear"] == 111
+    assert decision_results[1]["jyear"] == 111
+    assert decision_results[1]["jno"] == 12
+    assert decision_results[1]["doc_type"] == "憲判字"
