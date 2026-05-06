@@ -11,7 +11,7 @@
 
 **A Taiwan court decision retrieval system built around citation relationships.**
 
-From keywords and citation relationships to semantic understanding, Lawcidity helps users find the court views that truly carry precedential value.
+From keyword search to semantic understanding, Lawcidity helps users find the court views that actually matter in practice.
 
 **Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
@@ -39,22 +39,25 @@ From keywords and citation relationships to semantic understanding, Lawcidity he
 Traditional legal search has two recurring blind spots:
 
 ### 1. Ignoring positional signal
-Full-text search only checks whether a keyword appears in a document, not where it appears.
+Full-text search only checks whether a keyword appears in a court decision, but does not distinguish the context in which it appears.
 
-But not every part of a court decision carries the same weight:
+But different parts of a court decision do not carry the same value for legal research. For example:
 - the court's own legal reasoning
-- the parties' arguments
+- one party's argument
 - procedural background
-- factual or evidentiary descriptions
+- factual background
+- evidentiary descriptions
 
-Full-text search only checks whether the keyword appears, without considering the context in which it appears. In legal research, the same keyword hit is usually more valuable when it appears in the court's own reasoning.
+For lawyers, legal arguments need to be built on forms of legal reasoning that courts will accept. So even when the same keyword is hit, it is usually more valuable when it appears in the court's own reasoning than when it appears in the factual background or the parties' arguments.
+
+That is why Lawcidity pays special attention to where courts cite prior decisions. Courts usually cite prior decisions when they are addressing a legal issue and developing their own legal reasoning.
 
 ### 2. Vocabulary mismatch
 The same legal concept is often expressed in different ways. For example:
 - `詐欺` (`fraud`) vs `詐騙` (`scam`)
 - `資遣` (`layoff`) vs `終止勞動契約` (`termination of an employment contract`)
 
-If the user does not happen to use the same wording preferred by courts, a traditional keyword search can easily miss relevant decisions.
+If the user does not happen to use the same wording preferred by courts, a traditional keyword search can easily miss substantively relevant decisions.
 
 ---
 
@@ -62,24 +65,21 @@ If the user does not happen to use the same wording preferred by courts, a tradi
 
 | Mode | How it works | What it solves |
 |---|---|---|
-| **Keyword search** | First recall relevant decisions from full text, then find the decisions they commonly cite, and rank them by relevance and citation frequency | It does not just find decisions that mention the same words; it finds the decisions courts most often rely on when discussing that legal issue |
-| **Semantic search (RAG)** | Vectorize the user's query and text passages cut from around citation positions, then retrieve by semantic similarity | Reduces dependence on exact keyword overlap and instead finds similar cases through legal meaning |
+| **Keyword search** | Match keywords within passages where courts cite prior decisions, then rank the cited prior decisions by relevance and citation frequency | It does not just find decisions whose full text contains the keyword. It finds the important decisions that courts repeatedly rely on for a particular legal issue |
+| **Semantic search (RAG)** | Compare the user's question with the legal reasoning surrounding citations to find semantically similar decisions | Reduces dependence on exact keyword overlap and finds court reasoning that uses different wording but addresses the same issue |
 
 ---
 
 ## Project Highlights
 
-- **Citation relationships are the core ranking signal.**  
-  The system moves beyond "which documents mention this term" to "which decisions courts actually use to resolve this legal issue."
+- **It works on 1.4M public decision data.**  
+  The project operates on public decision data and covers citation extraction, false-positive removal, and OpenSearch index design.
 
-- **It focuses on high-signal legal text.**  
-  By anchoring on citation positions, it targets the places where courts actually enter legal reasoning, which improves recall quality and semantic retrieval quality.
+- **Citation relationships are at the core of the ranking mechanism.**  
+  Rather than only finding decisions that mention the same terms, it prioritizes the decisions courts repeatedly cite when dealing with the same legal issue.
 
-- **It works on a real, large-scale court dataset.**  
-  The project handles public court decisions at scale, including citation parsing, false-positive filtering, OpenSearch index design, and performance optimization.
-
-- **The performance gains are concrete.**  
-  Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can fall below `1 ms` on cache hits.
+- **It is optimized not just for relevance, but for practical speed.**  
+  Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can also fall below `1 ms` when the cache hits.
 
 ---
 
@@ -125,7 +125,9 @@ Legal citations work a lot like academic citations. Structurally, they are also 
 
 > If a decision is cited frequently by other decisions, it usually carries real weight in practice.
 
-During my internship at a law firm, I noticed that citation snippets from different **source decisions** pointing to the same **target decision** often contain highly similar language. That suggests a highly cited target is not merely being mentioned by chance. Rather, it has articulated one or more concrete legal positions, and different courts quote it in similar ways when handling similar issues.
+During my internship at a law firm, I observed that citation snippets from different **source decisions** pointing to the same **target decision** often contain highly similar language.
+
+This suggests that a highly cited **target decision** is not just "mentioned by many decisions," but may already have formed a stable legal view. When different courts deal with similar issues, they repeatedly cite the same target and use similar language to explain the legal reasoning.
 
 For example, when searching for `車禍` (`traffic accident`):
 - the most-cited target is repeatedly cited in snippets about "sudden situations"
@@ -146,7 +148,7 @@ This shows that courts repeatedly rely on the same legal view when dealing with 
 
 ![Mark Terms](frontend/public/mark_terms.png)
 
-In practice, the system first uses case numbers mentioned in a decision to locate citation candidates, then uses surrounding context to determine whether they are true citations.
+In practice, the system first uses case numbers mentioned in a decision to locate candidate citations, then uses the surrounding context to determine whether they are true citations.
 
 | Term | Meaning |
 |---|---|
@@ -227,7 +229,7 @@ OpenSearch: **3.2 GB** (EC2)
 
 | Index | Documents | Size | Description |
 |---|---:|---:|---|
-| `decisions_v3` | 3.0M | 2.8 GB | Full-text keyword index used to first recall matching source IDs |
+| `decisions_v3` | 3.0M | 2.8 GB | Full-text keyword index used first to recall matching source IDs |
 | `source_target_windows_v2` | 997K | 456 MB | Source-target pair documents with citation snippets, used to identify highly relevant citation snippets among recalled sources and then recover the targets they collectively point to |
 
 ---
@@ -252,7 +254,7 @@ Case numbers appearing in a decision do not automatically represent legal citati
 
 Only when the court cites a prior decision as part of its own reasoning should that case number count as a true citation.
 
-For example, all of the following strings may be captured as citation candidates, but only some are true legal citations:
+For example, all of the following strings may be captured as citation candidates, but not all of them are true legal citations:
 
 - `按最高法院 112 年度台上字第 1234 號判決意旨……` ("According to the holding of Supreme Court Decision 112-Tai-Shang-1234 ...")
 - `本件前經最高法院 112 年度台上字第 1234 號判決發回更審` ("This case was previously remanded by Supreme Court Decision 112-Tai-Shang-1234")
@@ -275,7 +277,7 @@ At a high level, the workflow is:
 ```
 
 **Result**  
-The current pytest cases cover more than 27 edge cases drawn from real decisions, including:
+The current pytest suite covers more than 27 edge cases drawn from real decisions, including:
 - filtering exhibits in the record
 - detecting procedural-history references
 - distinguishing party-argument sections from the court's own reasoning sections
@@ -302,7 +304,7 @@ That works at smaller scale, but with broad queries such as `詐欺` (`fraud`), 
 First find the source IDs whose full text matches the search conditions.
 
 **Why not PostgreSQL GIN?**  
-In measurement, OpenSearch source recall was:
+In benchmarks, OpenSearch source recall was:
 - about **27 times faster**
 - less than **one third** of the index size
 
@@ -335,7 +337,7 @@ To solve this, I built the `source_target_windows_v2` index:
 
 PostgreSQL is left with only the final metadata lookup and aggregation.
 
-*MSM ladder: layered collection of matched snippets*
+*MSM ladder: collecting matched snippets in stages*
 
 Target collection in Stage 2 uses a step-down MSM ladder.
 
@@ -371,11 +373,13 @@ Target ranking is mainly based on two signals:
 2. **`matched_citation_count`**  
    Within the same MSM level, targets are secondarily ranked by the number of distinct source decisions that point to them.
 
-In other words, Lawcidity is not just finding decisions that mention the searched keywords or statutes. It is asking:
+In other words, Lawcidity is not simply finding decisions that mention the searched keywords or statutes. It is asking:
 
-> Within court reasoning that is relevant to the user's search conditions, which targets are repeatedly relied on by the largest number of courts?
+> Within the core legal reasoning that is relevant to the user's search conditions, which targets are repeatedly cited by courts?
 
-### How is follow-up interaction latency reduced?
+This is closer to what lawyers are actually looking for than full-text search that ignores positional signals.
+
+### How was post-search interaction latency reduced?
 
 **Ranking cache**  
 The first version cached only the Stage 1 source IDs. That meant users had to rerun Stage 2 whenever they:
@@ -383,16 +387,16 @@ The first version cached only the Stage 1 source IDs. That meant users had to re
 - moved to another page
 - added filters
 
-The later version caches the full target ranking order after the initial search, so subsequent interactions can be handled in memory.
+A later version caches the full target ranking order after the initial search, so post-search interactions can be handled in memory.
 
 **Faster citation expansion**  
-- OpenSearch first returns only `preview source IDs`, and PostgreSQL then picks the highest-scoring `citation` within each `source` before hydrating decision metadata
+- OpenSearch first returns only `preview source IDs`, and PostgreSQL then picks the highest-scoring `citation` from each `source` before hydrating decision metadata
 - For the remaining citations, PostgreSQL first selects one `citation` per `source`, then joins decision metadata to reduce unnecessary joins and sorts
 
 This reduced citation expansion time from about `3 seconds` to about `0.8 seconds`.
 
 **Precomputed UI values**  
-- Precomputed the display titles and citation counts used in the UI so they do not need to be recalculated during search
+- Display titles and citation counts used in the UI are precomputed so they do not need to be recalculated during search
 
 **Index tuning**  
 - Rebuilt composite indexes around the `WHERE` / `JOIN` / `ORDER BY` patterns used most often
@@ -405,26 +409,26 @@ This reduced citation expansion time from about `3 seconds` to about `0.8 second
 Users begin by describing their legal problem in natural language. Gemini first extracts candidate legal issues and relevant statutes. After the user confirms them, the system proceeds through the rest of the RAG pipeline:
 
 - **Query understanding**  
-  Structure the user's input into explicit legal issues and statute conditions, which then serve as structured input for generated analysis.
+  The user's input is structured into explicit legal issues and statute conditions, which then serve as structured input for downstream analysis.
 
 - **R — Retrieval**  
-  Convert the user's query into an embedding, retrieve the most semantically similar citation-anchored chunks from pgvector, and aggregate them at the decision level.
+  The user's query is converted into an embedding, the most semantically similar citation-anchored chunks are retrieved from pgvector, and the results are aggregated at the decision level.
 
 - **A — Augmentation**  
-  Package the retrieved chunks, source decision metadata, and related target references into the prompt as context for downstream analysis.
+  The retrieved chunks, source decision metadata, and related target references are packaged into the prompt as context for downstream analysis.
 
 - **G — Generation**  
-  Gemini generates issue-by-issue analysis grounded in real court decisions returned by retrieval.
+  Gemini generates issue-by-issue analysis grounded in the court decisions returned by retrieval.
 
 ### Retrieval
-- convert the query into an embedding through the Voyage API (`voyage-law-2`)
-- run approximate search through PostgreSQL / pgvector with an IVFFlat index
-- return the top 50 most similar chunks by cosine similarity
-- aggregate the results to the decision level, using the highest-scoring chunk to represent the decision's score
+- Convert the query into an embedding through the Voyage API (`voyage-law-2`)
+- Run approximate search through PostgreSQL / pgvector with an IVFFlat index
+- Return the top 50 most similar chunks by cosine similarity
+- Aggregate the results at the decision level, using the highest-scoring chunk to represent the decision's score
 
 ### Chunk Design
 
-Each chunk is anchored on a citation position in the decision, rather than cut randomly from the full text. That ensures the text sent for embedding comes from places where the court is entering substantive legal reasoning and where the signal is strongest.
+Each chunk is anchored on a citation position in the decision rather than cut mechanically from the full text. That ensures the text sent for embedding comes from places where the court is entering substantive legal reasoning, where the signal is strongest.
 
 - **center point**: the citation position in the decision
 - **boundaries**: expand outward from the citation position to the nearest structural markers such as `㈠㈡㈢`, `⒈⒉⒊`, or `一二三` (Chinese numeral headings)
@@ -476,21 +480,21 @@ Although its `Recall@5` is slightly lower than some other models, it creates a c
 
 ## Development Journey
 
-Seven weeks of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
+This project was built over seven weeks of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
 
 | Phase | Time | Main work |
 |---|---|---|
-| **1. Parsing and normalization** | Feb 12-24 | Built the citation parser (state machine), statute extraction, and false-positive filtering; iterated the schema from v1 to v4 |
-| **2. Keyword search** | Feb 25-Mar 3 | Compared OpenSearch with PostgreSQL GIN, replaced IK tokenization with 2-gram ngram, and built target ranking based on citation snippet matches |
-| **3. API and frontend** | Mar 5-13 | Built REST APIs and SQL aggregation, the React search interface and filtering UI, and completed Docker + EC2 deployment |
+| **1. Parsing and normalization** | Feb 12-24 | Built the citation parser (state machine), implemented statute extraction and false-positive filtering, and iterated the schema from v1 to v4 |
+| **2. Keyword search** | Feb 25-Mar 3 | Compared OpenSearch with PostgreSQL GIN, replaced IK tokenization with a 2-gram ngram strategy, and introduced target ranking based on citation snippet matches |
+| **3. API and frontend** | Mar 5-13 | Built REST APIs, SQL aggregation logic, the React search interface, and filtering UI, then completed Docker + EC2 deployment |
 | **4. Parser refactor** | Mar 14-21 | Refactored the citation parser into traceable, testable small functions and tightened false-positive filtering rules |
-| **5. Semantic search and RAG** | Mar 22-27 | Ran multiple rounds of embedding evaluation, designed citation-anchored chunks, and integrated pgvector retrieval with Gemini analysis |
+| **5. Semantic search and RAG** | Mar 22-27 | Ran multiple rounds of embedding evaluation, designed citation-anchored chunks, and integrated pgvector retrieval with Gemini-based analysis |
 | **6. Optimization and deployment** | Mar 26-30 | Completed chunk deduplication, production HTTPS deployment, and baseline performance tuning |
-| **7. Search and retrieval optimization** | Apr 7-19 | Built `source_target_windows_v2`, introduced step-down MSM recall, and reduced follow-up query latency through caching |
+| **7. Search and retrieval optimization** | Apr 7-19 | Built `source_target_windows_v2`, introduced step-down MSM recall, and reduced post-search interaction latency through caching |
 
 ---
 
 ## Future Work
 
-- redesign chunk boundaries, including semantic segmentation or LLM-assisted segmentation, so factual narratives, party arguments, and the court's own legal reasoning can be separated more cleanly
-- test whether using an LLM to rewrite user queries into more precise legal issues and practitioner-style terminology can improve retrieval recall and relevance
+- Redesign chunk boundaries, including semantic segmentation or LLM-assisted segmentation, so factual narratives, party arguments, and the court's own legal reasoning can be separated more cleanly
+- Test whether using an LLM to rewrite user queries into more precise legal issues and practitioner-style terminology can improve retrieval recall and relevance
