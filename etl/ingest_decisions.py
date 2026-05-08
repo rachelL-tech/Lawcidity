@@ -213,7 +213,6 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
                   AND jid IS NULL
                   AND case_type IS NOT DISTINCT FROM %s
                   AND doc_type IS NOT DISTINCT FROM %s
-                ORDER BY id
                 LIMIT 1
             """, (unit_norm, jyear, jcase_norm, jno, case_type, doc_type))
             placeholder = cur.fetchone()
@@ -224,12 +223,12 @@ def ingest_decision(conn, court_unit_id: int, root_norm: str, unit_norm: str,
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE decisions
-                    SET jid=%s, doc_type=%s, case_type=%s, court_unit_id=%s,
+                    SET jid=%s, court_unit_id=%s,
                         decision_date=%s, title=%s, clean_text=%s,
                         pdf_url=%s, updated_at=now()
                     WHERE id=%s
                     RETURNING id
-                """, (jid, doc_type, case_type, court_unit_id,
+                """, (jid, court_unit_id,
                       decision_date, jtitle, clean_text,
                       jpdf, ph_id))
                 row = cur.fetchone()
@@ -347,12 +346,12 @@ def _set_canonical_id(conn, new_id: int, unit_norm: str, jyear: int,
                 (SELECT canonical_id FROM decisions
                  WHERE unit_norm = %s AND jyear = %s AND jcase_norm = %s AND jno = %s
                    AND case_type IS NOT DISTINCT FROM %s
-                   AND id != %s AND canonical_id IS NOT NULL
+                   AND canonical_id IS NOT NULL
                  ORDER BY id LIMIT 1),
                 %s
             )
             WHERE id = %s AND canonical_id IS NULL
-        """, (unit_norm, jyear, jcase_norm, jno, case_type, new_id, new_id, new_id))
+        """, (unit_norm, jyear, jcase_norm, jno, case_type, new_id, new_id))
 
 
 def _recompute_citation_counts(conn) -> int:
@@ -548,8 +547,6 @@ def _require_citation_offsets(citation: dict) -> tuple[int, int]:
 
 
 def ingest_citations(conn, source_id: int, clean_text: str,
-                     court_root_norm: str = None,
-                     source_unit_norm: str = None,
                      source_self_key: Optional[tuple] = None,
                      source_case_type: Optional[str] = None) -> tuple:
     """
@@ -567,8 +564,6 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     try:
         raw_citations = [c.to_dict() for c in extract_citations_next(
             clean_text,
-            court_root_norm=court_root_norm,
-            source_unit_norm=source_unit_norm,
             self_key=source_self_key,
         )]
 
@@ -733,8 +728,6 @@ def main(folder_path: str, skip_recompute: bool = False):
             )
             ok, n, cite_errors = ingest_citations(
                 conn, decision_id, prepared.clean_text,
-                court_root_norm=court_info["court_root_norm"],
-                source_unit_norm=court_info["unit_norm"],
                 source_self_key=_self_key,
                 source_case_type=court_info["case_type"],
             )

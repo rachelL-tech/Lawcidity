@@ -16,7 +16,7 @@ Pipeline 分三階段：
 
 重要設計原則：
 - 不呼叫 preprocess_text；預設 text_cleaner 已完成折行合併與空白壓縮。
-- Phase 1 以 recall 優先；像「本院」這類需展開的引用若無法 resolve，則不產出 candidate。
+- Phase 1 以 recall 優先；「本院」類相對指稱不展開，直接略過。
 - Phase 2 才集中處理 precision；像程序經過、卷證參照、當事人主張等情境都在此排除。
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ from typing import List, Optional, Set
 
 ANY_COURT_CITATION = re.compile(
     r'(?<!原審)'
-    r'((?:最高(?:行政)?法院|憲法法庭|本院(?:地方庭)?|'
+    r'((?:最高(?:行政)?法院|憲法法庭|'
     r'(?:臺灣|台灣|福建)[\u4e00-\u9fff]*?法院|'
     r'[\u4e00-\u9fff]+高等行政法院(?:地方庭)?|'
     r'北高行|中高行|高高行)'
@@ -70,7 +70,7 @@ TARGET_COURTS: Set[str] = {
 # ─── Authority RE ────────────────────────────────────────────────────────────
 
 RESOLUTION_RE = re.compile(
-    r'(最高法院|本院)'
+    r'(最高法院)'
     r'(\d{2,3})年度?'
     r'第(\d+)次'
     r'(民庭|刑庭|民事庭|刑事庭|民刑庭|民刑事庭|民刑事庭總會|刑事庭總會|民事庭總會)'
@@ -79,7 +79,7 @@ RESOLUTION_RE = re.compile(
 )
 
 ADMIN_RESOLUTION_RE = re.compile(
-    r'(最高行政法院|改制前行政法院|本院)'
+    r'(最高行政法院|改制前行政法院)'
     r'(\d{2,3})年度?'
     r'(\d{1,2})月份?'
     r'(?:第(\d+)次)?'
@@ -101,7 +101,6 @@ CONFERENCE_RE = re.compile(
     r'(?:(?:臺灣)?高等行政法院(?:及[\u4e00-\u9fff]{2,25}庭)?)'
     r'|(?:司法院[\u4e00-\u9fff]{0,15})'
     r'|(?:(?:臺灣)?高等法院(?:暨所屬法院)?)'
-    r'|(?:本院(?:暨所屬法院)?)'
     r')?'
     r'(?:民國)?(\d{2,3})年'
     r'[\u4e00-\u9fff\d年月日]{0,30}?'
@@ -140,27 +139,6 @@ def _normalize_court(court: str) -> str:
     return _COURT_ABBR.get(court, court)
 
 
-def _resolve_contextual_court(
-    normalized_token: str,
-    *,
-    court_root_norm: Optional[str],
-    source_unit_norm: Optional[str],
-) -> tuple[Optional[str], Optional[str]]:
-    """把 court token 解析成實際要寫入 candidate 的法院名稱。"""
-    if normalized_token not in ('本院', '本院地方庭'):
-        return normalized_token, None
-
-    if (
-        normalized_token == '本院地方庭'
-        and source_unit_norm
-        and source_unit_norm.endswith('地方庭')
-    ):
-        return _normalize_court(source_unit_norm), '本院'
-
-    if court_root_norm:
-        return _normalize_court(court_root_norm), '本院'
-
-    return None, None
 
 
 def _normalize_doc_type(raw_doc_type: Optional[str]) -> Optional[str]:
@@ -302,7 +280,7 @@ _EVIDENCE_CITE_RE = re.compile(
 @dataclass
 class RawCandidate:
     citation_type: str              # "decision" | "authority"
-    court: str                      # 已 resolve + normalize（本院已展開）
+    court: str                      # normalize 後的法院名稱
     raw_match: str
     match_start: int                # clean_text 直接 offset
     match_end: int
@@ -317,7 +295,6 @@ class RawCandidate:
     # shared
     doc_type: Optional[str] = None
     is_abbreviated: bool = False
-    chain_court_source: Optional[str] = None   # debug: "本院" 等原始名稱
     needs_intent_signal: bool = False           # 釋字 / 憲法法庭
 
 
@@ -340,23 +317,15 @@ def _jcase_norm(raw: str) -> str:
 def find_all_candidates(
     clean_text: str,
     *,
-    court_root_norm: Optional[str] = None,
-    source_unit_norm: Optional[str] = None,
     target_courts: Set[str] = TARGET_COURTS,
 ) -> List[RawCandidate]:
     """
     直接在 clean_text 上掃描，回傳所有 RawCandidate，不做任何過濾。
-    本院無法解析時不產出 candidate。
+    「本院」類相對指稱不展開，直接略過。
     """
     candidates: List[RawCandidate] = []
-    _scan_decisions(
-        clean_text,
-        candidates,
-        court_root_norm=court_root_norm,
-        source_unit_norm=source_unit_norm,
-        target_courts=target_courts,
-    )
-    _scan_authorities(clean_text, candidates, court_root_norm=court_root_norm)
+    _scan_decisions(clean_text, candidates, target_courts=target_courts)
+    _scan_authorities(clean_text, candidates)
     return candidates
 
 
@@ -366,12 +335,9 @@ def _scan_decisions(
     clean_text: str,
     candidates: List[RawCandidate],
     *,
-    court_root_norm: Optional[str],
-    source_unit_norm: Optional[str],
     target_courts: Set[str],
 ) -> None:
     current_court: Optional[str] = None
-    chain_court_source: Optional[str] = None   # 本院 chain 時記錄原始名稱
     pos = 0
 
     # doc_type 回填：鏈中前幾筆沒有 doc_type，等後筆確認再回填
@@ -421,7 +387,6 @@ def _scan_decisions(
                         jno=int(abbr.group(3)),
                         doc_type=doc_type,
                         is_abbreviated=True,
-                        chain_court_source=chain_court_source,
                     )
                     candidates.append(c)
                     _flush_pending(doc_type)
@@ -438,17 +403,7 @@ def _scan_decisions(
         if full is None:
             break
 
-        raw_court_str = full.group(1)
-        normalized_token = _normalize_court(raw_court_str)
-        current_court, chain_court_source = _resolve_contextual_court(
-            normalized_token,
-            court_root_norm=court_root_norm,
-            source_unit_norm=source_unit_norm,
-        )
-        if current_court is None:
-            # 本院解析不出 → 不產出 candidate，chain 中斷
-            pos = full.end()
-            continue
+        current_court = _normalize_court(full.group(1))
 
         if current_court in target_courts:
             jyear = int(full.group(2))
@@ -475,7 +430,6 @@ def _scan_decisions(
                 jno=jno,
                 doc_type='憲判字' if is_const else doc_type,
                 is_abbreviated=False,
-                chain_court_source=chain_court_source,
                 needs_intent_signal=is_const,
             )
             candidates.append(c)
@@ -503,7 +457,6 @@ def _scan_decisions(
                         jno=int(am.group(1)),
                         doc_type='憲判字',
                         is_abbreviated=True,
-                        chain_court_source=chain_court_source,
                         needs_intent_signal=True,
                     ))
                     no_pos = am.end()
@@ -518,11 +471,9 @@ def _scan_decisions(
 def _scan_authorities(
     clean_text: str,
     candidates: List[RawCandidate],
-    *,
-    court_root_norm: Optional[str],
 ) -> None:
-    _scan_resolutions(clean_text, candidates, court_root_norm=court_root_norm)
-    _scan_admin_resolutions(clean_text, candidates, court_root_norm=court_root_norm)
+    _scan_resolutions(clean_text, candidates)
+    _scan_admin_resolutions(clean_text, candidates)
     _scan_grand_interps(clean_text, candidates)
     _scan_conferences(clean_text, candidates)
     _scan_agency_opinions(clean_text, candidates)
@@ -531,19 +482,12 @@ def _scan_authorities(
 def _scan_resolutions(
     clean_text: str,
     candidates: List[RawCandidate],
-    *,
-    court_root_norm: Optional[str],
 ) -> None:
     for m in RESOLUTION_RE.finditer(clean_text):
         court_g = m.group(1)
         jyear = int(m.group(2))
         seq_no = int(m.group(3))
         court_type = m.group(4)
-
-        if court_g == '本院':
-            if not court_root_norm:
-                continue
-            court_g = _normalize_court(court_root_norm)
 
         candidates.append(RawCandidate(
             citation_type="authority",
@@ -560,19 +504,12 @@ def _scan_resolutions(
 def _scan_admin_resolutions(
     clean_text: str,
     candidates: List[RawCandidate],
-    *,
-    court_root_norm: Optional[str],
 ) -> None:
     for m in ADMIN_RESOLUTION_RE.finditer(clean_text):
         court_g = m.group(1)
         jyear = int(m.group(2))
         month = int(m.group(3))
         seq_no = int(m.group(4)) if m.group(4) else None
-
-        if court_g == '本院':
-            if not court_root_norm:
-                continue
-            court_g = _normalize_court(court_root_norm)
 
         auth_key = f"{court_g}|{jyear}|{month}" + (f"|{seq_no}" if seq_no else "")
         if seq_no:
@@ -741,14 +678,12 @@ class FilterContext:
     reason_pos: int          # 理由段起點（找不到 = 0，不過濾）
     zhengben_pos: int        # 正本證明與原本無異 起點（找不到 = len(text)）
     self_key: Optional[tuple]        # (court, jyear, jcase_norm, jno)
-    court_root_norm: Optional[str]
 
 
 def make_filter_context(
     clean_text: str,
     *,
     self_key: Optional[tuple] = None,
-    court_root_norm: Optional[str] = None,
 ) -> FilterContext:
     # zhengben_pos：只用明確 footer 標記
     zhengben_pos = clean_text.find('以上正本證明與原本無異')
@@ -764,7 +699,6 @@ def make_filter_context(
         reason_pos=reason_pos,
         zhengben_pos=zhengben_pos,
         self_key=self_key,
-        court_root_norm=court_root_norm,
     )
 
 
@@ -861,15 +795,6 @@ def _r001_self_citation(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     return None
 
 
-def _r002_ben_yuan_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
-    """本院 resolved citations 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
-    if c.chain_court_source != '本院':
-        return None
-    after = _post_sentence(ctx.clean_text, c.match_end)
-    if _CITE_CLOSING_RE.search(after):
-        return None
-    return "R002_ben_yuan_missing_intent"
-
 
 def _r009_district_court_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     """地方法院 decision 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
@@ -947,7 +872,6 @@ _RULES = [
     _r001_self_citation,
     _r003_prior_case,
     _r011_evidence_cite,
-    _r002_ben_yuan_intent,
     _r009_district_court_intent,
     _r005_context_check,
     _r010_authority_intent,
@@ -1194,22 +1118,12 @@ def build_snippets(
 def extract_citations_next(
     clean_text: str,
     *,
-    court_root_norm: Optional[str] = None,
-    source_unit_norm: Optional[str] = None,
     self_key: Optional[tuple] = None,
 ) -> List[CitationResult]:
     """
     Phase 1 → Phase 2 → Phase 3 完整 pipeline。
     """
-    candidates = find_all_candidates(
-        clean_text,
-        court_root_norm=court_root_norm,
-        source_unit_norm=source_unit_norm,
-    )
-    ctx = make_filter_context(
-        clean_text,
-        self_key=self_key,
-        court_root_norm=court_root_norm,
-    )
+    candidates = find_all_candidates(clean_text)
+    ctx = make_filter_context(clean_text, self_key=self_key)
     accepted, _ = filter_candidates(candidates, ctx)
     return build_snippets(accepted, clean_text)

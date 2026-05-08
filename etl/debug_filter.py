@@ -83,20 +83,19 @@ def debug_file(json_path, court_info):
         return None
 
     clean = clean_judgment_text(jfull)
-    root_norm = court_info.get("court_root_norm", "")
     jcase_norm = str(data.get("JCASE", "")).replace("臺", "台")
     self_key = (
-        root_norm.replace("臺", "台"),
+        court_info.get("court_root_norm", "").replace("臺", "台"),
         int(data.get("JYEAR", 0)),
         jcase_norm,
         int(data.get("JNO", 0)),
     )
 
-    cands = find_all_candidates(clean, court_root_norm=root_norm)
+    cands = find_all_candidates(clean)
     if not cands:
         return None
 
-    ctx = make_filter_context(clean, self_key=self_key, court_root_norm=root_norm)
+    ctx = make_filter_context(clean, self_key=self_key)
 
     rows = []
     for c in cands:
