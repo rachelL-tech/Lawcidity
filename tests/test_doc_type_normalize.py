@@ -13,9 +13,11 @@ sys.path.insert(0, '.')
 import pytest
 from etl.citation_parser import extract_citations_next
 
+DEFAULT_SELF_KEY = ("__TEST__", 999, "測", 1)
+
 
 def extract_citations(text: str) -> list:
-    return [c.to_dict() for c in extract_citations_next(text)]
+    return [c.to_dict() for c in extract_citations_next(text, self_key=DEFAULT_SELF_KEY)]
 
 
 def _citations_from(text: str) -> list:

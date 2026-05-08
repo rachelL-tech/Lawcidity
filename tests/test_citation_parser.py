@@ -11,6 +11,8 @@ if str(ROOT) not in sys.path:
 import pytest
 from etl.citation_parser import extract_citations_next, find_snippet_start, find_snippet_end
 
+DEFAULT_SELF_KEY = ("__TEST__", 999, "測", 1)
+
 
 def _pos(text: str, sub: str) -> tuple[int, int]:
     idx = text.find(sub)
@@ -20,6 +22,7 @@ def _pos(text: str, sub: str) -> tuple[int, int]:
 
 
 def extract_citations(text, **kw):
+    kw.setdefault("self_key", DEFAULT_SELF_KEY)
     return [c.to_dict() for c in extract_citations_next(text, **kw)]
 
 
@@ -91,11 +94,10 @@ def test_authority_snippet_keeps_full_quoted_sentence():
 
 
 def test_benyuan_local_court_keeps_local_court_granularity():
-    text = "理由\r\n本院地方庭113年度交字第94號判決可資參照。"
+    text = "理由\r\n本院113年度交字第94號判決可資參照。"
     results = extract_citations(
         text,
-        court_root_norm="臺北高等行政法院",
-        source_unit_norm="臺北高等行政法院地方庭",
+        self_key=("台北高等行政法院地方庭", 999, "測", 1),
     )
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     assert len(decision_results) == 1
@@ -106,8 +108,7 @@ def test_benyuan_without_local_hint_stays_on_root_court():
     text = "理由\r\n本院113年度交字第94號判決可資參照。"
     results = extract_citations(
         text,
-        court_root_norm="臺北高等行政法院",
-        source_unit_norm="臺北高等行政法院地方庭",
+        self_key=("台北高等行政法院", 999, "測", 1),
     )
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     assert len(decision_results) == 1

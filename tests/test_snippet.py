@@ -20,8 +20,11 @@ from etl.citation_parser import (
     find_snippet_end,
 )
 
+DEFAULT_SELF_KEY = ("__TEST__", 999, "測", 1)
+
 
 def extract_citations(text, **kw):
+    kw.setdefault("self_key", DEFAULT_SELF_KEY)
     return [c.to_dict() for c in extract_citations_next(text, **kw)]
 
 
@@ -341,7 +344,7 @@ def test_prior_ruling_summary_citation_temporarily_retained_without_section_filt
         "（下稱憲判2號）判決所諭知之減輕或免除其刑之法律規定。\r\n"
         "三、抗告意旨略以：原裁定違法。"
     )
-    results = extract_citations(text, court_root_norm="最高法院")
+    results = extract_citations(text)
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     # citation_parser R010 要求 ACCEPT_RE signal；
     # 原裁定略以段落內的憲判字無明確 signal → 被 R010 過濾
@@ -361,7 +364,7 @@ def test_prior_judgment_summary_authority_citation_filtered():
         "且憲法法庭112年憲判字第2號判決亦足作為救濟依據。\r\n"
         "三、本院認為：上訴無理由。"
     )
-    results = extract_citations(text, court_root_norm="最高法院")
+    results = extract_citations(text)
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     assert len(decision_results) == 0, (
         f"原判決略以段 decision citation 不應保留，但得到：{decision_results}"
@@ -379,7 +382,7 @@ def test_prior_disposition_summary_citation_temporarily_retained_without_section
         "並主張憲法法庭112年憲判字第2號判決可資參照。\r\n"
         "三、本院認為：聲請駁回。"
     )
-    results = extract_citations(text, court_root_norm="最高法院")
+    results = extract_citations(text)
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     assert len(decision_results) == 2, (
         f"原處分略以段 citation 在暫停位置型過濾後目前應保留，但得到：{decision_results}"
@@ -397,7 +400,7 @@ def test_prior_instance_summary_authority_citation_filtered():
         "且憲法法庭112年憲判字第2號判決與本件情形相當。\r\n"
         "三、本院認為：抗告無理由。"
     )
-    results = extract_citations(text, court_root_norm="最高法院")
+    results = extract_citations(text)
     decision_results = [r for r in results if r.get("citation_type") == "decision"]
     assert len(decision_results) == 0, (
         f"原審略以段 decision citation 不應保留，但得到：{decision_results}"
@@ -475,7 +478,7 @@ def test_zhengben_area_filtered():
         "【附表】\r\n"
         "臺灣高等法院113年度聲字第1200號裁定應執行有期徒刑16年\r\n"
     )
-    results = extract_citations(text, court_root_norm="臺灣高雄地方法院")
+    results = extract_citations(text)
     raw_matches = [r["raw_match"] for r in results]
     # 理由段的引用應保留
     assert any("台上字第1號" in rm for rm in raw_matches), "理由段引用應保留"

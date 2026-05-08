@@ -16,7 +16,7 @@ Pipeline 分三階段：
 
 重要設計原則：
 - 不呼叫 preprocess_text；預設 text_cleaner 已完成折行合併與空白壓縮。
-- Phase 1 以 recall 優先；「本院」類相對指稱不展開，直接略過。
+- Phase 1 以 recall 優先；「本院」由 source_court 展開。
 - Phase 2 才集中處理 precision；像程序經過、卷證參照、當事人主張等情境都在此排除。
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ from typing import List, Optional, Set
 
 ANY_COURT_CITATION = re.compile(
     r'(?<!原審)'
-    r'((?:最高(?:行政)?法院|憲法法庭|'
+    r'((?:最高(?:行政)?法院|憲法法庭|本院|'
     r'(?:臺灣|台灣|福建)[\u4e00-\u9fff]*?法院|'
     r'[\u4e00-\u9fff]+高等行政法院(?:地方庭)?|'
     r'北高行|中高行|高高行)'
@@ -79,7 +79,7 @@ RESOLUTION_RE = re.compile(
 )
 
 ADMIN_RESOLUTION_RE = re.compile(
-    r'(最高行政法院|改制前行政法院)'
+    r'(最高行政法院|改制前行政法院|本院)'
     r'(\d{2,3})年度?'
     r'(\d{1,2})月份?'
     r'(?:第(\d+)次)?'
@@ -316,16 +316,15 @@ def _jcase_norm(raw: str) -> str:
 
 def find_all_candidates(
     clean_text: str,
-    *,
-    target_courts: Set[str] = TARGET_COURTS,
+    source_court: str,
 ) -> List[RawCandidate]:
     """
     直接在 clean_text 上掃描，回傳所有 RawCandidate，不做任何過濾。
-    「本院」類相對指稱不展開，直接略過。
+    「本院」一律 resolve 到 source_court。
     """
     candidates: List[RawCandidate] = []
-    _scan_decisions(clean_text, candidates, target_courts=target_courts)
-    _scan_authorities(clean_text, candidates)
+    _scan_decisions(clean_text, candidates, source_court)
+    _scan_authorities(clean_text, candidates, source_court)
     return candidates
 
 
@@ -334,8 +333,7 @@ def find_all_candidates(
 def _scan_decisions(
     clean_text: str,
     candidates: List[RawCandidate],
-    *,
-    target_courts: Set[str],
+    source_court: str,
 ) -> None:
     current_court: Optional[str] = None
     pos = 0
@@ -366,7 +364,7 @@ def _scan_decisions(
         if current_court is not None:
             abbr = ABBR_CITATION.match(clean_text, pos)
             if abbr:
-                if current_court in target_courts:
+                if current_court in TARGET_COURTS:
                     raw, mstart = _abbr_raw_and_start(abbr)
                     doc_type = _normalize_doc_type(abbr.group(4))
 
@@ -403,9 +401,13 @@ def _scan_decisions(
         if full is None:
             break
 
-        current_court = _normalize_court(full.group(1))
+        normalized_token = _normalize_court(full.group(1))
+        if normalized_token == '本院':
+            current_court = source_court
+        else:
+            current_court = normalized_token
 
-        if current_court in target_courts:
+        if current_court in TARGET_COURTS:
             jyear = int(full.group(2))
             raw_jcase = full.group(3)
             jcase = _jcase_norm(raw_jcase)
@@ -471,9 +473,10 @@ def _scan_decisions(
 def _scan_authorities(
     clean_text: str,
     candidates: List[RawCandidate],
+    source_court: str,
 ) -> None:
     _scan_resolutions(clean_text, candidates)
-    _scan_admin_resolutions(clean_text, candidates)
+    _scan_admin_resolutions(clean_text, candidates, source_court)
     _scan_grand_interps(clean_text, candidates)
     _scan_conferences(clean_text, candidates)
     _scan_agency_opinions(clean_text, candidates)
@@ -504,18 +507,19 @@ def _scan_resolutions(
 def _scan_admin_resolutions(
     clean_text: str,
     candidates: List[RawCandidate],
+    source_court: str,
 ) -> None:
     for m in ADMIN_RESOLUTION_RE.finditer(clean_text):
         court_g = m.group(1)
+        if court_g == '本院':
+            court_g = source_court
         jyear = int(m.group(2))
         month = int(m.group(3))
         seq_no = int(m.group(4)) if m.group(4) else None
 
+        seq_part = f"第{seq_no}次" if seq_no else ""
         auth_key = f"{court_g}|{jyear}|{month}" + (f"|{seq_no}" if seq_no else "")
-        if seq_no:
-            display = f"{court_g}{jyear}年{month}月份第{seq_no}次聯席會議決議"
-        else:
-            display = f"{court_g}{jyear}年{month}月份聯席會議決議"
+        display = f"{court_g}{jyear}年{month}月份{seq_part}聯席會議決議"
 
         candidates.append(RawCandidate(
             citation_type="authority",
@@ -677,13 +681,13 @@ class FilterContext:
     clean_text: str
     reason_pos: int          # 理由段起點（找不到 = 0，不過濾）
     zhengben_pos: int        # 正本證明與原本無異 起點（找不到 = len(text)）
-    self_key: Optional[tuple]        # (court, jyear, jcase_norm, jno)
+    self_key: tuple        # (court, jyear, jcase_norm, jno)
 
 
 def make_filter_context(
     clean_text: str,
     *,
-    self_key: Optional[tuple] = None,
+    self_key: tuple,
 ) -> FilterContext:
     # zhengben_pos：只用明確 footer 標記
     zhengben_pos = clean_text.find('以上正本證明與原本無異')
@@ -796,6 +800,16 @@ def _r001_self_citation(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
 
 
 
+def _r002_ben_yuan_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
+    """「本院」resolved citations 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
+    if not c.raw_match.startswith('本院'):
+        return None
+    after = _post_sentence(ctx.clean_text, c.match_end)
+    if _CITE_CLOSING_RE.search(after):
+        return None
+    return "R002_ben_yuan_missing_intent"
+
+
 def _r009_district_court_intent(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     """地方法院 decision 需在案號之後（同句內）有 _CITE_CLOSING_RE signal。"""
     if c.citation_type != "decision" or '地方法院' not in c.court:
@@ -872,6 +886,7 @@ _RULES = [
     _r001_self_citation,
     _r003_prior_case,
     _r011_evidence_cite,
+    _r002_ben_yuan_intent,
     _r009_district_court_intent,
     _r005_context_check,
     _r010_authority_intent,
@@ -1118,12 +1133,13 @@ def build_snippets(
 def extract_citations_next(
     clean_text: str,
     *,
-    self_key: Optional[tuple] = None,
+    self_key: tuple,
 ) -> List[CitationResult]:
     """
     Phase 1 → Phase 2 → Phase 3 完整 pipeline。
     """
-    candidates = find_all_candidates(clean_text)
+    source_court = self_key[0]
+    candidates = find_all_candidates(clean_text, source_court)
     ctx = make_filter_context(clean_text, self_key=self_key)
     accepted, _ = filter_candidates(candidates, ctx)
     return build_snippets(accepted, clean_text)
