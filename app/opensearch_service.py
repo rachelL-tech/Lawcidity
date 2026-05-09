@@ -38,12 +38,12 @@ def build_opensearch_query(
     exclude_terms: list[str],
     exclude_statute_filters: list[tuple[str, str, str | None]],
 ) -> dict[str, Any]:
-    must = [
+    # Stage 1 只用 composite agg 收 source_ids（字典序），不用 BM25。
+    # 把所有 match 條件放 filter context 跳過 score 計算，並讓 OS 可以 cache 結果。
+    filters: list[dict[str, Any]] = [
         {"match_phrase": {"clean_text": term}}
         for term in query_terms
     ]
-
-    filters: list[dict[str, Any]] = []
     if case_types:
         filters.append({"terms": {"case_type": case_types}})
     for law, article, sub_ref in statute_filters:
@@ -61,8 +61,6 @@ def build_opensearch_query(
         )
 
     bool_query: dict[str, Any] = {}
-    if must:
-        bool_query["must"] = must
     if filters:
         bool_query["filter"] = filters
     if must_not:
