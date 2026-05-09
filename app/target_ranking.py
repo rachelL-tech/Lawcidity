@@ -188,7 +188,6 @@ def fetch_target_rankings_by_relevance(
                 "total_citation_count": int(meta.get("total_citation_count") or 0),
                 "matched_citation_count": int(meta.get("matched_citation_count") or 0),
                 "reached_at_msm": int(raw["reached_at_msm"]),
-                "preview_source_ids": list(raw["preview_source_ids"]),
             }
         )
 

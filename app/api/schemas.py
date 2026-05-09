@@ -43,7 +43,6 @@ class SearchResultItem(BaseModel):
     case_ref: str
     doc_type: str | None
     total_citation_count: int # 不受搜尋條件限制，歷史上引用此 target 的 distinct source 數
-    preview_source_ids: list[int] = []
 
 
 class SearchContext(BaseModel):
@@ -108,10 +107,6 @@ class CitationQueryParams(BaseModel):
         None,
         description="由 /search 回傳；對應此次搜尋的 source_ids 快取 key",
     )
-    preview_source_ids: str | None = Field(
-        None,
-        description="逗號分隔；/search 回傳的 preview source ids",
-    )
 
 
 class ParsedCitationQuery(BaseModel):
@@ -121,7 +116,6 @@ class ParsedCitationQuery(BaseModel):
     exclude_statute_list: list[tuple[str, str | None, str | None]]
     case_types: list[str]
     search_cache_key: str | None = None
-    preview_source_ids: list[int] | None = None
 
 
 class CitationsResponse(BaseModel):

@@ -167,7 +167,6 @@ def search(req: SearchRequest):
             case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
-            preview_source_ids=[int(source_id) for source_id in (row.get("preview_source_ids") or [])],
         )
         for row in page_rankings
     ]
@@ -362,7 +361,6 @@ def rerank(req: RerankRequest):
             case_ref=row.get("display_title") or "",
             doc_type=row.get("doc_type"),
             total_citation_count=int(row.get("total_citation_count") or 0),
-            preview_source_ids=[int(source_id) for source_id in (row.get("preview_source_ids") or [])],
         )
         for row in page_rankings
     ]

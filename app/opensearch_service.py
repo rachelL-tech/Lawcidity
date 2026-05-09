@@ -210,18 +210,17 @@ def _aggregate_targets_at_msm(
     source_ids: list[int],
     statute_filters: list[tuple[str, str | None, str | None]],
     minimum_should_match: int | None,
-) -> dict[str, dict[str, Any]]:
-    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 target 統計，回傳 {target_uid: {preview_source_ids}}。"""
+) -> set[str]:
+    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 matched target_uid 集合。"""
     client = _get_opensearch_client()
 
     index_name = "source_target_windows_v2"
     page_size = 1000 # 設定 composite aggregation 每頁 1000 個 buckets
-    source_chunk_size = 5000 # 每次查詢限制在 5000 個 source_ids 以內，避免 bool terms source_id query 太大導致效能問題
+    source_chunk_size = 5000 # 每次查詢限制在 5000 個 source_ids 以內，避免 bool terms source_id query 太大導致效能問題，調大實測反而會更慢，因為OS 對 terms filter 內部用 set 比對，集合越大每個 doc 比對成本越高（HashSet 遍歷 + 記憶體 footprint）
 
-    counts: dict[str, dict[str, Any]] = {}
+    matched: set[str] = set()
 
     for source_id_chunk in chunk_source_ids(source_ids, source_chunk_size):
-        # 決定這批 source ids 中，哪些 source-target pair docs 算 matched
         bool_query = _build_source_target_relevance_bool_query(
             query_terms=query_terms,
             source_ids=source_id_chunk,
@@ -240,60 +239,22 @@ def _aggregate_targets_at_msm(
             body = {
                 "size": 0,
                 "query": {"bool": bool_query},
-                "aggs": {
-                    "targets": {
-                        "composite": composite,
-                        "aggs": {
-                            "preview_source_ids": {
-                                "terms": {
-                                    "field": "source_id",
-                                    "size": 5,
-                                },
-                            },
-                        },
-                    },
-                },
+                "aggs": {"targets": {"composite": composite}},
             }
 
             response = client.search(index=index_name, body=body)
 
             agg = (response.get("aggregations") or {}).get("targets") or {}
-            buckets = agg.get("buckets") or []
-
-            for bucket in buckets:
+            for bucket in agg.get("buckets") or []:
                 target_uid = (bucket.get("key") or {}).get("target_uid")
-                if not isinstance(target_uid, str) or not target_uid:
-                    continue
-
-                # 如果 key(target_uid) 已經存在，就拿原本的 value；如果 key 不存在，就先建立一個預設 value，再回傳它
-                row = counts.setdefault(
-                    target_uid,
-                    {"preview_source_ids": []},
-                )
-
-                if len(row["preview_source_ids"]) < 5:
-                    source_buckets = (
-                        (bucket.get("preview_source_ids") or {}).get("buckets") or []
-                    )
-                    existing = set(row["preview_source_ids"])
-                    for source_bucket in source_buckets:
-                        try:
-                            sid = int(source_bucket.get("key"))
-                        except Exception:
-                            continue
-                        if sid in existing:
-                            continue
-                        row["preview_source_ids"].append(sid)
-                        existing.add(sid)
-                        if len(row["preview_source_ids"]) >= 5:
-                            break
+                if isinstance(target_uid, str) and target_uid:
+                    matched.add(target_uid)
 
             after_key = agg.get("after_key")
-            # 沒有 after_key 時，代表這個 source_id_chunk 的 target buckets 都取完了，跳出 while，換下一個 source chunk
             if not after_key:
                 break
 
-    return counts
+    return matched
 
 
 def search_target_rankings_step_down(
@@ -305,39 +266,27 @@ def search_target_rankings_step_down(
 ) -> list[dict[str, Any]]:
     """
     階梯式 step_down：msm=N → N-1 → ... → 1 → None（filter-only）。
-    每階用 composite agg 抓 target 級 matched_count + top 5 preview sources。
-    pool 累積達 threshold 就停，回傳時附 reached_at_msm（None fallback 記為 0）。
+    每階用 composite agg 抓 matched target_uid，pool 累積達 threshold 就停。
+    每個 target 記錄首次入池的 msm 為 reached_at_msm（None fallback 記為 0）。
     """
     if not source_ids:
         return []
 
     should_count = len(query_terms) + len(statute_filters)
-    msm_ladder: list[int | None] = list(range(should_count, 0, -1)) + [None] # when should_count = 3, msm_ladder = [3, 2, 1, None]
+    msm_ladder: list[int | None] = list(range(should_count, 0, -1)) + [None]
 
     pool: dict[str, dict[str, Any]] = {}
     for msm in msm_ladder:
-        level = _aggregate_targets_at_msm(
+        matched_uids = _aggregate_targets_at_msm(
             query_terms=query_terms,
             source_ids=source_ids,
             statute_filters=statute_filters,
             minimum_should_match=msm,
         )
-        for target_uid, stats in level.items():
+        for target_uid in matched_uids:
             if target_uid in pool:
-                existing = pool[target_uid]["preview_source_ids"]
-                if len(existing) < 5:
-                    seen = set(existing)
-                    for sid in stats["preview_source_ids"]:
-                        if sid not in seen:
-                            existing.append(sid)
-                            seen.add(sid)
-                        if len(existing) >= 5:
-                            break
                 continue
-            pool[target_uid] = {
-                **stats,
-                "reached_at_msm": msm if msm is not None else 0,
-            }
+            pool[target_uid] = {"reached_at_msm": msm if msm is not None else 0}
         if len(pool) >= threshold:
             break
 
