@@ -14,6 +14,7 @@ from app.citation_preview import (
     CITATIONS_PREVIEW_LIMIT,
     fetch_citation_counts,
     fetch_matched_preview_rows,
+    fetch_next_source_ids_for_target,
     fetch_other_preview_rows,
 )
 from app.db import get_conn
@@ -28,6 +29,7 @@ from app.opensearch_service import (
 )
 from app.api.schemas import (
     CitationQueryParams,
+    CitationsMoreResponse,
     CitationsResponse,
     ParsedCitationQuery,
     CitationSource,
@@ -138,32 +140,53 @@ def _parse_citation_query(params: CitationQueryParams) -> ParsedCitationQuery:
     )
 
 
+def _row_to_source(r: dict) -> CitationSource:
+    return CitationSource(
+        citation_id=r["citation_id"],
+        source_id=r["source_id"],
+        source_court=_simplify_court(r["source_court_raw"] or ""),
+        source_court_level=r["source_court_level"],
+        display_title=r.get("display_title"),
+        doc_type=r["doc_type"],
+        decision_date=str(r["decision_date"]) if r["decision_date"] else None,
+        snippet=r["snippet"],
+        raw_match=r["raw_match"],
+        statutes=list(r["statutes"]) if r["statutes"] else [],
+    )
+
+
 def _build_citations_response(
     matched_total: int,
     others_total: int,
     matched_rows: list[dict],
     others_rows: list[dict],
 ) -> CitationsResponse:
-    def to_source(r: dict) -> CitationSource:
-        return CitationSource(
-            citation_id=r["citation_id"],
-            source_id=r["source_id"],
-            source_court=_simplify_court(r["source_court_raw"] or ""),
-            source_court_level=r["source_court_level"],
-            display_title=r.get("display_title"),
-            doc_type=r["doc_type"],
-            decision_date=str(r["decision_date"]) if r["decision_date"] else None,
-            snippet=r["snippet"],
-            raw_match=r["raw_match"],
-            statutes=list(r["statutes"]) if r["statutes"] else [],
-        )
-
     return CitationsResponse(
         matched_total=matched_total,
         others_total=others_total,
-        matched_sources=[to_source(r) for r in matched_rows],
-        others_sources=[to_source(r) for r in others_rows],
+        matched_sources=[_row_to_source(r) for r in matched_rows],
+        others_sources=[_row_to_source(r) for r in others_rows],
     )
+
+
+def _parse_loaded_source_ids(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    result: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            source_id = int(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="loaded_source_ids 格式錯誤") from exc
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        result.append(source_id)
+    return result
 
 
 # ── Decision citations ────────────────────────────────────────────────
@@ -256,4 +279,81 @@ def get_authority_citations_matched(
         others_total=others_total,
         matched_rows=matched_rows,
         others_rows=others_rows,
+    )
+
+
+# ── Lazy "view more" ──────────────────────────────────────────────────
+
+def _fetch_more_for_target(
+    target_col: str,
+    target_val: int,
+    parsed: ParsedCitationQuery,
+    loaded_source_ids: list[int],
+    page_size: int,
+) -> CitationsMoreResponse:
+    with get_conn() as conn:
+        resolved_source_ids = _resolve_source_ids_for_citations(
+            parsed.query_terms,
+            parsed.statute_list,
+            parsed.exclude_terms,
+            parsed.exclude_statute_list,
+            parsed.case_types,
+            parsed.search_cache_key,
+        )
+        new_source_ids = fetch_next_source_ids_for_target(
+            conn,
+            target_col,
+            target_val,
+            parsed.query_terms,
+            parsed.statute_list,
+            resolved_source_ids,
+            loaded_source_ids,
+            page_size,
+        )
+        if not new_source_ids:
+            return CitationsMoreResponse(new_sources=[])
+        new_rows = fetch_matched_preview_rows(
+            conn,
+            target_col,
+            target_val,
+            parsed.query_terms,
+            parsed.statute_list,
+            new_source_ids,
+        )
+    return CitationsMoreResponse(new_sources=[_row_to_source(r) for r in new_rows])
+
+
+@router.get("/decisions/{target_id}/citations/more", response_model=CitationsMoreResponse)
+def get_decision_citations_more(
+    target_id: int,
+    loaded_source_ids: str | None = None,
+    page_size: int = 5,
+    params: CitationQueryParams = Depends(),
+):
+    parsed = _parse_citation_query(params)
+    loaded = _parse_loaded_source_ids(loaded_source_ids)
+    return _fetch_more_for_target(
+        target_col="c.target_canonical_id",
+        target_val=target_id,
+        parsed=parsed,
+        loaded_source_ids=loaded,
+        page_size=page_size,
+    )
+
+
+@router.get("/authorities/{authority_id}/citations/more", response_model=CitationsMoreResponse)
+def get_authority_citations_more(
+    authority_id: int,
+    loaded_source_ids: str | None = None,
+    page_size: int = 5,
+    params: CitationQueryParams = Depends(),
+):
+    parsed = _parse_citation_query(params)
+    loaded = _parse_loaded_source_ids(loaded_source_ids)
+    return _fetch_more_for_target(
+        target_col="c.target_authority_id",
+        target_val=authority_id,
+        parsed=parsed,
+        loaded_source_ids=loaded,
+        page_size=page_size,
     )

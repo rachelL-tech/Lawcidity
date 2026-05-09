@@ -1,7 +1,7 @@
 import { useState } from "react";
 import DocTypeBadge from "./DocTypeBadge";
 import SnippetCard from "./SnippetCard";
-import { fetchCitations } from "../lib/api";
+import { fetchCitations, fetchCitationsMore } from "../lib/api";
 
 // 搜尋結果卡片：顯示一筆被參照判決，點擊展開引用來源列表
 // Props:
@@ -26,6 +26,7 @@ export default function ResultCard({
   const [others, setOthers] = useState(null);
   const [othersTotal, setOthersTotal] = useState(null);
   const [loadingCitations, setLoadingCitations] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // 依 target 類型決定 endpoint
   const targetType = item.target_id != null ? "decisions" : "authorities";
@@ -62,6 +63,31 @@ export default function ResultCard({
       setOthersTotal(resp.others_total ?? otherSources.length);
     } finally {
       setLoadingCitations(false);
+    }
+  }
+
+  async function handleLoadMore() {
+    if (loadingMore || !matched) return;
+    setLoadingMore(true);
+    try {
+      const loadedSourceIds = matched.map((c) => c.source_id);
+      const resp = await fetchCitationsMore(
+        targetType,
+        targetId,
+        keywords,
+        statutes,
+        excludeKeywords,
+        excludeStatutes,
+        caseTypes,
+        searchCacheId,
+        loadedSourceIds,
+      );
+      const newSources = resp.new_sources ?? [];
+      if (newSources.length > 0) {
+        setMatched([...matched, ...newSources]);
+      }
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -128,6 +154,19 @@ export default function ResultCard({
                   <SnippetCard key={c.citation_id} citation={c} keywords={keywords} searchStatutes={statutes} />
                 ))}
               </div>
+              {matchedTotal != null && matched.length < matchedTotal && (
+                <div className="mt-3 text-center">
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    className="text-sm text-brand hover:underline disabled:opacity-50 disabled:no-underline"
+                  >
+                    {loadingMore
+                      ? "載入中…"
+                      : `查看更多 (+${matchedTotal - matched.length})`}
+                  </button>
+                </div>
+              )}
             </section>
           )}
 

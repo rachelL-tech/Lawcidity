@@ -240,3 +240,51 @@ def fetch_other_preview_rows(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+def fetch_next_source_ids_for_target(
+    conn,
+    target_col: str,
+    target_val: int,
+    query_terms: list[str],
+    statute_filters: list[tuple],
+    resolved_source_ids: list[int],
+    exclude_source_ids: list[int],
+    limit: int,
+) -> list[int]:
+    """為 lazy /more endpoint：在 resolved 範圍內，找該 target 還沒載入的 source，按 hit_score 排序。"""
+    params: dict = {
+        "target_val": target_val,
+        "resolved": resolved_source_ids,
+        "excluded": exclude_source_ids,
+        "limit": limit,
+    }
+    target_filter = f"{target_col} = %(target_val)s"
+    keyword_score_sql = build_keyword_score_sql(query_terms, params)
+    statute_score_sql = build_statute_score_sql(statute_filters, params, "c.id")
+
+    sql = f"""
+        WITH scored AS (
+            SELECT c.id, c.source_id,
+                   {keyword_score_sql} AS keyword_score,
+                   {statute_score_sql} AS statute_score
+            FROM citations c
+            WHERE {target_filter}
+              AND c.source_id = ANY(%(resolved)s::bigint[])
+              AND NOT (c.source_id = ANY(%(excluded)s::bigint[]))
+        ),
+        picked AS (
+            SELECT DISTINCT ON (source_id)
+                source_id,
+                (keyword_score + statute_score) AS hit_score
+            FROM scored
+            ORDER BY source_id, (keyword_score + statute_score) DESC, id ASC
+        )
+        SELECT source_id FROM picked
+        ORDER BY hit_score DESC, source_id ASC
+        LIMIT %(limit)s
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [r["source_id"] for r in cur.fetchall()]

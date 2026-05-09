@@ -59,6 +59,20 @@ export function fetchCitations(targetType, targetId, keywords, statutes, exclude
   return get(`/${targetType}/${targetId}/citations?${qs}`);
 }
 
+// 打 GET /api/{targetType}/{targetId}/citations/more?...&loaded_source_ids=... — lazy 補載 snippet
+export function fetchCitationsMore(targetType, targetId, keywords, statutes, excludeKeywords, excludeStatutes, caseTypes, cacheId, loadedSourceIds, pageSize = 5) {
+  const p = new URLSearchParams();
+  if (keywords.length) p.set("keywords", keywords.join(","));
+  if (statutes.length) p.set("statutes", JSON.stringify(statutes));
+  if (excludeKeywords.length) p.set("exclude_keywords", excludeKeywords.join(","));
+  if (excludeStatutes.length) p.set("exclude_statutes", JSON.stringify(excludeStatutes));
+  if (caseTypes.length) p.set("case_types", caseTypes.join(","));
+  if (cacheId) p.set("search_cache_key", cacheId);
+  if (loadedSourceIds?.length) p.set("loaded_source_ids", loadedSourceIds.join(","));
+  p.set("page_size", String(pageSize));
+  return get(`/${targetType}/${targetId}/citations/more?${p.toString()}`);
+}
+
 // 打 GET /api/decisions/{id}
 export function fetchDecision(id) {
   return get(`/decisions/${id}`);

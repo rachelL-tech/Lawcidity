@@ -131,6 +131,10 @@ class CitationsResponse(BaseModel):
     others_sources: list[CitationSource] | None = None
 
 
+class CitationsMoreResponse(BaseModel):
+    new_sources: list[CitationSource]
+
+
 # ── GET /decisions/{id} ────────────────────────────────────────────────────────
 
 class DecisionStatute(BaseModel):
