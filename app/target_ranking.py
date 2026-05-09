@@ -50,7 +50,7 @@ def _fetch_decision_target_metadata(
             canonical.jcase_norm,
             canonical.jno,
             canonical.display_title,
-            COALESCE(canonical.canonical_doc_type, canonical.doc_type) AS doc_type,
+            canonical.canonical_doc_type AS doc_type,
             canonical.total_citation_count,
             COALESCE(mc.cnt, 0) AS matched_citation_count
         FROM raw_targets rt
