@@ -109,6 +109,26 @@ def _parse_citation_query(params: CitationQueryParams) -> ParsedCitationQuery:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"exclude_statutes 格式錯誤：{exc}") from exc
 
+    preview_source_ids: list[int] | None = None
+    if params.preview_source_ids:
+        preview_source_ids = []
+        seen: set[int] = set()
+        for part in params.preview_source_ids.split(","):
+            value = part.strip()
+            if not value:
+                continue
+            try:
+                source_id = int(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="preview_source_ids 格式錯誤") from exc
+            if source_id in seen:
+                continue
+            seen.add(source_id)
+            preview_source_ids.append(source_id)
+            if len(preview_source_ids) >= CITATIONS_PREVIEW_LIMIT:
+                break
+        preview_source_ids = preview_source_ids or None
+
     return ParsedCitationQuery(
         query_terms=query_terms,
         statute_list=statute_list,
@@ -116,6 +136,7 @@ def _parse_citation_query(params: CitationQueryParams) -> ParsedCitationQuery:
         exclude_statute_list=exclude_statute_list,
         case_types=parse_case_types(params.case_types) if params.case_types else [],
         search_cache_key=params.search_cache_key,
+        preview_source_ids=preview_source_ids,
     )
 
 
@@ -148,31 +169,6 @@ def _build_citations_response(
     )
 
 
-def _fetch_matched_rows(
-    conn,
-    target_col: str,
-    target_val: int,
-    parsed: ParsedCitationQuery,
-    resolved_source_ids: list[int],
-    exclude_source_ids: list[int],
-    page_size: int,
-) -> list[dict]:
-    """撈該 target 下一頁 matched citation snippet rows（按 hit_score 排序，排除已載入）。
-    /citations 用 exclude=[]、/more 用 exclude=loaded。"""
-    source_ids = fetch_next_source_ids_for_target(
-        conn, target_col, target_val,
-        parsed.query_terms, parsed.statute_list,
-        resolved_source_ids, exclude_source_ids, page_size,
-    )
-    if not source_ids:
-        return []
-    return fetch_matched_preview_rows(
-        conn, target_col, target_val,
-        parsed.query_terms, parsed.statute_list,
-        source_ids,
-    )
-
-
 def _parse_loaded_source_ids(raw: str | None) -> list[int]:
     if not raw:
         return []
@@ -201,6 +197,8 @@ def get_decision_citations_matched(
     params: CitationQueryParams = Depends(),
 ):
     parsed = _parse_citation_query(params)
+    if parsed.preview_source_ids is None:
+        raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
     with get_conn() as conn:
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
@@ -216,9 +214,13 @@ def get_decision_citations_matched(
             target_id,
             resolved_source_ids,
         )
-        matched_rows = _fetch_matched_rows(
-            conn, "c.target_canonical_id", target_id, parsed,
-            resolved_source_ids, [], CITATIONS_PREVIEW_LIMIT,
+        matched_rows = fetch_matched_preview_rows(
+            conn,
+            "c.target_canonical_id",
+            target_id,
+            parsed.query_terms,
+            parsed.statute_list,
+            parsed.preview_source_ids,
         )
         others_rows = fetch_other_preview_rows(
             conn,
@@ -241,6 +243,8 @@ def get_authority_citations_matched(
     params: CitationQueryParams = Depends(),
 ):
     parsed = _parse_citation_query(params)
+    if parsed.preview_source_ids is None:
+        raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
     with get_conn() as conn:
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
@@ -256,9 +260,13 @@ def get_authority_citations_matched(
             authority_id,
             resolved_source_ids,
         )
-        matched_rows = _fetch_matched_rows(
-            conn, "c.target_authority_id", authority_id, parsed,
-            resolved_source_ids, [], CITATIONS_PREVIEW_LIMIT,
+        matched_rows = fetch_matched_preview_rows(
+            conn,
+            "c.target_authority_id",
+            authority_id,
+            parsed.query_terms,
+            parsed.statute_list,
+            parsed.preview_source_ids,
         )
         others_rows = fetch_other_preview_rows(
             conn,
@@ -292,9 +300,25 @@ def _fetch_more_for_target(
             parsed.case_types,
             parsed.search_cache_key,
         )
-        new_rows = _fetch_matched_rows(
-            conn, target_col, target_val, parsed,
-            resolved_source_ids, loaded_source_ids, page_size,
+        new_source_ids = fetch_next_source_ids_for_target(
+            conn,
+            target_col,
+            target_val,
+            parsed.query_terms,
+            parsed.statute_list,
+            resolved_source_ids,
+            loaded_source_ids,
+            page_size,
+        )
+        if not new_source_ids:
+            return CitationsMoreResponse(new_sources=[])
+        new_rows = fetch_matched_preview_rows(
+            conn,
+            target_col,
+            target_val,
+            parsed.query_terms,
+            parsed.statute_list,
+            new_source_ids,
         )
     return CitationsMoreResponse(new_sources=[_row_to_source(r) for r in new_rows])
 

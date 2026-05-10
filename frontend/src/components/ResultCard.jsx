@@ -53,6 +53,7 @@ export default function ResultCard({
         excludeStatutes,
         caseTypes,
         searchCacheId,
+        item.preview_source_ids ?? [],
       );
       const matchedSources = resp.matched_sources ?? [];
       const otherSources = resp.others_sources ?? [];
