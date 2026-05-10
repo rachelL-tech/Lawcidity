@@ -381,25 +381,39 @@ This is closer to what lawyers are actually looking for than full-text search th
 
 ### How was post-search interaction latency reduced?
 
-**Ranking cache**  
-The first version cached only the Stage 1 source IDs. That meant users had to rerun Stage 2 whenever they:
-- changed the sort order
-- moved to another page
-- added filters
+After running a search, users mainly do two things:
+- change **sort order, page, or filter** on the result list
+- **expand** an individual result card to read the citing snippets
 
-A later version caches the full target ranking order after the initial search, so post-search interactions can be handled in memory.
+Each path is optimized to avoid redoing heavy work after the initial search.
 
-**Faster citation expansion**  
-- OpenSearch first returns only `preview source IDs`, and PostgreSQL then picks the highest-scoring `citation` from each `source` before hydrating decision metadata
-- For the remaining citations, PostgreSQL first selects one `citation` per `source`, then joins decision metadata to reduce unnecessary joins and sorts
+**Caching the ranking for list-level interactions**  
+The first version cached only the Stage 1 source IDs, so changing sort, paging, or
+adding a filter forced Stage 2 to rerun. A later version caches the full target ranking
+on the initial search so subsequent list-level interactions can be served from memory.
 
-This reduced citation expansion time from about `3 seconds` to about `0.8 seconds`.
+**Two-stage loading for citation expansion**  
+When a card is expanded, the citing snippets are loaded in two stages — an initial
+fetch and a "View more" backfill.
+
+- **Initial fetch**: OpenSearch returns `preview source IDs` from Stage 2; PostgreSQL
+  then picks the highest-scoring citation per source and joins decision metadata.
+  This reduced the first expansion from about `3 seconds` to about `0.8 seconds`.
+- **"View more"**: Stage 2 keeps only 5 preview source IDs per target. When more
+  sources actually cite the target, the UI shows "N matched" while only 5 snippets
+  are rendered, leaving a gap. Filling the gap eagerly during search would have cost
+  about `+3 seconds` for hot keywords (e.g. 損害, 112k sources), so instead a
+  "View more" button appears only when matched count > displayed, and on click a
+  single PostgreSQL query returns the next 5 snippets. The extra cost applies only
+  to targets the user actually expands.
 
 **Precomputed UI values**  
-- Display titles and citation counts used in the UI are precomputed so they do not need to be recalculated during search
+Display titles and citation counts shown in the UI are precomputed during ETL so
+they do not need to be recalculated at search time.
 
 **Index tuning**  
-- Rebuilt composite indexes around the `WHERE` / `JOIN` / `ORDER BY` patterns used most often
+Composite indexes were rebuilt around the `WHERE` / `JOIN` / `ORDER BY` patterns
+used most often.
 
 ---
 
@@ -496,5 +510,7 @@ This project was built over seven weeks of iterative development, starting from 
 
 ## Future Work
 
-- Redesign chunk boundaries, including semantic segmentation or LLM-assisted segmentation, so factual narratives, party arguments, and the court's own legal reasoning can be separated more cleanly
-- Test whether using an LLM to rewrite user queries into more precise legal issues and practitioner-style terminology can improve retrieval recall and relevance
+- Redesign chunk boundaries with LLM-assisted segmentation, so chunks can be separated more cleanly by context: factual narratives, party arguments, and the court's own legal reasoning
+- Test whether rewriting user queries into terminology used in legal practice can improve retrieval recall and relevance
+- Add timeout and retry controls around LLM calls to improve the stability of the overall retrieval pipeline
+- Strengthen logging and tracing so bottlenecks or failure points at each stage of the RAG pipeline are easier to identify
