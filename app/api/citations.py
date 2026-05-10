@@ -38,18 +38,6 @@ from app.api.schemas import (
 router = APIRouter()
 
 
-def _force_hash_join(conn) -> None:
-    """關掉 Nested Loop。
-
-    /citations 多條 SQL 都帶 `c.source_id = ANY(resolved::bigint[])`，
-    resolved 動輒 10 萬+。PG planner 對 unnest CTE 預估只有 10 row，
-    會誤選 Nested Loop（每個 array 元素一次 index lookup → 跑數萬 loop）。
-    強制用 Hash Join 對大 array 才合理。
-    """
-    with conn.cursor() as cur:
-        cur.execute("SET LOCAL enable_nestloop = off")
-
-
 def _simplify_court(unit_norm: str) -> str:
     """簡易庭截到上一層地方法院。"""
     if not unit_norm:
@@ -214,7 +202,6 @@ def get_decision_citations_matched(
 ):
     parsed = _parse_citation_query(params)
     with get_conn() as conn:
-        _force_hash_join(conn)
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
             parsed.statute_list,
@@ -255,7 +242,6 @@ def get_authority_citations_matched(
 ):
     parsed = _parse_citation_query(params)
     with get_conn() as conn:
-        _force_hash_join(conn)
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
             parsed.statute_list,
@@ -298,7 +284,6 @@ def _fetch_more_for_target(
     page_size: int,
 ) -> CitationsMoreResponse:
     with get_conn() as conn:
-        _force_hash_join(conn)
         resolved_source_ids = _resolve_source_ids_for_citations(
             parsed.query_terms,
             parsed.statute_list,
