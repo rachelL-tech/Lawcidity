@@ -849,7 +849,6 @@ def _r011_evidence_cite(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
 def _r005_context_check(c: RawCandidate, ctx: FilterContext) -> Optional[str]:
     """
     Party-claim context check。
-
     PARTY_CLAIM_RE 命中 → ACCEPT_RE rescue（但 _BLOCK_RESCUE_RE 可擋）→ reject
     """
     heading_pos = _prev_heading_pos(ctx.clean_text, c.match_start)
@@ -945,32 +944,6 @@ class CitationResult:
     display: Optional[str] = None
     needs_intent_signal: bool = False
 
-    def to_dict(self) -> dict:
-        """轉換為 ingest_decisions.py 相容的 dict 格式（dict key 與舊版 extract_citations 一致）。"""
-        d: dict = {
-            "citation_type": self.citation_type,
-            "court": self.court,
-            "raw_match": self.raw_match,
-            "match_start": self.match_start,
-            "match_end": self.match_end,
-            "snippet": self.snippet,
-        }
-        if self.citation_type == "decision":
-            d.update({
-                "jyear": self.jyear,
-                "jcase_norm": self.jcase_norm,
-                "jno": self.jno,
-                "doc_type": self.doc_type,
-                "target_case_type": self.target_case_type,
-            })
-        else:
-            d.update({
-                "auth_type": self.auth_type,
-                "auth_key": self.auth_key,
-                "display": self.display,
-            })
-        return d
-
 
 _TRAILING_DELIM_RE = re.compile(r'(?:[。，,]|\r\n|[ \t\u3000])+')
 
@@ -982,33 +955,31 @@ def find_snippet_start(clean_text: str, match_start: int, para_cap: int = 1000) 
     2. anchor 與 match 之間有 _PARA_START_RE 或 \\r\\n → 用離 match 最近的
     3. 沒 anchor → last _PARA_START_RE → fallback（句號 → \\r\\n → window_start）
     """
-    window_start = max(0, match_start - para_cap)
-    window = clean_text[window_start: match_start]
-    wlen = len(window)
+    left = max(0, match_start - para_cap)
 
     # fallback：預先算好
-    period = window.rfind('。')
-    nl_fb = window.rfind('\r\n')
+    period = clean_text.rfind('。', left, match_start)
+    nl_fb = clean_text.rfind('\r\n', left, match_start)
     if period != -1:
         fallback = period + 1
     elif nl_fb != -1:
         fallback = nl_fb + 2
     else:
-        fallback = 0
+        fallback = left
 
     # _SUB_CLAUSE_RE
     last_sub = None
-    for m in _SUB_CLAUSE_RE.finditer(window):
+    for m in _SUB_CLAUSE_RE.finditer(clean_text, left, match_start):
         last_sub = m
     sub_pos = last_sub.start(1) if last_sub is not None else None
 
     # 參照）/參照)
     ref_close_pos = None
     for pat in ('參照）', '參照)'):
-        idx = window.rfind(pat)
+        idx = clean_text.rfind(pat, left, match_start)
         if idx != -1:
             p = idx + len(pat)
-            m = _TRAILING_DELIM_RE.match(window, p)
+            m = _TRAILING_DELIM_RE.match(clean_text, p)
             if m:
                 p = m.end()
             if ref_close_pos is None or p > ref_close_pos:
@@ -1019,27 +990,26 @@ def find_snippet_start(clean_text: str, match_start: int, para_cap: int = 1000) 
     if anchors:
         anchor = max(anchors)
         # 2. anchor 與 match 之間，離 match 最近的 _PARA_START_RE 或 \r\n
-        segment = window[anchor:]
         last_break = None
-        for m in _PARA_START_RE.finditer(segment):
-            last_break = anchor + m.start() + 2
-        nl_idx = segment.rfind('\r\n')
-        if nl_idx != -1:
-            nl_pos = anchor + nl_idx + 2
-            if nl_pos < wlen and (last_break is None or nl_pos > last_break):
+        for m in _PARA_START_RE.finditer(clean_text, anchor, match_start):
+            last_break = m.start() + 2
+        nl_pos = clean_text.rfind('\r\n', anchor, match_start)
+        if nl_pos != -1:
+            nl_pos += 2
+            if last_break is None or nl_pos > last_break:
                 last_break = nl_pos
         if last_break is not None:
-            return window_start + last_break
-        return window_start + anchor
+            return last_break
+        return anchor
 
     # 3. 沒 anchor → last _PARA_START_RE
     last_para = None
-    for m in _PARA_START_RE.finditer(window):
+    for m in _PARA_START_RE.finditer(clean_text, left, match_start):
         last_para = m
     if last_para is not None:
-        return window_start + last_para.start() + 2
+        return last_para.start() + 2
 
-    return window_start + fallback
+    return fallback
 
 
 def find_snippet_end(
@@ -1054,28 +1024,28 @@ def find_snippet_end(
     2. 否則搜尋整段剩餘文本，取 min(最近 。, 最近 \\r\\n)
     3. 都找不到 → 文末
     """
-    rest = clean_text[match_end:]
-
     # 1. Bracket enclosure：citation 被 (...) / （...） 包圍
     if match_start > 0 and clean_text[match_start - 1] in '(（':
-        fw = rest.find('）')
-        hw = rest.find(')')
-        parens = [p for p in (fw, hw) if p != -1]
-        if parens:
-            return match_end + min(parens) + 1
+        end_positions = []
+        for ch in ('）', ')'):
+            idx = clean_text.find(ch, match_end)
+            if idx != -1:
+                end_positions.append(idx + 1)
+        if end_positions:
+            return min(end_positions)
 
     # 2. min(最近句號, 最近換行)
-    period = rest.find('。')
-    nl = rest.find('\r\n')
     ends = []
+    period = clean_text.find('。', match_end)
     if period != -1:
-        end_pos = match_end + period + 1          # 含句號
+        end_pos = period + 1                      # 含句號
         # 句號後緊接閉引號時延伸一字元（如「有別。」）
         if end_pos < len(clean_text) and clean_text[end_pos] in '」』"':
             end_pos += 1
         ends.append(end_pos)
+    nl = clean_text.find('\r\n', match_end)
     if nl != -1:
-        ends.append(match_end + nl)               # 不含 \r\n
+        ends.append(nl)                           # 不含 \r\n
     if ends:
         return min(ends)
 

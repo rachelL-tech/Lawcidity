@@ -242,7 +242,7 @@ def fetch_other_preview_rows(
         return cur.fetchall()
 
 
-def fetch_next_source_ids_for_target(
+def fetch_more_preview_rows(
     conn,
     target_col: str,
     target_val: int,
@@ -250,14 +250,15 @@ def fetch_next_source_ids_for_target(
     statute_filters: list[tuple],
     resolved_source_ids: list[int],
     exclude_source_ids: list[int],
-    limit: int,
-) -> list[int]:
-    """為 lazy /more endpoint：在 resolved 範圍內，找該 target 還沒載入的 source，按 hit_score 排序。"""
+    page_size: int,
+) -> list[dict]:
+    """為 /more endpoint：rank resolved 範圍（排除已載入），取前 page_size 個 source 並 hydrate snippet。
+    一條 SQL 完成 ranking + hydration，避免拆兩階段的重複 scored CTE。"""
     params: dict = {
         "target_val": target_val,
         "resolved": resolved_source_ids,
         "excluded": exclude_source_ids,
-        "limit": limit,
+        "limit": page_size,
     }
     target_filter = f"{target_col} = %(target_val)s"
     keyword_score_sql = build_keyword_score_sql(query_terms, params)
@@ -276,15 +277,44 @@ def fetch_next_source_ids_for_target(
         picked AS (
             SELECT DISTINCT ON (source_id)
                 source_id,
+                id AS citation_id,
                 (keyword_score + statute_score) AS hit_score
             FROM scored
             ORDER BY source_id, (keyword_score + statute_score) DESC, id ASC
+        ),
+        top_n AS (
+            SELECT citation_id
+            FROM picked
+            ORDER BY hit_score DESC, source_id ASC
+            LIMIT %(limit)s
         )
-        SELECT source_id FROM picked
-        ORDER BY hit_score DESC, source_id ASC
-        LIMIT %(limit)s
+        SELECT
+            c.id                            AS citation_id,
+            c.source_id,
+            src.display_title,
+            src.unit_norm                   AS source_court_raw,
+            cu.level                        AS source_court_level,
+            src.doc_type,
+            src.decision_date,
+            c.snippet,
+            c.raw_match,
+            COALESCE(
+                json_agg(
+                    json_build_object('law', css.law, 'article', css.article_raw, 'sub_ref', css.sub_ref)
+                    ORDER BY css.law, css.article_raw, css.sub_ref
+                ) FILTER (WHERE css.id IS NOT NULL),
+                '[]'::json
+            )                               AS statutes
+        FROM top_n
+        JOIN citations c ON c.id = top_n.citation_id
+        JOIN decisions src ON src.id = c.source_id
+        LEFT JOIN court_units cu ON cu.id = src.court_unit_id
+        LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
+        GROUP BY c.id, c.source_id, src.display_title, src.unit_norm,
+                 cu.level, src.doc_type, src.decision_date, c.snippet, c.raw_match
+        ORDER BY c.id ASC
     """
 
-    with conn.cursor() as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
-        return [r["source_id"] for r in cur.fetchall()]
+        return cur.fetchall()

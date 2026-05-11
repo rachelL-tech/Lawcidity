@@ -23,7 +23,7 @@ def _pos(text: str, sub: str) -> tuple[int, int]:
 
 def extract_citations(text, **kw):
     kw.setdefault("self_key", DEFAULT_SELF_KEY)
-    return [c.to_dict() for c in extract_citations_next(text, **kw)]
+    return extract_citations_next(text, **kw)
 
 
 def extract_snippet(text, start, end, **kw):
@@ -40,8 +40,8 @@ def test_r011_judgment_can_kao_retained():
         "二、被告抗辯..."
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
-    assert any(r["raw_match"].startswith("最高法院88年度台上字第1346號") for r in decision_results)
+    decision_results = [r for r in results if r.citation_type == "decision"]
+    assert any(r.raw_match.startswith("最高法院88年度台上字第1346號") for r in decision_results)
 
 
 def test_r011_bare_page_reference_retained():
@@ -52,8 +52,8 @@ def test_r011_bare_page_reference_retained():
         "二、..."
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
-    assert any(r["raw_match"].startswith("最高法院98年度台上字第1235號") for r in decision_results)
+    decision_results = [r for r in results if r.citation_type == "decision"]
+    assert any(r.raw_match.startswith("最高法院98年度台上字第1235號") for r in decision_results)
 
 
 def test_r011_in_juan_ke_can_still_filtered():
@@ -64,7 +64,7 @@ def test_r011_in_juan_ke_can_still_filtered():
         "二、..."
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert decision_results == []
 
 
@@ -76,8 +76,8 @@ def test_r008_yunyun_guard_does_not_cross_next_heading():
         "尚非可採。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
-    assert any(r["raw_match"].startswith("最高法院88年度台抗字第161號") for r in decision_results)
+    decision_results = [r for r in results if r.citation_type == "decision"]
+    assert any(r.raw_match.startswith("最高法院88年度台抗字第161號") for r in decision_results)
 
 
 def test_authority_snippet_keeps_full_quoted_sentence():
@@ -99,9 +99,9 @@ def test_benyuan_local_court_keeps_local_court_granularity():
         text,
         self_key=("台北高等行政法院地方庭", 999, "測", 1),
     )
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1
-    assert decision_results[0]["court"] == "台北高等行政法院地方庭"
+    assert decision_results[0].court == "台北高等行政法院地方庭"
 
 
 def test_benyuan_without_local_hint_stays_on_root_court():
@@ -110,17 +110,17 @@ def test_benyuan_without_local_hint_stays_on_root_court():
         text,
         self_key=("台北高等行政法院", 999, "測", 1),
     )
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1
-    assert decision_results[0]["court"] == "台北高等行政法院"
+    assert decision_results[0].court == "台北高等行政法院"
 
 
 def test_constitutional_chain_keeps_year_for_abbreviated_followup():
     text = "理由\r\n憲法法庭111年憲判字第11號判決、第12號判決足供參照。"
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 2
-    assert decision_results[0]["jyear"] == 111
-    assert decision_results[1]["jyear"] == 111
-    assert decision_results[1]["jno"] == 12
-    assert decision_results[1]["doc_type"] == "憲判字"
+    assert decision_results[0].jyear == 111
+    assert decision_results[1].jyear == 111
+    assert decision_results[1].jno == 12
+    assert decision_results[1].doc_type == "憲判字"

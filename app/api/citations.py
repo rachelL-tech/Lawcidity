@@ -14,7 +14,7 @@ from app.citation_preview import (
     CITATIONS_PREVIEW_LIMIT,
     fetch_citation_counts,
     fetch_matched_preview_rows,
-    fetch_next_source_ids_for_target,
+    fetch_more_preview_rows,
     fetch_other_preview_rows,
 )
 from app.db import get_conn
@@ -300,7 +300,7 @@ def _fetch_more_for_target(
             parsed.case_types,
             parsed.search_cache_key,
         )
-        new_source_ids = fetch_next_source_ids_for_target(
+        new_rows = fetch_more_preview_rows(
             conn,
             target_col,
             target_val,
@@ -309,16 +309,6 @@ def _fetch_more_for_target(
             resolved_source_ids,
             loaded_source_ids,
             page_size,
-        )
-        if not new_source_ids:
-            return CitationsMoreResponse(new_sources=[])
-        new_rows = fetch_matched_preview_rows(
-            conn,
-            target_col,
-            target_val,
-            parsed.query_terms,
-            parsed.statute_list,
-            new_source_ids,
         )
     return CitationsMoreResponse(new_sources=[_row_to_source(r) for r in new_rows])
 

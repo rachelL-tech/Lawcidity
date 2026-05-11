@@ -25,7 +25,7 @@ DEFAULT_SELF_KEY = ("__TEST__", 999, "測", 1)
 
 def extract_citations(text, **kw):
     kw.setdefault("self_key", DEFAULT_SELF_KEY)
-    return [c.to_dict() for c in extract_citations_next(text, **kw)]
+    return extract_citations_next(text, **kw)
 
 
 def extract_snippet(text, start, end, **kw):
@@ -189,7 +189,7 @@ def test_prior_case_dismissed_filtered():
         "於109年5月1日執行完畢等情，有前案紀錄表在卷可參。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
         f"前案程序史不應產生 decision citation，但得到：{decision_results}"
     )
@@ -209,7 +209,7 @@ def test_evidence_exhibit_filtered():
         "（見本院卷第357至358頁）、原告113年3月22日申請書為證。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
         f"卷證附件引用不應產生 decision citation，但得到：{decision_results}"
     )
@@ -284,7 +284,7 @@ def test_party_section_citation_temporarily_retained_without_section_filter():
         "二、本院之判斷：經查..."
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1, (
         f"party guard 停用後，此類 decision citation 目前應保留，但得到：{decision_results}"
     )
@@ -302,7 +302,7 @@ def test_court_section_citation_not_filtered():
         "最高法院42年台上字第1031號判例參照。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1, (
         f"本院判斷段落應保留 1 筆 decision citation，但得到 {len(decision_results)} 筆"
     )
@@ -320,7 +320,7 @@ def test_party_section_authority_citation_temporarily_retained_without_section_f
         "四、本院之判斷：經查..."
     )
     results = extract_citations(text)
-    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    authority_results = [r for r in results if r.citation_type == "authority"]
     assert len(authority_results) == 1, (
         f"party guard 停用後，此類 authority citation 目前應保留，但得到：{authority_results}"
     )
@@ -345,7 +345,7 @@ def test_prior_ruling_summary_citation_temporarily_retained_without_section_filt
         "三、抗告意旨略以：原裁定違法。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     # citation_parser R010 要求 ACCEPT_RE signal；
     # 原裁定略以段落內的憲判字無明確 signal → 被 R010 過濾
     assert len(decision_results) == 0, (
@@ -365,7 +365,7 @@ def test_prior_judgment_summary_authority_citation_filtered():
         "三、本院認為：上訴無理由。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
         f"原判決略以段 decision citation 不應保留，但得到：{decision_results}"
     )
@@ -383,7 +383,7 @@ def test_prior_disposition_summary_citation_temporarily_retained_without_section
         "三、本院認為：聲請駁回。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 2, (
         f"原處分略以段 citation 在暫停位置型過濾後目前應保留，但得到：{decision_results}"
     )
@@ -401,7 +401,7 @@ def test_prior_instance_summary_authority_citation_filtered():
         "三、本院認為：抗告無理由。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
         f"原審略以段 decision citation 不應保留，但得到：{decision_results}"
     )
@@ -419,7 +419,7 @@ def test_court_section_authority_citation_not_filtered():
         "司法院釋字第699號解釋參照。"
     )
     results = extract_citations(text)
-    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    authority_results = [r for r in results if r.citation_type == "authority"]
     assert len(authority_results) == 1, (
         f"本院判斷段 authority citation 應保留 1 筆，但得到 {len(authority_results)} 筆"
     )
@@ -449,17 +449,17 @@ def test_court_section_after_party_section_not_misfiltered_by_offset():
     results = extract_citations(text)
     decision_results = [
         r for r in results
-        if r.get("citation_type") == "decision"
-        and r.get("court") == "最高行政法院"
-        and r.get("jyear") == 113
-        and r.get("jcase_norm") == "交上統"
-        and r.get("jno") == 2
+        if r.citation_type == "decision"
+        and r.court == "最高行政法院"
+        and r.jyear == 113
+        and r.jcase_norm == "交上統"
+        and r.jno == 2
     ]
     assert len(decision_results) == 1, (
         f"本院判斷段 citation 不應被 party guard 誤濾，但得到：{decision_results}"
     )
-    assert "又綜觀道交條例對「汽車所有人」設有處罰規定之立法體例" in decision_results[0]["snippet"], (
-        f"snippet 應包含法院論斷段文字，實際為：{decision_results[0]['snippet'][:60]!r}"
+    assert "又綜觀道交條例對「汽車所有人」設有處罰規定之立法體例" in decision_results[0].snippet, (
+        f"snippet 應包含法院論斷段文字，實際為：{decision_results[0].snippet[:60]!r}"
     )
 
 
@@ -479,7 +479,7 @@ def test_zhengben_area_filtered():
         "臺灣高等法院113年度聲字第1200號裁定應執行有期徒刑16年\r\n"
     )
     results = extract_citations(text)
-    raw_matches = [r["raw_match"] for r in results]
+    raw_matches = [r.raw_match for r in results]
     # 理由段的引用應保留
     assert any("台上字第1號" in rm for rm in raw_matches), "理由段引用應保留"
     # 附表區的引用應被過濾
@@ -501,7 +501,7 @@ def test_zhuwen_section_filtered():
         "一、按最高法院110年度台上字第1號判決意旨參照。\r\n"
     )
     results = extract_citations(text)
-    raw_matches = [r["raw_match"] for r in results]
+    raw_matches = [r.raw_match for r in results]
     # 理由段的引用應保留
     assert any("台上字第1號" in rm for rm in raw_matches), "理由段引用應保留"
     # 主文段的引用應被過濾
@@ -524,12 +524,12 @@ def test_agency_opinion_not_cross_research_no():
         "司法院民事廳消費者債務清理條例法律問題研審小組意見同此見解）"
     )
     results = extract_citations(text)
-    agency_results = [r for r in results if r.get("auth_type") == "agency_opinion"]
+    agency_results = [r for r in results if r.auth_type == "agency_opinion"]
 
     assert len(agency_results) == 1, (
-        f"應只有 1 筆 agency_opinion，但得到 {len(agency_results)} 筆：{[r['raw_match'] for r in agency_results]}"
+        f"應只有 1 筆 agency_opinion，但得到 {len(agency_results)} 筆：{[r.raw_match for r in agency_results]}"
     )
-    raw = agency_results[0]["raw_match"]
+    raw = agency_results[0].raw_match
     assert "司法院民事廳" in raw, "agency_opinion 應從司法院民事廳開頭"
     assert "研討第12號" not in raw, "agency_opinion 不應包含研討號"
 
@@ -570,9 +570,9 @@ def test_zaijuan_kechan_filtered():
         "並經該裁定駁回再審原告之聲請，有該裁定在卷可參，審之該裁定並未提及相關見解。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
-        f"在卷可參後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+        f"在卷可參後的 citation 不應保留，但得到：{[r.raw_match for r in decision_results]}"
     )
 
 
@@ -589,9 +589,9 @@ def test_queding_zaian_filtered():
         "一、查最高行政法院111年度聲再字第616號裁定駁回再審原告就原確定裁定提起再審部分確定在案）。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
-        f"確定在案後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+        f"確定在案後的 citation 不應保留，但得到：{[r.raw_match for r in decision_results]}"
     )
 
 
@@ -607,9 +607,9 @@ def test_fubiao_suoshi_filtered():
         "一、聲請人就最高行政法院114年度聲字第649號等裁定（如附表所示），向本院聲請再審。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
-        f"如附表所示後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+        f"如附表所示後的 citation 不應保留，但得到：{[r.raw_match for r in decision_results]}"
     )
 
 
@@ -625,9 +625,9 @@ def test_shenlizh_filtered():
         "一、查最高行政法院113年度上字第640號、第641號事件審理中。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
-        f"審理中後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+        f"審理中後的 citation 不應保留，但得到：{[r.raw_match for r in decision_results]}"
     )
 
 
@@ -646,9 +646,9 @@ def test_shijian_jiesuqian_filtered():
         "行政訴訟事件終結前，裁定停止本件訴訟程序之必要，爰依首揭條文，裁定如主文。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 0, (
-        f"事件終結前後的 citation 不應保留，但得到：{[r['raw_match'] for r in decision_results]}"
+        f"事件終結前後的 citation 不應保留，但得到：{[r.raw_match for r in decision_results]}"
     )
 
 
@@ -669,9 +669,9 @@ def test_after_context_shiting_not_extracted():
         "㈡原告主張之前揭事實，業經本院刑事庭以113年度金易字第109號刑事判決判處被告罪刑在案。"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1, f"應有 1 筆 decision citation，得到 {len(decision_results)} 筆"
-    ct = decision_results[0].get("target_case_type")
+    ct = decision_results[0].target_case_type
     assert ct is None, (
         f"citation 後接刑事庭不應誤判 target_case_type，實際值：{ct!r}"
     )
@@ -695,11 +695,11 @@ def test_authority_citation_after_heading_and_an_should_not_be_filtered():
         "修理材料以新品換舊品，應予折舊(最高法院77年度第9次民事庭會議決議（一）參照)。\r\n"
     )
     results = extract_citations(text)
-    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    authority_results = [r for r in results if r.citation_type == "authority"]
     assert len(authority_results) == 1, (
         f"標題 + 按 的法院論述中之決議引用不應被過濾，但得到：{authority_results}"
     )
-    assert authority_results[0]["auth_type"] == "resolution"
+    assert authority_results[0].auth_type == "resolution"
 
 
 # ─── Case 27：理由要領 / 事實及理由要領 應被視為理由段起點 ──────────────────────
@@ -717,7 +717,7 @@ def test_reason_section_accepts_yaoling_variants():
         "最高法院113年度台上字第999號判決意旨參照）。\r\n"
     )
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
     assert len(decision_results) == 1, (
         f"事實及理由要領下的 citation 應保留，但得到：{decision_results}"
     )
@@ -747,9 +747,9 @@ def test_resolution_citation_should_survive_party_section_guard():
     )
 
     results = extract_citations(text)
-    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    authority_results = [r for r in results if r.citation_type == "authority"]
 
-    assert any(r.get("auth_key") == "民事庭|77|9" for r in authority_results), (
+    assert any(r.auth_key == "民事庭|77|9" for r in authority_results), (
         f"民事庭第77年度第9次決議不應被 party section guard 過濾，但得到：{authority_results}"
     )
 
@@ -766,9 +766,9 @@ def test_grand_interp_citation_should_survive_party_section_guard():
     )
 
     results = extract_citations(text)
-    authority_results = [r for r in results if r.get("citation_type") == "authority"]
+    authority_results = [r for r in results if r.citation_type == "authority"]
 
-    assert any(r.get("auth_type") == "grand_interp" and r.get("auth_key") == "釋字|775" for r in authority_results), (
+    assert any(r.auth_type == "grand_interp" and r.auth_key == "釋字|775" for r in authority_results), (
         f"釋字第775號不應被 party section guard 過濾，但得到：{authority_results}"
     )
 
@@ -790,13 +790,13 @@ def test_constitutional_decision_citation_should_survive_party_section_guard():
     )
 
     results = extract_citations(text)
-    decision_results = [r for r in results if r.get("citation_type") == "decision"]
+    decision_results = [r for r in results if r.citation_type == "decision"]
 
     assert any(
-        r.get("court") == "憲法法庭"
-        and r.get("jyear") == 113
-        and r.get("jcase_norm") == "憲判"
-        and r.get("jno") == 5
+        r.court == "憲法法庭"
+        and r.jyear == 113
+        and r.jcase_norm == "憲判"
+        and r.jno == 5
         for r in decision_results
     ), f"憲法法庭113年度憲判字第5號判決不應被 party section guard 過濾，但得到：{decision_results}"
 

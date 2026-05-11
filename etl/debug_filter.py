@@ -91,7 +91,7 @@ def debug_file(json_path, court_info):
         int(data.get("JNO", 0)),
     )
 
-    cands = find_all_candidates(clean)
+    cands = find_all_candidates(clean, self_key[0])
     if not cands:
         return None
 

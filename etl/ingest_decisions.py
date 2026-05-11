@@ -29,7 +29,7 @@ import re
 import psycopg
 from dotenv import load_dotenv
 from court_parser import parse_court_from_folder, to_generic_root_norm
-from citation_parser import extract_citations_next
+from citation_parser import CitationResult, extract_citations_next
 from text_cleaner import clean_judgment_text
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
@@ -536,12 +536,12 @@ def _get_decision_canonical_id(conn, target_id: int) -> Optional[int]:
     return row[0] if row else None
 
 
-def _require_citation_offsets(citation: dict) -> tuple[int, int]:
+def _require_citation_offsets(citation: CitationResult) -> tuple[int, int]:
     """所有 citation 都必須帶可用的 clean_text offset。"""
-    match_start = citation.get("match_start")
-    match_end = citation.get("match_end")
+    match_start = citation.match_start
+    match_end = citation.match_end
     if match_start is None or match_end is None:
-        raw_match = citation.get("raw_match", "<unknown>")
+        raw_match = citation.raw_match or "<unknown>"
         raise ValueError(f"citation 缺少 match_start/match_end: {raw_match}")
     return int(match_start), int(match_end)
 
@@ -562,26 +562,26 @@ def ingest_citations(conn, source_id: int, clean_text: str,
     inserted = 0
     errors = []
     try:
-        raw_citations = [c.to_dict() for c in extract_citations_next(
+        parsed_citations = extract_citations_next(
             clean_text,
             self_key=source_self_key,
-        )]
+        )
 
         # Phase 1：解析所有 target ID
-        resolved = []
-        for c in raw_citations:
+        resolved: list[tuple[str, int, CitationResult]] = []
+        for c in parsed_citations:
             _require_citation_offsets(c)
-            ctype = c.get("citation_type", "decision")
+            ctype = c.citation_type
             if ctype == "authority":
-                auth_id = upsert_authority(conn, c["auth_type"], c["auth_key"], c.get("display"))
+                auth_id = upsert_authority(conn, c.auth_type, c.auth_key, c.display)
                 if auth_id is not None:
                     resolved.append((ctype, auth_id, c))
             else:  # "decision"
                 target_id = upsert_target_placeholder(
                     conn,
-                    c["court"], c["jyear"], c["jcase_norm"], c["jno"],
-                    target_doc_type=c.get("doc_type"),
-                    target_case_type=c.get("target_case_type"),
+                    c.court, c.jyear, c.jcase_norm, c.jno,
+                    target_doc_type=c.doc_type,
+                    target_case_type=c.target_case_type,
                     source_case_type=source_case_type,
                 )
                 if target_id is not None:
@@ -592,8 +592,8 @@ def ingest_citations(conn, source_id: int, clean_text: str,
         with conn.cursor() as cur:
             for ctype, target, c in resolved:
                 ms, me = _require_citation_offsets(c)
-                tct = c.get("target_case_type")   # target_case_type
-                tdt = c.get("doc_type")            # target_doc_type
+                tct = c.target_case_type   # target_case_type
+                tdt = c.doc_type           # target_doc_type
 
                 if ctype == "authority":
                     cur.execute("""
@@ -605,7 +605,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
                               match_end = EXCLUDED.match_end,
                               raw_match = EXCLUDED.raw_match
                         RETURNING id
-                    """, (source_id, target, c["raw_match"], ms, me, c["snippet"]))
+                    """, (source_id, target, c.raw_match, ms, me, c.snippet))
                 else:  # decision
                     target_canonical_id = _get_decision_canonical_id(conn, target)
                     cur.execute("""
@@ -621,7 +621,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
                               target_case_type = EXCLUDED.target_case_type,
                               target_doc_type  = EXCLUDED.target_doc_type
                         RETURNING id
-                    """, (source_id, target, target_canonical_id, c["raw_match"], ms, me, c["snippet"],
+                    """, (source_id, target, target_canonical_id, c.raw_match, ms, me, c.snippet,
                           tct, tdt))
 
                 row = cur.fetchone()
