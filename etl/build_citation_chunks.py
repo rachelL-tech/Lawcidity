@@ -7,8 +7,6 @@
 Usage:
   python etl/build_chunks.py                # 全量處理（會先清空 chunks）
   python etl/build_chunks.py --resume        # 跳過已處理的 decision
-  python etl/build_chunks.py --decision-id 12345  # 單一 decision
-  python etl/build_chunks.py --batch-size 500     # 每批 commit 500 筆
 """
 
 import argparse
@@ -28,6 +26,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 # ── Chunking 參數 ──────────────────────────────────────────────────────────
 
 MAX_CHUNK_LEN = 2000
+BATCH_SIZE = 200
 
 # 小節符 pattern（台灣法律文書常見）
 # minor markers 要求行首（\n 或文首），避免句中誤判
@@ -319,22 +318,11 @@ def main():
         description="從 citations 的 match_start/end 切出 snippet-adjacent chunks")
     parser.add_argument("--resume", action="store_true",
                         help="跳過已有 chunks 的 decision")
-    parser.add_argument("--decision-id", type=int,
-                        help="只處理指定 decision_id")
     parser.add_argument("--year-month", type=str,
                         help="只處理指定月份的 decision（格式：YYYYMM，例如 202501）")
-    parser.add_argument("--batch-size", type=int, default=200,
-                        help="每幾筆 decision commit 一次 (default: 200)")
     args = parser.parse_args()
 
     conn = get_db_connection()
-
-    if args.decision_id:
-        count = process_decision(conn, args.decision_id)
-        conn.commit()
-        print(f"decision_id={args.decision_id}: {count} rows")
-        conn.close()
-        return
 
     # 月份 filter
     date_filter = ""
@@ -412,7 +400,7 @@ def main():
                 print(f"  ERROR decision_id={sid}: {e}", file=sys.stderr)
             continue
 
-        if (i + 1) % args.batch_size == 0:
+        if (i + 1) % BATCH_SIZE == 0:
             conn.commit()
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed
