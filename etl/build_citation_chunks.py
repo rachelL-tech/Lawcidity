@@ -132,7 +132,7 @@ def _apply_bounds(chunk_start: int, chunk_end: int,
     """統一套用 reasoning floor 和 footer 限制。"""
     if chunk_start < reasoning_floor <= must_start:
         chunk_start = reasoning_floor
-    if footer_pos is not None and chunk_end > footer_pos and must_end <= footer_pos:
+    if footer_pos is not None and must_end <= footer_pos < chunk_end:
         chunk_end = footer_pos
     return chunk_start, chunk_end
 
@@ -198,11 +198,6 @@ def find_chunk_bounds(text: str, match_start: int, match_end: int,
     else:
         chunk_end = must_end
 
-    # 6. 最終安全檢查：must_end 必須在 chunk 內
-    if chunk_end < must_end:
-        chunk_end = must_end
-        chunk_start = max(0, chunk_end - MAX_CHUNK_LEN)
-
     return _apply_bounds(chunk_start, chunk_end, reasoning_floor, footer_pos, must_start, must_end)
 
 
@@ -217,17 +212,17 @@ def merge_overlapping(items: list[tuple]) -> list[tuple]:
 
     items.sort(key=lambda x: x[1])
     merged = []
-    cur_start, cur_end, cur_cites = items[0][1], items[0][2], [items[0][0]]
+    current_start, current_end, current_cites = items[0][1], items[0][2], [items[0][0]]
 
     for c, s, e in items[1:]:
-        if s < cur_end:  # overlap
-            cur_end = max(cur_end, e)
-            cur_cites.append(c)
+        if s < current_end:  # overlap
+            current_end = max(current_end, e)
+            current_cites.append(c)
         else:
-            merged.append((cur_start, cur_end, cur_cites))
-            cur_start, cur_end, cur_cites = s, e, [c]
+            merged.append((current_start, current_end, current_cites))
+            current_start, current_end, current_cites = s, e, [c]
 
-    merged.append((cur_start, cur_end, cur_cites))
+    merged.append((current_start, current_end, current_cites))
     return merged
 
 

@@ -137,18 +137,13 @@ def find_chunk_bounds(text: str, match_start: int, match_end: int,
     else:
         chunk_end = must_end
 
-    # 6. 最終安全檢查：must_end 必須在 chunk 內
-    if chunk_end < must_end:
-        chunk_end = must_end
-        chunk_start = max(0, chunk_end - MAX_CHUNK_LEN)
-
     return _apply_footer(chunk_start, chunk_end, footer_pos, must_end)
 
 
 def _apply_footer(chunk_start: int, chunk_end: int,
                   footer_pos: int | None, must_end: int) -> tuple[int, int]:
     """若 chunk_end 超過 footer 且 citation 不在 footer 之後，截斷到 footer。"""
-    if footer_pos is not None and chunk_end > footer_pos and must_end <= footer_pos:
+    if footer_pos is not None and must_end <= footer_pos < chunk_end:
         chunk_end = footer_pos
     return chunk_start, chunk_end
 
