@@ -121,34 +121,62 @@ If the user does not happen to use the same wording preferred by courts, a tradi
 
 ![Citation Concept](frontend/public/citation_concept.png)
 
-Legal citations work a lot like academic citations. Structurally, they are also close to the intuition behind **PageRank**:
+The citation relationship looks like this: a later decision cites a prior one, and the surrounding context when the court cites that prior decision is the `citation snippet` shown later.
 
-> If a decision is cited frequently by other decisions, it usually carries real weight in practice.
+Lawcidity does not just find decisions that "contain" the user's query. It tries to show:
 
-During my internship at a law firm, I observed that citation snippets from different **source decisions** pointing to the same **target decision** often contain highly similar language.
+> Under this query, which prior decisions are repeatedly cited by courts, and how later courts turn those prior decisions into legal holdings they actually use.
 
-This suggests that a highly cited **target decision** is not just "mentioned by many decisions," but may already have formed a stable legal view. When different courts deal with similar issues, they repeatedly cite the same target and use similar language to explain the legal reasoning.
+Courts often cite earlier decisions when writing the reasoning section of a case. Start with this diagram:
 
-For example, when searching for `車禍` (`traffic accident`):
-- the most-cited target is repeatedly cited in snippets about "sudden situations"
-- the second most-cited target is cited in snippets centered on "fleeing the scene"
+![Mark Terms](frontend/public/mark_terms.png)
 
-This shows that courts repeatedly rely on the same legal view when dealing with the same legal issue.
+This is a simplified view of a real decision. Three parts matter most:
+
+- the decision at the top, which is writing out its reasoning, is the `source`, or the citing decision
+- the case number highlighted in orange, such as "最高法院105年台上字第1374號", is the `target`, or the cited prior decision
+- the short passage boxed in blue is the `citation snippet`, the most important and most information-dense part of the decision
+
+The `citation snippet` matters because courts usually do two things there:
+
+- compress the legal holding of the prior decision into a few lines
+- then explain how that holding applies to the facts of the current case
+
+So for lawyers, both the `target` and the `citation snippet` matter:
+
+- the `target` tells you which prior decision the legal view comes from
+- the `citation snippet` shows how later courts summarize that prior decision into a legal holding and use it in a concrete case
+
+Lawcidity's ranking uses that structure.
+
+Instead of mixing together every decision that matches the query, the system first finds the `citation snippets` that genuinely match the query conditions, then looks at which `target` those snippets point to together. If many different later decisions converge on the same prior decision when dealing with similar problems, that prior decision should rank higher.
+
+In other words, the result list answers this first:
+
+> Under this query, which prior decisions do courts in practice converge on most often?
+
+And when you expand a result, the `citation snippets` answer this:
+
+> How do later courts turn those prior decisions into reusable legal holdings?
+
+For example, if you search for `車禍` (`traffic accident`) in Lawcidity and expand the top-ranked result, you can see many later decisions discussing how to define a "sudden situation." Under another prior decision, many snippets focus on how to define "fleeing the scene."
 
 ![](frontend/public/why_citations_snippet.png)
 
-**So citation count reflects more than popularity. It also reflects the stable line of case law courts have formed around a particular issue.**
+At that point, you are no longer just seeing which results matched the query. You are seeing how courts repeatedly organize and use existing legal views across different problems.
 
-- Full-text search asks: which decisions **mention** the same term?
-- Citation ranking asks: which decisions are actually used by courts to resolve legal disputes related to that term?
+By locating citation relationships, we can capture two signals at once:
+
+- the most important and most information-dense passage in a decision
+- the prior decisions that different courts repeatedly rely on under this query
+
+Lawcidity uses both signals together as the basis for ranking.
 
 ---
 
 ## Terminology and Data Units
 
-![Mark Terms](frontend/public/mark_terms.png)
-
-In practice, the system first uses case numbers mentioned in a decision to locate candidate citations, then uses the surrounding context to determine whether they are true citations.
+Below are the core terms and data units that appear repeatedly throughout the project.
 
 | Term | Meaning |
 |---|---|
