@@ -17,7 +17,6 @@
 
 支援的執行模式：
 - 單一資料夾匯入
-- batch 批次匯入
 """
 import json
 import os
@@ -354,28 +353,6 @@ def _set_canonical_id(conn, new_id: int, unit_norm: str, jyear: int,
         """, (unit_norm, jyear, jcase_norm, jno, case_type, new_id, new_id))
 
 
-def _recompute_citation_counts(conn) -> int:
-    """重算所有 canonical 行的 total_citation_count，回傳更新筆數。
-    計算邏輯：同一 canonical 群下所有 sibling 的被引 source 去重總計。"""
-    with conn.cursor() as cur:
-        cur.execute("""
-            WITH counts AS (
-                SELECT d.canonical_id, COUNT(DISTINCT c.source_id) AS cnt
-                FROM decisions d
-                LEFT JOIN citations c ON c.target_id = d.id
-                WHERE d.canonical_id IS NOT NULL
-                GROUP BY d.canonical_id
-            )
-            UPDATE decisions d
-            SET total_citation_count = COALESCE(counts.cnt, 0)
-            FROM counts
-            WHERE d.id = d.canonical_id
-              AND d.canonical_id = counts.canonical_id
-        """)
-        updated = cur.rowcount
-    conn.commit()
-    return updated
-
 def upsert_target_placeholder(conn, court: str, jyear: int, jcase_norm: str, jno: int,
                               target_doc_type: Optional[str] = None,
                               target_case_type: Optional[str] = None,
@@ -651,7 +628,7 @@ def ingest_citations(conn, source_id: int, clean_text: str,
 # =========================
 # 主程式
 # =========================
-def main(folder_path: str, skip_recompute: bool = False):
+def main(folder_path: str):
     """掃描資料夾，匯入所有判決"""
     folder = Path(folder_path)
     if not folder.exists():
@@ -750,63 +727,14 @@ def main(folder_path: str, skip_recompute: bool = False):
         """, (folder_name, success_count))
     conn.commit()
 
-    if not skip_recompute:
-        _recompute_citation_counts(conn)
-
     conn.close()
     print(f"\n完成！成功 {success_count} 筆，失敗 {fail_count} 筆")
     print(f"✓ 已寫入 ingest_log：{folder_name}")
-
-
-def main_batch(base_dir: str, keyword: str = ""):
-    """批次匯入：掃描 base_dir 下所有符合 keyword 的資料夾"""
-    base = Path(base_dir)
-    keywords = [k for k in keyword.split(",") if k]
-    folders = [f for f in base.iterdir() if f.is_dir() and all(k in f.name for k in keywords)]
-    label = f"'{keyword}'" if keywords else "（全部）"
-    print(f"找到 {len(folders)} 個資料夾符合 {label}")
-    for folder in sorted(folders):
-        print(f"\n{'='*40}")
-        print(f"處理：{folder.name}")
-        main(str(folder), skip_recompute=True)
-
-    # 所有資料夾跑完後，統一重算 citation count（避免每個資料夾都跑一次全表掃描）
-    conn = get_db_connection()
-    _recompute_citation_counts(conn)
-    conn.close()
-
-    # 印出本次 batch 的錯誤摘要
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT error_type, COUNT(*) AS cnt
-            FROM ingest_error_log
-            WHERE resolved = false
-            GROUP BY error_type
-            ORDER BY error_type
-        """)
-        error_rows = cur.fetchall()
-    conn.close()
-
-    if error_rows:
-        total_errors = sum(cnt for _, cnt in error_rows)
-        detail = ", ".join(f"{t} {cnt} 筆" for t, cnt in error_rows)
-        print(f"\n⚠ 本次 batch 共有 {total_errors} 筆未解決錯誤（{detail}）")
-    else:
-        print("\n✓ 本次 batch 無錯誤")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("使用方式：")
         print("  單一資料夾：python etl/ingest_decisions.py <資料夾路徑>")
-        print("  批次匯入：  python etl/ingest_decisions.py --batch <基底目錄>")
         sys.exit(1)
 
-    if sys.argv[1] == "--batch":
-        if len(sys.argv) < 3:
-            print("錯誤：--batch 需要指定基底目錄")
-            sys.exit(1)
-        keyword = sys.argv[3] if len(sys.argv) > 3 else ""
-        main_batch(sys.argv[2], keyword)
-    else:
-        main(sys.argv[1])
+    main(sys.argv[1])
