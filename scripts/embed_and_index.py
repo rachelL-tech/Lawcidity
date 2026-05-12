@@ -2,20 +2,15 @@
 """
 讀 chunks → voyage-law-2 @ 1024 dims → UPDATE embedding 到 PostgreSQL。
 
-優化：
-  (2) batch size 預設 128
-  (4) text dedup：相同 chunk_text 只 embed 一次，UPDATE 套用所有相同 row
+  (1) batch size 固定 64
+  (2) text dedup：相同 chunk_text 只 embed 一次，UPDATE 套用所有相同 row
       - 以 md5(chunk_text) 為 dedup key 與 checkpoint key
 
 注意：DB schema 須為 vector(1024)，執行前請先跑 sql/003_voyage_migration.sql。
 
 Usage:
   python etl/embed_and_index.py                      # 全量（跳過已有 embedding）
-  python etl/embed_and_index.py --reset              # 清空所有 embedding 後重跑
-  python etl/embed_and_index.py --limit 5000          # 只處理前 N 個 unique text
-  python etl/embed_and_index.py --case-type 刑事      # 只處理特定 case_type
   python etl/embed_and_index.py --month 2024-01       # 只處理特定月份的判決
-  python etl/embed_and_index.py --embed-batch 128     # embedding batch size（default: 128）
 """
 
 import argparse
@@ -34,6 +29,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 DIMS = 1024
 VOYAGE_MODEL = "voyage-law-2"
+EMBED_BATCH_SIZE = 64
 CHECKPOINT_FILE = Path("scripts/embed_and_index_checkpoint.json")
 
 
@@ -47,7 +43,7 @@ def get_db_conn():
     return psycopg.connect(db_url, row_factory=dict_row)
 
 
-def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, limit=None):
+def fetch_unique_texts(conn, *, month=None, after_hash=None):
     """
     以 md5(chunk_text) 去重：相同文字只回傳一次。
     after_hash = md5 hex string — checkpoint 續跑用。
@@ -56,10 +52,6 @@ def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, lim
     where = ["cc.embedding IS NULL"]
     params: dict = {}
     join_sql = ""
-
-    if case_type:
-        where.append("cc.case_type = %(case_type)s")
-        params["case_type"] = case_type
 
     if month:
         try:
@@ -80,7 +72,6 @@ def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, lim
         params["after_hash"] = after_hash
 
     where_sql = "WHERE " + " AND ".join(where)
-    limit_sql = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
         SELECT
@@ -91,7 +82,6 @@ def fetch_unique_texts(conn, *, case_type=None, month=None, after_hash=None, lim
         {where_sql}
         GROUP BY md5(cc.chunk_text)
         ORDER BY text_hash
-        {limit_sql}
     """
     return conn.execute(sql, params)
 
@@ -135,6 +125,7 @@ def load_voyage_client():
 def embed_batch(client, texts: list[str]) -> np.ndarray:
     result = client.embed(texts, model=VOYAGE_MODEL)
     embeds = np.array(result.embeddings, dtype=np.float32)
+    # Voyage embeddings 依官方文件已是 unit-normalized，其實不需要額外 normalization
     norms = np.linalg.norm(embeds, axis=1, keepdims=True)
     norms[norms == 0] = 1
     return embeds / norms
@@ -142,6 +133,8 @@ def embed_batch(client, texts: list[str]) -> np.ndarray:
 
 def vec_to_pg(vec: np.ndarray) -> str:
     """numpy vector → pgvector 文字格式 '[x1,x2,...]'"""
+    # 若未來重建資料庫，可考慮改用 pgvector 的 psycopg adapter（register_vector），
+    # 直接綁定向量參數（如 np.ndarray）寫入 PostgreSQL；Voyage embeddings 依官方文件已是 unit-normalized。
     return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 
 
@@ -151,26 +144,11 @@ def main():
     parser = argparse.ArgumentParser(
         description=f"Embed chunks via {VOYAGE_MODEL} and store to PostgreSQL pgvector"
     )
-    parser.add_argument("--reset",       action="store_true",
-                        help="清空所有 embedding 後重跑（會忽略 checkpoint）")
-    parser.add_argument("--limit",       type=int,
-                        help="最多處理 N 個 unique text")
-    parser.add_argument("--case-type",   type=str,
-                        help="只處理特定 case_type")
     parser.add_argument("--month",       type=str,
                         help="只處理特定月份判決的 chunks，格式 YYYY-MM")
-    parser.add_argument("--embed-batch", type=int, default=64,
-                        help="embedding batch size (default: 64)")
     args = parser.parse_args()
 
     conn = get_db_conn()
-
-    if args.reset:
-        print("Resetting all embeddings (UPDATE embedding = NULL)...")
-        conn.execute("UPDATE chunks SET embedding = NULL")
-        conn.commit()
-        clear_checkpoint()
-        print("Done.")
 
     after_hash = load_checkpoint()
     if after_hash:
@@ -179,9 +157,6 @@ def main():
     count_join = ""
     count_where = "WHERE cc.embedding IS NULL"
     count_params: dict = {}
-    if args.case_type:
-        count_where += " AND cc.case_type = %(case_type)s"
-        count_params["case_type"] = args.case_type
     if args.month:
         import datetime
         year, mon = int(args.month[:4]), int(args.month[5:7])
@@ -194,15 +169,13 @@ def main():
         count_params
     ).fetchone()
     total_pending = row["cnt"] if row else 0
-    print(f"Pending unique texts: {total_pending}"
-          + (f" (limit: {args.limit})" if args.limit else ""))
+    print(f"Pending unique texts: {total_pending}")
     print(f"Model: {VOYAGE_MODEL} @ {DIMS} dims")
 
     client = load_voyage_client()
 
     cursor = fetch_unique_texts(
-        conn, case_type=args.case_type, month=args.month,
-        after_hash=after_hash, limit=args.limit
+        conn, month=args.month, after_hash=after_hash
     )
 
     t0 = time.time()
@@ -250,7 +223,7 @@ def main():
     for row in cursor:
         embed_buf.append(dict(row))
 
-        if len(embed_buf) >= args.embed_batch:
+        if len(embed_buf) >= EMBED_BATCH_SIZE:
             flush(embed_buf)
             embed_buf.clear()
 
