@@ -11,7 +11,7 @@
 
 **A Taiwan court decision retrieval system built around citation relationships.**
 
-From keyword search to semantic understanding, Lawcidity helps users find the court views that actually matter in practice.
+From keyword search to semantic understanding, Lawcidity helps users quickly find court views that carry real reference value.
 
 **Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
@@ -31,55 +31,6 @@ From keyword search to semantic understanding, Lawcidity helps users find the co
 | **Technical focus** | citation parsing, citation-based ranking, citation-anchored chunking |
 | **Performance result** | Keyword search improved from about `73s` to `2-4s` |
 | **Tech stack** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
-
----
-
-## What Problem Is This Project Solving?
-
-Traditional legal search has two recurring blind spots:
-
-### 1. Ignoring positional signal
-Full-text search only checks whether a keyword appears in a court decision, but does not distinguish the context in which it appears.
-
-But different parts of a court decision do not carry the same value for legal research. For example:
-- the court's own legal reasoning
-- one party's argument
-- procedural background
-- factual background
-- evidentiary descriptions
-
-For lawyers, legal arguments need to be built on forms of legal reasoning that courts will accept. So even when the same keyword is hit, it is usually more valuable when it appears in the court's own reasoning than when it appears in the factual background or the parties' arguments.
-
-That is why Lawcidity pays special attention to where courts cite prior decisions. Courts usually cite prior decisions when they are addressing a legal issue and developing their own legal reasoning.
-
-### 2. Vocabulary mismatch
-The same legal concept is often expressed in different ways. For example:
-- `詐欺` (`fraud`) vs `詐騙` (`scam`)
-- `資遣` (`layoff`) vs `終止勞動契約` (`termination of an employment contract`)
-
-If the user does not happen to use the same wording preferred by courts, a traditional keyword search can easily miss substantively relevant decisions.
-
----
-
-## How Lawcidity Approaches It
-
-| Mode | How it works | What it solves |
-|---|---|---|
-| **Keyword search** | Match keywords within passages where courts cite prior decisions, then rank the cited prior decisions by relevance and citation frequency | It does not just find decisions whose full text contains the keyword. It finds the important decisions that courts repeatedly rely on for a particular legal issue |
-| **Semantic search (RAG)** | Compare the user's question with the legal reasoning surrounding citations to find semantically similar decisions | Reduces dependence on exact keyword overlap and finds court reasoning that uses different wording but addresses the same issue |
-
----
-
-## Project Highlights
-
-- **It works on 1.4M public decision data.**  
-  The project operates on public decision data and covers citation extraction, false-positive removal, and OpenSearch index design.
-
-- **Citation relationships are at the core of the ranking mechanism.**  
-  Rather than only finding decisions that mention the same terms, it prioritizes the decisions courts repeatedly cite when dealing with the same legal issue.
-
-- **It is optimized not just for relevance, but for practical speed.**  
-  Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can also fall below `1 ms` when the cache hits.
 
 ---
 
@@ -117,11 +68,38 @@ If the user does not happen to use the same wording preferred by courts, a tradi
 
 ---
 
+## What Problem Is This Project Solving?
+
+Traditional legal search has two recurring blind spots:
+
+### 1. Ignoring positional signal
+Full-text search only checks whether a keyword appears in a court decision, but does not distinguish the context in which it appears.
+
+But different parts of a court decision do not carry the same value for legal research. For example:
+- the court's own legal reasoning
+- one party's argument
+- procedural background
+- factual background
+- evidentiary descriptions
+
+For lawyers, legal arguments need to be built on forms of legal reasoning that courts will accept. So even when the same keyword is hit, it is usually more valuable when it appears in the court's own reasoning than when it appears in the factual background or the parties' arguments.
+
+That is why Lawcidity pays special attention to where courts cite prior decisions. Courts usually cite prior decisions when they are addressing a legal issue and developing their own legal reasoning.
+
+### 2. Vocabulary mismatch
+The same legal concept is often expressed in different ways. For example:
+- `詐欺` (`fraud`) vs `詐騙` (`scam`)
+- `資遣` (`layoff`) vs `終止勞動契約` (`termination of an employment contract`)
+
+If the user does not happen to use the same wording preferred by courts, a traditional keyword search can easily miss substantively relevant decisions.
+
+---
+
 ## Why Rank by Citation Relationships?
 
 ![Citation Concept](frontend/public/citation_concept.png)
 
-The citation relationship looks like this: a later decision cites a prior one, and the surrounding context when the court cites that prior decision is the `citation snippet` shown later.
+The citation relationship looks like this: a later decision cites a prior one, and the surrounding context when a court cites that prior decision often reflects relatively stable legal holdings in practice.
 
 Lawcidity does not just find decisions that "contain" the user's query. It tries to show:
 
@@ -137,15 +115,16 @@ This is a simplified view of a real decision. Three parts matter most:
 - the case number highlighted in orange, such as "最高法院105年台上字第1374號", is the `target`, or the cited prior decision
 - the short passage boxed in blue is the `citation snippet`, the most important and most information-dense part of the decision
 
-The `citation snippet` matters because courts usually do two things there:
+This kind of citation matters because the surrounding context usually reveals three things:
 
-- compress the legal holding of the prior decision into a few lines
-- then explain how that holding applies to the facts of the current case
+- what the court sees as the core legal issue in this case
+- which prior legal holdings the court thinks are worth relying on
+- how the court cites that prior decision to support its own reasoning
 
 So for lawyers, both the `target` and the `citation snippet` matter:
 
 - the `target` tells you which prior decision the legal view comes from
-- the `citation snippet` shows how later courts summarize that prior decision into a legal holding and use it in a concrete case
+- the `citation snippet` shows how later courts summarize that prior decision into a legal holding and use it to support their own reasoning
 
 Lawcidity's ranking uses that structure.
 
@@ -171,6 +150,28 @@ By locating citation relationships, we can capture two signals at once:
 - the prior decisions that different courts repeatedly rely on under this query
 
 Lawcidity uses both signals together as the basis for ranking.
+
+---
+
+## How Lawcidity Approaches It
+
+| Mode | How it works | What it solves |
+|---|---|---|
+| **Keyword search** | Match keywords within passages where courts cite prior decisions, then rank the cited prior decisions by relevance and citation frequency | It does not just find decisions whose full text contains the keyword. It finds the important decisions that courts repeatedly rely on for a particular legal issue |
+| **Semantic search (RAG)** | Compare the user's question with the legal reasoning surrounding citations to find semantically similar decisions | Reduces dependence on exact keyword overlap and finds court reasoning that uses different wording but addresses the same issue |
+
+---
+
+## Project Highlights
+
+- **It works on 1.4M public decision data.**  
+  The project operates on public decision data and covers citation extraction, false-positive removal, and OpenSearch index design.
+
+- **Citation relationships are at the core of the ranking mechanism.**  
+  Rather than only finding decisions that mention the same terms, it prioritizes the decisions courts repeatedly cite when dealing with the same legal issue.
+
+- **It is optimized not just for relevance, but for practical speed.**  
+  Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can also fall below `1 ms` when the cache hits.
 
 ---
 
@@ -332,9 +333,9 @@ That works at smaller scale, but with broad queries such as `詐欺` (`fraud`), 
 First find the source IDs whose full text matches the search conditions.
 
 **Why not PostgreSQL GIN?**  
-In benchmarks, OpenSearch source recall was:
-- about **27 times faster**
-- less than **one third** of the index size
+In same-pool benchmarks, OpenSearch source recall achieved:
+- query latency dropped from about `6.31s` to `0.20–0.24s` (about **30x faster**)
+- the Stage 1 full-text recall index size dropped from about `1.48 GB` to `0.33–0.42 GB` (less than **one third** of the original size)
 
 **Chinese retrieval strategy**  
 The commonly used IK tokenizer in OpenSearch is mainly designed for simplified Chinese. Court decisions, however, contain a large amount of specialized legal vocabulary that is not covered by the tokenizer's dictionary, which made tokenization unstable.
@@ -399,11 +400,11 @@ Target ranking is mainly based on two signals:
    Targets first recalled at a higher MSM level are ranked first.
 
 2. **`matched_citation_count`**  
-   Within the same MSM level, targets are secondarily ranked by the number of distinct source decisions that point to them.
+   Within the same MSM level, we then look at how many matching snippets from different `source` decisions point to the same `target`.
 
 In other words, Lawcidity is not simply finding decisions that mention the searched keywords or statutes. It is asking:
 
-> Within the core legal reasoning that is relevant to the user's search conditions, which targets are repeatedly cited by courts?
+> Under this query, which prior decisions are repeatedly pointed to by matching snippets from different courts?
 
 This is closer to what lawyers are actually looking for than full-text search that ignores positional signals.
 
