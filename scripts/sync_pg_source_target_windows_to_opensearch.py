@@ -21,8 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
 SNIPPET_FIELD = "window_text_snippet"
+BATCH_SIZE = 500
+MAX_WINDOWS_PER_FIELD = 8
+REQUEST_TIMEOUT = 120
+REFRESH_EACH_BATCH = False
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -39,22 +42,6 @@ def _parse_iso_date(raw: str | None, name: str) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 格式必須為 YYYY-MM-DD") from exc
-
-
-def _normalize_case_types(raw_values: list[str]) -> list[str]:
-    values: list[str] = []
-    for raw in raw_values:
-        values.extend(x.strip() for x in raw.split(",") if x.strip())
-    invalid = [x for x in values if x not in VALID_CASE_TYPES]
-    if invalid:
-        raise ValueError("case_type 僅支援：民事,刑事,行政,憲法")
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        if value not in seen:
-            seen.add(value)
-            out.append(value)
-    return out
 
 
 def _build_opensearch_client():
@@ -98,11 +85,8 @@ def _fetch_source_ids_batch(
     conn: psycopg.Connection,
     *,
     last_source_id: int,
-    batch_size: int,
-    end_source_id: int | None,
     from_date: date | None,
     to_date: date | None,
-    case_types: list[str],
 ) -> list[int]:
     where_parts = [
         "c.source_id > %(last_source_id)s",
@@ -111,21 +95,15 @@ def _fetch_source_ids_batch(
     ]
     params: dict[str, Any] = {
         "last_source_id": last_source_id,
-        "batch_size": batch_size,
+        "batch_size": BATCH_SIZE,
     }
 
-    if end_source_id is not None:
-        where_parts.append("c.source_id <= %(end_source_id)s")
-        params["end_source_id"] = end_source_id
     if from_date is not None:
         where_parts.append("src.decision_date >= %(from_date)s")
         params["from_date"] = from_date
     if to_date is not None:
         where_parts.append("src.decision_date <= %(to_date)s")
         params["to_date"] = to_date
-    if case_types:
-        where_parts.append("src.case_type = ANY(%(case_types)s)")
-        params["case_types"] = case_types
 
     sql = f"""
         SELECT DISTINCT c.source_id
@@ -220,8 +198,6 @@ def _statute_sort_key(item: tuple[str, str, str | None]) -> tuple[str, str, str]
 def _build_source_target_docs(
     rows: list[dict[str, Any]],
     statutes_map: dict[int, list[dict[str, str]]],
-    *,
-    max_windows_per_field: int,
 ) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, str], dict[str, Any]] = {}
 
@@ -270,7 +246,7 @@ def _build_source_target_docs(
             doc["_window_lists"][SNIPPET_FIELD],
             doc["_window_seen"][SNIPPET_FIELD],
             row.get("snippet") or "",
-            max_windows_per_field,
+            MAX_WINDOWS_PER_FIELD,
         )
 
         for statute in statutes_map.get(int(row["citation_id"]), []):
@@ -310,8 +286,6 @@ def _bulk_index(
     *,
     index_name: str,
     docs: list[dict[str, Any]],
-    request_timeout: int,
-    refresh_each_batch: bool,
 ) -> int:
     if not docs:
         return 0
@@ -330,8 +304,8 @@ def _bulk_index(
 
     response = client.bulk(
         body=body,
-        request_timeout=request_timeout,
-        refresh="wait_for" if refresh_each_batch else False,
+        request_timeout=REQUEST_TIMEOUT,
+        refresh="wait_for" if REFRESH_EACH_BATCH else False,
     )
     if response.get("errors"):
         failures: list[dict[str, Any]] = []
@@ -354,18 +328,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="PG -> OpenSearch source-target window bulk 同步（可重跑、可分批）"
     )
-    parser.add_argument("--batch-size", type=int, default=500, help="每批 source 筆數，預設 500")
-    parser.add_argument("--start-source-id", type=int, default=1, help="起始 source id（含）")
-    parser.add_argument("--end-source-id", type=int, default=None, help="結束 source id（含）")
     parser.add_argument("--from-date", type=str, default=None, help="source decision_date 起日（YYYY-MM-DD）")
     parser.add_argument("--to-date", type=str, default=None, help="source decision_date 迄日（YYYY-MM-DD）")
-    parser.add_argument("--case-type", action="append", default=[], help="可重複或逗號分隔：民事,刑事,行政,憲法")
-    parser.add_argument("--max-batches", type=int, default=0, help="最多跑幾批（0=不限制）")
-    parser.add_argument("--max-windows-per-field", type=int, default=8, help="每個 window 欄位最多保留幾段文字")
-    parser.add_argument("--request-timeout", type=int, default=120, help="OpenSearch bulk timeout 秒數")
-    parser.add_argument("--refresh-each-batch", action="store_true", help="每批寫完立即 refresh（較慢）")
-    parser.add_argument("--dry-run", action="store_true", help="只讀取/計算，不寫入 OpenSearch")
-    parser.add_argument("--env-file", type=str, help="讀取指定的 .env 檔案")
     return parser.parse_args()
 
 
@@ -373,24 +337,12 @@ def main() -> int:
     args = _parse_args()
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
-    if args.env_file:
-        load_dotenv(args.env_file, override=True)
-
-    if args.batch_size <= 0:
-        raise ValueError("batch-size 必須 > 0")
-    if args.start_source_id <= 0:
-        raise ValueError("start-source-id 必須 >= 1")
-    if args.end_source_id is not None and args.end_source_id < args.start_source_id:
-        raise ValueError("end-source-id 不可小於 start-source-id")
-    if args.max_windows_per_field <= 0:
-        raise ValueError("max-windows-per-field 必須 > 0")
 
     from_date = _parse_iso_date(args.from_date, "from-date")
     to_date = _parse_iso_date(args.to_date, "to-date")
     if from_date and to_date and from_date > to_date:
         raise ValueError("from-date 不可晚於 to-date")
 
-    case_types = _normalize_case_types(args.case_type)
     db_url = os.environ.get(
         "DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/citations",
@@ -406,30 +358,23 @@ def main() -> int:
     print(
         "[sync-source-target] start",
         f"index={index_name}",
-        f"batch_size={args.batch_size}",
-        f"start_source_id={args.start_source_id}",
-        f"end_source_id={args.end_source_id}",
+        f"batch_size={BATCH_SIZE}",
         f"from_date={from_date}",
         f"to_date={to_date}",
-        f"case_types={case_types or 'ALL'}",
-        f"max_windows_per_field={args.max_windows_per_field}",
-        f"dry_run={args.dry_run}",
+        f"max_windows_per_field={MAX_WINDOWS_PER_FIELD}",
     )
 
     total_docs = 0
     total_batches = 0
-    last_source_id = args.start_source_id - 1
+    last_source_id = 0
 
     with psycopg.connect(db_url, row_factory=dict_row) as conn:
         while True:
             source_ids = _fetch_source_ids_batch(
                 conn,
                 last_source_id=last_source_id,
-                batch_size=args.batch_size,
-                end_source_id=args.end_source_id,
                 from_date=from_date,
                 to_date=to_date,
-                case_types=case_types,
             )
             if not source_ids:
                 break
@@ -440,19 +385,13 @@ def main() -> int:
             docs = _build_source_target_docs(
                 rows,
                 statutes_map,
-                max_windows_per_field=args.max_windows_per_field,
             )
 
-            if args.dry_run:
-                written = len(docs)
-            else:
-                written = _bulk_index(
-                    client,
-                    index_name=index_name,
-                    docs=docs,
-                    request_timeout=args.request_timeout,
-                    refresh_each_batch=args.refresh_each_batch,
-                )
+            written = _bulk_index(
+                client,
+                index_name=index_name,
+                docs=docs,
+            )
 
             total_batches += 1
             total_docs += written
@@ -461,10 +400,6 @@ def main() -> int:
                 f"[sync-source-target] batch={total_batches} sources={len(source_ids)} "
                 f"citations={len(rows)} indexed={written} last_source_id={last_source_id} total={total_docs}"
             )
-
-            if args.max_batches > 0 and total_batches >= args.max_batches:
-                print(f"[sync-source-target] stop: reached max-batches={args.max_batches}")
-                break
 
     print(
         f"[sync-source-target] done batches={total_batches} indexed_docs={total_docs} "
