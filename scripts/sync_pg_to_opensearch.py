@@ -4,8 +4,6 @@
 # 1) 以 source_id 作為 OpenSearch _id，重跑時會覆寫同 id（idempotent）。
 # 2) 支援依 id/date/case_type 切片同步，便於先跑 2 個月再擴大。
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
@@ -20,7 +18,9 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
 
-VALID_CASE_TYPES = {"民事", "刑事", "行政", "憲法"}
+BATCH_SIZE = 500
+REQUEST_TIMEOUT = 120
+REFRESH_EACH_BATCH = False
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -37,22 +37,6 @@ def _parse_iso_date(raw: str | None, name: str) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 格式必須為 YYYY-MM-DD") from exc
-
-
-def _normalize_case_types(raw_values: list[str]) -> list[str]:
-    values: list[str] = []
-    for raw in raw_values:
-        values.extend(x.strip() for x in raw.split(",") if x.strip())
-    invalid = [x for x in values if x not in VALID_CASE_TYPES]
-    if invalid:
-        raise ValueError("case_type 僅支援：民事,刑事,行政,憲法")
-    seen: set[str] = set()
-    out: list[str] = []
-    for v in values:
-        if v not in seen:
-            seen.add(v)
-            out.append(v)
-    return out
 
 
 def _build_opensearch_client():
@@ -85,10 +69,6 @@ def _build_opensearch_client():
     if use_ssl and not verify_certs:
         kwargs["ssl_assert_hostname"] = False
 
-    ca_certs = os.environ.get("OPENSEARCH_CA_CERTS", "").strip()
-    if use_ssl and verify_certs and ca_certs:
-        kwargs["ca_certs"] = ca_certs
-
     return OpenSearch(**kwargs)
 
 
@@ -96,20 +76,18 @@ def _fetch_decisions_batch(
     conn: psycopg.Connection,
     *,
     last_id: int,
-    batch_size: int,
     end_id: int | None,
     from_date: date | None,
     to_date: date | None,
-    case_types: list[str],
-    only_cited: bool,
 ) -> list[dict[str, Any]]:
     where_parts = [
         "d.id > %(last_id)s",
         "d.clean_text IS NOT NULL",
+        "EXISTS (SELECT 1 FROM citations c WHERE c.source_id = d.id)",
     ]
     params: dict[str, Any] = {
         "last_id": last_id,
-        "batch_size": batch_size,
+        "batch_size": BATCH_SIZE,
     }
 
     if end_id is not None:
@@ -121,13 +99,6 @@ def _fetch_decisions_batch(
     if to_date is not None:
         where_parts.append("d.decision_date <= %(to_date)s")
         params["to_date"] = to_date
-    if case_types:
-        where_parts.append("d.case_type = ANY(%(case_types)s)")
-        params["case_types"] = case_types
-    if only_cited:
-        where_parts.append(
-            "EXISTS (SELECT 1 FROM citations c WHERE c.source_id = d.id)"
-        )
 
     sql = f"""
         SELECT
@@ -182,8 +153,6 @@ def _bulk_index(
     *,
     index_name: str,
     docs: list[dict[str, Any]],
-    request_timeout: int,
-    refresh_each_batch: bool,
 ) -> int:
     if not docs:
         return 0
@@ -202,8 +171,8 @@ def _bulk_index(
 
     response = client.bulk(
         body=body,
-        request_timeout=request_timeout,
-        refresh="wait_for" if refresh_each_batch else False,
+        request_timeout=REQUEST_TIMEOUT,
+        refresh="wait_for" if REFRESH_EACH_BATCH else False,
     )
 
     if response.get("errors"):
@@ -229,18 +198,10 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="PG -> OpenSearch bulk 同步（可重跑、可分批）"
     )
-    parser.add_argument("--batch-size", type=int, default=500, help="每批筆數，預設 500")
     parser.add_argument("--start-id", type=int, default=1, help="起始 decision id（含）")
     parser.add_argument("--end-id", type=int, default=None, help="結束 decision id（含）")
     parser.add_argument("--from-date", type=str, default=None, help="decision_date 起日（YYYY-MM-DD）")
     parser.add_argument("--to-date", type=str, default=None, help="decision_date 迄日（YYYY-MM-DD）")
-    parser.add_argument("--case-type", action="append", default=[], help="可重複或逗號分隔：民事,刑事,行政,憲法")
-    parser.add_argument("--max-batches", type=int, default=0, help="最多跑幾批（0=不限制）")
-    parser.add_argument("--request-timeout", type=int, default=120, help="OpenSearch bulk timeout 秒數")
-    parser.add_argument("--refresh-each-batch", action="store_true", help="每批寫完立即 refresh（較慢）")
-    parser.add_argument("--dry-run", action="store_true", help="只讀取/計算，不寫入 OpenSearch")
-    parser.add_argument("--include-uncited", action="store_true", help="同步未被引用的 source（預設只同步有引用）")
-    parser.add_argument("--env-file", type=str, help="讀取指定的 .env 檔案")
     return parser.parse_args()
 
 
@@ -248,12 +209,6 @@ def main() -> int:
     args = _parse_args()
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
-
-    if args.env_file:
-        load_dotenv(args.env_file, override=True)
-
-    if args.batch_size <= 0:
-        raise ValueError("batch-size 必須 > 0")
     if args.start_id <= 0:
         raise ValueError("start-id 必須 >= 1")
     if args.end_id is not None and args.end_id < args.start_id:
@@ -264,15 +219,12 @@ def main() -> int:
     if from_date and to_date and from_date > to_date:
         raise ValueError("from-date 不可晚於 to-date")
 
-    case_types = _normalize_case_types(args.case_type)
-
     db_url = os.environ.get(
         "DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/citations",
     )
     index_name = os.environ.get("OPENSEARCH_INDEX", "decisions_v3")
     client = _build_opensearch_client()
-    only_cited = not args.include_uncited
     analyzer_env = os.environ.get("OPENSEARCH_ANALYZER", "").strip()
     search_analyzer_env = os.environ.get("OPENSEARCH_SEARCH_ANALYZER", "").strip()
 
@@ -284,14 +236,12 @@ def main() -> int:
     print(
         "[sync] start",
         f"index={index_name}",
-        f"batch_size={args.batch_size}",
+        f"batch_size={BATCH_SIZE}",
         f"start_id={args.start_id}",
         f"end_id={args.end_id}",
         f"from_date={from_date}",
         f"to_date={to_date}",
-        f"case_types={case_types or 'ALL'}",
-        f"dry_run={args.dry_run}",
-        f"only_cited={only_cited}",
+        "only_cited=True",
         f"analyzer={analyzer_env or 'unset'}",
         f"search_analyzer={search_analyzer_env or 'unset'}",
     )
@@ -305,12 +255,9 @@ def main() -> int:
             rows = _fetch_decisions_batch(
                 conn,
                 last_id=last_id,
-                batch_size=args.batch_size,
                 end_id=args.end_id,
                 from_date=from_date,
                 to_date=to_date,
-                case_types=case_types,
-                only_cited=only_cited,
             )
             if not rows:
                 break
@@ -333,16 +280,11 @@ def main() -> int:
                     }
                 )
 
-            if args.dry_run:
-                written = len(docs)
-            else:
-                written = _bulk_index(
-                    client,
-                    index_name=index_name,
-                    docs=docs,
-                    request_timeout=args.request_timeout,
-                    refresh_each_batch=args.refresh_each_batch,
-                )
+            written = _bulk_index(
+                client,
+                index_name=index_name,
+                docs=docs,
+            )
 
             total_batches += 1
             total_docs += written
@@ -352,10 +294,6 @@ def main() -> int:
                 f"[sync] batch={total_batches} fetched={len(rows)} indexed={written} "
                 f"last_id={last_id} total={total_docs}"
             )
-
-            if args.max_batches > 0 and total_batches >= args.max_batches:
-                print(f"[sync] stop: reached max-batches={args.max_batches}")
-                break
 
     print(f"[sync] done batches={total_batches} indexed_docs={total_docs} final_last_id={last_id}")
     return 0

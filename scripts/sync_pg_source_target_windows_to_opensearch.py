@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # 用途：將 PostgreSQL citations 聚合為 source-target windows 並同步到 OpenSearch。
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
-import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -16,10 +13,6 @@ from urllib.parse import urlparse
 import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 SNIPPET_FIELD = "window_text_snippet"
 BATCH_SIZE = 500
@@ -73,10 +66,6 @@ def _build_opensearch_client():
     }
     if use_ssl and not verify_certs:
         kwargs["ssl_assert_hostname"] = False
-
-    ca_certs = os.environ.get("OPENSEARCH_CA_CERTS", "").strip()
-    if use_ssl and verify_certs and ca_certs:
-        kwargs["ca_certs"] = ca_certs
 
     return OpenSearch(**kwargs)
 
