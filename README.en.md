@@ -44,7 +44,7 @@ From keyword search to semantic understanding, Lawcidity helps users quickly fin
 - search with keywords such as `車禍` (`traffic accident`) and `行車紀錄器` (`dashcam`)
 - add statute filters such as `刑法` (`Criminal Code`) + `284`
 - further filter by case type, court level, and document type
-- inspect the context in which a target is cited by different sources
+- first inspect the matched snippets for a target across different source decisions, then expand more when needed
 - open the full source decision directly
 
 ![](frontend/public/gif/keyword-1-input.gif)
@@ -157,8 +157,8 @@ Lawcidity uses both signals together as the basis for ranking.
 
 | Mode | How it works | What it solves |
 |---|---|---|
-| **Keyword search** | Match keywords within passages where courts cite prior decisions, then rank the cited prior decisions by relevance and citation frequency | It does not just find decisions whose full text contains the keyword. It finds the important decisions that courts repeatedly rely on for a particular legal issue |
-| **Semantic search (RAG)** | Compare the user's question with the legal reasoning surrounding citations to find semantically similar decisions | Reduces dependence on exact keyword overlap and finds court reasoning that uses different wording but addresses the same issue |
+| **Keyword search** | First find citation passages that match the query, then aggregate and rank the prior decisions those passages collectively point to | It does not just find decisions whose full text matches the query. It finds the prior decisions and legal holdings that courts repeatedly point to under that query |
+| **Semantic search (RAG)** | Compare the user's question with the legal reasoning around citation passages, then aggregate back to the decision level to find semantically similar decisions | Reduces dependence on exact keyword overlap and finds court reasoning that uses different wording but addresses the same issue |
 
 ---
 
@@ -168,7 +168,7 @@ Lawcidity uses both signals together as the basis for ranking.
   The project operates on public decision data and covers citation extraction, false-positive removal, and OpenSearch index design.
 
 - **Citation relationships are at the core of the ranking mechanism.**  
-  Rather than only finding decisions that mention the same terms, it prioritizes the decisions courts repeatedly cite when dealing with the same legal issue.
+  Rather than only finding decisions that match the search conditions, it prioritizes the prior decisions and legal holdings that courts repeatedly rely on under related issues in that query.
 
 - **It is optimized not just for relevance, but for practical speed.**  
   Keyword search dropped from about `73 seconds` to `2-4 seconds`, and reranking can also fall below `1 ms` when the cache hits.
