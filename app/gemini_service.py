@@ -56,7 +56,7 @@ def extract_issues_and_statutes(text: str) -> dict:
     """
     client = _get_client()
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=EXTRACT_PROMPT.format(text=text),
         config={
             "temperature": 0.1,
@@ -150,7 +150,7 @@ def generate_analysis(
 
     client = _get_client()
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         contents=ANALYZE_PROMPT.format(
             query=query,
             issues=issues_text,

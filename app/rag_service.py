@@ -7,6 +7,7 @@ RAG 語意搜尋 + decision 聚合。
 3. chunk 計分（sim = 1 - cosine distance）→ 聚合到 decision → top N
 """
 
+import hashlib
 import os
 from collections import defaultdict
 
@@ -81,19 +82,12 @@ def _aggregate(
     knn_rows: list[dict],
     *, top: int,
 ) -> list[dict]:
-    chunks: dict[int, dict] = {}
-    for r in knn_rows:
-        r = dict(r)
-        key = r["chunk_id"]
-        if key not in chunks:
-            chunks[key] = r
-
-    for c in chunks.values():
+    for c in knn_rows:
         c["sim"] = 1 - float(c["distance"])
         c["score"] = c["sim"]
 
     by_decision: dict[int, list[dict]] = defaultdict(list)
-    for c in chunks.values():
+    for c in knn_rows:
         by_decision[c["decision_id"]].append(c)
 
     results = []
@@ -137,7 +131,35 @@ def rag_search(
     vec = embed_query(query)
     vec_str = _vec_to_pg(vec)
 
-    knn_rows = _knn(conn, vec_str, limit=50)
+    raw_rows = _knn(conn, vec_str, limit=top * 5)
+
+    deduped_rows = []
+    seen: dict[tuple[int, int], dict] = {}
+    for row in raw_rows:
+        chunk = dict(row)
+        key = (chunk["decision_id"], chunk["chunk_index"])
+
+        if key not in seen:
+            chunk["target_ids"] = [chunk["target_id"]] if chunk.get("target_id") else []
+            chunk["target_authority_ids"] = [chunk["target_authority_id"]] if chunk.get("target_authority_id") else []
+            seen[key] = chunk
+            deduped_rows.append(chunk)
+            continue
+
+        existing = seen[key]
+        if chunk.get("target_id"):
+            existing["target_ids"].append(chunk["target_id"])
+        if chunk.get("target_authority_id"):
+            existing["target_authority_ids"].append(chunk["target_authority_id"])
+
+    knn_rows = []
+    seen_hashes: set[str] = set()
+    for chunk in deduped_rows:
+        text_hash = hashlib.md5(chunk["chunk_text"].encode("utf-8")).hexdigest()
+        if text_hash in seen_hashes:
+            continue
+        seen_hashes.add(text_hash)
+        knn_rows.append(chunk)
 
     results = _aggregate(knn_rows, top=top)
 
