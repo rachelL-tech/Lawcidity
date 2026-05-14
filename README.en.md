@@ -7,7 +7,7 @@
 [![Search](https://img.shields.io/badge/search-OpenSearch-005EB8?style=flat-square&logo=opensearch&logoColor=white)](#)
 [![Vector](https://img.shields.io/badge/vector-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](#)
 [![AI](https://img.shields.io/badge/AI-Gemini%20%2B%20Voyage-FF6F00?style=flat-square)](#)
-[![Data](https://img.shields.io/badge/data-1.4M%20decisions-6A1B9A?style=flat-square)](#)
+[![Data](https://img.shields.io/badge/data-1.33M%20decisions-6A1B9A?style=flat-square)](#)
 
 **A Taiwan court decision retrieval system built around citation relationships.**
 
@@ -27,7 +27,7 @@ From keyword search to semantic understanding, Lawcidity helps users quickly fin
 |---|---|
 | **Core idea** | Use **citation relationships** between decisions as the ranking signal, inspired by the core intuition behind PageRank, to surface legal views that courts repeatedly rely on |
 | **Search modes** | Keyword search (OpenSearch) + semantic search (RAG) |
-| **Data scale** | `1.4M` decisions, `552K` citations, `575K` chunks |
+| **Data scale** | Processes about `1.33M` decisions; online search focuses on the `242,022` decisions that have citations |
 | **Technical focus** | citation parsing, citation-based ranking, citation-anchored chunking |
 | **Performance result** | Keyword search improved from about `73s` to `2-4s` |
 | **Tech stack** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
@@ -164,7 +164,7 @@ Lawcidity uses both signals together as the basis for ranking.
 
 ## Project Highlights
 
-- **It works on 1.4M public decision data.**  
+- **It processes about 1.33M decisions; online search focuses on the 242,022 decisions that have citations.**  
   The project operates on public decision data and covers citation extraction, false-positive removal, and OpenSearch index design.
 
 - **Citation relationships are at the core of the ranking mechanism.**  
@@ -245,7 +245,7 @@ OpenSearch: **3.2 GB** (EC2)
 
 | Table | Rows | Description |
 |---|---|---|
-| `decisions` | 1.4M | Normalized court decision records, including both source and target decisions |
+| `decisions` | 1.33M | Normalized court decision records, including both source and target decisions |
 | `citations` | 552K | Citation records from source to target, including citation snippets and citation positions in the full text |
 | `chunks` | 575K | Text segments anchored on citation positions, with embeddings, used for semantic search |
 | `decision_reason_statutes` | 6.6M | Statute references extracted from full decision texts |

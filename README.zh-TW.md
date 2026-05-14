@@ -7,7 +7,7 @@
 [![Search](https://img.shields.io/badge/search-OpenSearch-005EB8?style=flat-square&logo=opensearch&logoColor=white)](#)
 [![Vector](https://img.shields.io/badge/vector-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](#)
 [![AI](https://img.shields.io/badge/AI-Gemini%20%2B%20Voyage-FF6F00?style=flat-square)](#)
-[![Data](https://img.shields.io/badge/data-1.4M%20decisions-6A1B9A?style=flat-square)](#)
+[![Data](https://img.shields.io/badge/data-1.33M%20decisions-6A1B9A?style=flat-square)](#)
 
 **基於「引用關係」的台灣法院判決檢索系統。**
 
@@ -27,7 +27,7 @@
 |---|---|
 | **核心想法** | 用判決間的 **引用關係** 作為排序依據，借鑑 PageRank 核心概念，找出真正被法院反覆援引的法律見解 |
 | **搜尋模式** | 關鍵字搜尋（OpenSearch）＋ 語意搜尋（RAG） |
-| **資料規模** | `1.4M` 判決、`552K` citations、`575K` chunks |
+| **資料規模** | 處理約 `133.4萬` 筆判決資料；線上搜尋聚焦於其中 `242,022` 筆有 citation 的判決 |
 | **技術重點** | citation parsing、citation-based ranking、citation-anchored chunking |
 | **效能成果** | 關鍵字搜尋從約 `73s` 降到 `2–4s` |
 | **技術選用** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
@@ -164,7 +164,7 @@ Lawcidity 的排序，就是利用這個結構來做。
 
 ## 專案特色
 
-- **處理 140 萬筆公開判決資料。**  
+- **處理約 133.4 萬筆判決資料；線上搜尋聚焦於其中 242,022 筆有 citation 的判決。**  
   專案以公開判決文資料為對象，進行引用關係抽取、誤判內容排除與 OpenSearch 索引設計。
 
 - **以引用關係作為排名機制的核心。**  
@@ -245,7 +245,7 @@ OpenSearch：**3.2 GB**（EC2）
 
 | 資料表 | 筆數 | 說明 |
 |---|---|---|
-| `decisions` | 1.4M | 經正規化處理的法院裁判資料，包含 source 與 target decisions |
+| `decisions` | 133.4萬 | 經正規化處理的法院裁判資料，包含 source 與 target decisions |
 | `citations` | 552K | source 對 target 的引用紀錄，包含 citation snippets 與 citation 在全文中的位置 |
 | `chunks` | 575K | 以 citation 位置為錨點切出的文字片段，包含 embeddings，用於語意搜尋 |
 | `decision_reason_statutes` | 6.6M | 從裁判全文中擷取出的法條引用 |

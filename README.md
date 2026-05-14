@@ -7,7 +7,7 @@
 [![Search](https://img.shields.io/badge/search-OpenSearch-005EB8?style=flat-square&logo=opensearch&logoColor=white)](#)
 [![Vector](https://img.shields.io/badge/vector-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](#)
 [![AI](https://img.shields.io/badge/AI-Gemini%20%2B%20Voyage-FF6F00?style=flat-square)](#)
-[![Data](https://img.shields.io/badge/data-1.4M%20decisions-6A1B9A?style=flat-square)](#)
+[![Data](https://img.shields.io/badge/data-1.33M%20decisions-6A1B9A?style=flat-square)](#)
 
 **「引用関係」に基づく台湾の裁判検索システム。**
 
@@ -27,7 +27,7 @@
 |---|---|
 | **核となる発想** | 判決同士の **引用関係** をランキングの主軸にし、PageRank の発想を応用して、裁判所が繰り返し参照する法的見解を浮かび上がらせる |
 | **検索モード** | キーワード検索（OpenSearch）+ セマンティック検索（RAG） |
-| **データ規模** | `1.4M` 件の判決、`552K` 件の引用、`575K` チャンク |
+| **データ規模** | 約 `133.4万` 件の判決データを処理し、オンライン検索はそのうち citation を持つ `242,022` 件の判決に絞っている |
 | **技術上の焦点** | 引用解析、引用ベースのランキング、引用位置をアンカーにしたチャンク分割 |
 | **性能改善** | キーワード検索を約 `73s` から `2-4s` に短縮 |
 | **技術スタック** | FastAPI / PostgreSQL / OpenSearch / pgvector / Gemini / Voyage / React / AWS |
@@ -164,7 +164,7 @@ Lawcidity のランキングは、この構造を使って作っています。
 
 ## このプロジェクトの特徴
 
-- **140万件の公開判決データを扱っている。**  
+- **約 133.4 万件の判決データを処理し、オンライン検索はそのうち citation を持つ 242,022 件の判決に絞っている。**  
   公開判決データを対象に、引用関係の抽出、誤検出の除去、OpenSearch のインデックス設計を行っています。
 
 - **引用関係をランキングの仕組みの中核にしている。**  
@@ -245,7 +245,7 @@ OpenSearch: **3.2 GB**（EC2）
 
 | テーブル | 件数 | 説明 |
 |---|---|---|
-| `decisions` | 1.4M | 正規化済みの裁判データ。`source` と `target` の両方を含む |
+| `decisions` | 133.4万 | 正規化済みの裁判データ。`source` と `target` の両方を含む |
 | `citations` | 552K | `source` から `target` への引用記録。citation snippets と全文中の位置情報を含む |
 | `chunks` | 575K | `citation` 位置を起点に切り出したテキスト片。`embedding` を持ち、セマンティック検索に使用 |
 | `decision_reason_statutes` | 6.6M | 判決全文から抽出した条文引用 |
