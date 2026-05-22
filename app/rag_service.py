@@ -37,9 +37,8 @@ def _get_voyage_client():
 def embed_query(text: str) -> np.ndarray:
     client = _get_voyage_client()
     result = client.embed([text], model=VOYAGE_MODEL)
-    vec = np.array(result.embeddings[0], dtype=np.float32)
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm > 0 else vec
+    # 若未來要整批重跑 documents，可再和 document 端一起導入 input_type="query" / input_type="document"。
+    return np.array(result.embeddings[0], dtype=np.float32)
 
 
 def _vec_to_pg(vec: np.ndarray) -> str:
@@ -97,10 +96,8 @@ def _aggregate(
         target_decision_ids = []
         target_authority_ids = []
         for c in dec_chunks:
-            if c.get("target_id"):
-                target_decision_ids.append(c["target_id"])
-            elif c.get("target_authority_id"):
-                target_authority_ids.append(c["target_authority_id"])
+            target_decision_ids.extend(c.get("target_ids", []))
+            target_authority_ids.extend(c.get("target_authority_ids", []))
 
         results.append({
             "decision_id": decision_id,
