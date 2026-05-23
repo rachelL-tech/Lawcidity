@@ -16,6 +16,7 @@ import psycopg
 
 DIMS = 1024
 VOYAGE_MODEL = "voyage-law-2"
+HNSW_EF_SEARCH = 200  # 預設 40 對此 graph recall 不足，會漏真正的最近鄰
 
 _voyage_client = None
 
@@ -49,7 +50,7 @@ def _vec_to_pg(vec: np.ndarray) -> str:
 
 CHUNK_SELECT = """
     cc.id AS chunk_id, cc.decision_id, cc.chunk_index,
-    cc.citation_id, cc.target_id, cc.target_authority_id,
+    cc.target_ids, cc.target_authority_ids,
     cc.chunk_text,
     d.root_norm, d.display_title, d.doc_type, d.decision_date,
     d.total_citation_count,
@@ -61,6 +62,8 @@ def _knn(
     conn: psycopg.Connection, vec_str: str,
     *, limit: int = 50,
 ) -> list[dict]:
+    conn.execute(f"SET hnsw.ef_search = {int(HNSW_EF_SEARCH)}")
+
     where = ["cc.embedding IS NOT NULL"]
     params: list = [vec_str]
     params.extend([vec_str, limit])
@@ -93,12 +96,6 @@ def _aggregate(
     for decision_id, dec_chunks in by_decision.items():
         best = max(dec_chunks, key=lambda x: x["score"])
 
-        target_decision_ids = []
-        target_authority_ids = []
-        for c in dec_chunks:
-            target_decision_ids.extend(c.get("target_ids", []))
-            target_authority_ids.extend(c.get("target_authority_ids", []))
-
         results.append({
             "decision_id": decision_id,
             "root_norm": best["root_norm"],
@@ -109,12 +106,30 @@ def _aggregate(
             "sim": best["sim"],
             "chunk_count": len(dec_chunks),
             "best_chunk_text": best["chunk_text"],
-            "target_ids": sorted(set(target_decision_ids)) if target_decision_ids else [],
-            "target_authority_ids": sorted(set(target_authority_ids)) if target_authority_ids else [],
+            "target_ids": sorted(set(best.get("target_ids") or [])),
+            "target_authority_ids": sorted(set(best.get("target_authority_ids") or [])),
         })
 
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:top]
+    # 跨 decision 相同 chunk_text 去重
+    deduped = []
+    by_hash: dict[str, dict] = {}
+    for r in results:
+        text_hash = hashlib.md5(r["best_chunk_text"].encode("utf-8")).hexdigest()
+        primary = by_hash.get(text_hash)
+        if primary is None:
+            r["other_sources"] = []
+            by_hash[text_hash] = r
+            deduped.append(r)
+        else:
+            primary["other_sources"].append({
+                "decision_id": r["decision_id"],
+                "root_norm": r["root_norm"],
+                "display_title": r["display_title"],
+            })
+
+    # 去重後再排名、取 top
+    deduped.sort(key=lambda x: x["score"], reverse=True)
+    return deduped[:top]
 
 
 # ── Main search ──────────────────────────────────────────────────────
@@ -130,35 +145,8 @@ def rag_search(
 
     raw_rows = _knn(conn, vec_str, limit=top * 5)
 
-    deduped_rows = []
-    seen: dict[tuple[int, int], dict] = {}
-    for row in raw_rows:
-        chunk = dict(row)
-        key = (chunk["decision_id"], chunk["chunk_index"])
-
-        if key not in seen:
-            chunk["target_ids"] = [chunk["target_id"]] if chunk.get("target_id") else []
-            chunk["target_authority_ids"] = [chunk["target_authority_id"]] if chunk.get("target_authority_id") else []
-            seen[key] = chunk
-            deduped_rows.append(chunk)
-            continue
-
-        existing = seen[key]
-        if chunk.get("target_id"):
-            existing["target_ids"].append(chunk["target_id"])
-        if chunk.get("target_authority_id"):
-            existing["target_authority_ids"].append(chunk["target_authority_id"])
-
-    knn_rows = []
-    seen_hashes: set[str] = set()
-    for chunk in deduped_rows:
-        text_hash = hashlib.md5(chunk["chunk_text"].encode("utf-8")).hexdigest()
-        if text_hash in seen_hashes:
-            continue
-        seen_hashes.add(text_hash)
-        knn_rows.append(chunk)
-
-    results = _aggregate(knn_rows, top=top)
+    # chunks 表已收斂成一列一段、target 以陣列欄位帶回，read-time 不再需要去重。
+    results = _aggregate([dict(r) for r in raw_rows], top=top)
 
     # Enrich target display info (decisions + authorities)
     all_decision_ids = set()
