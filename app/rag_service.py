@@ -16,7 +16,7 @@ import psycopg
 
 DIMS = 1024
 VOYAGE_MODEL = "voyage-law-2"
-HNSW_EF_SEARCH = 200  # 預設 40 對此 graph recall 不足，會漏真正的最近鄰
+IVFFLAT_PROBES = 3  # lists=100 下 p=3 recall≈0.90（knee）；prod 1GB 延遲預算內
 
 _voyage_client = None
 
@@ -62,7 +62,7 @@ def _knn(
     conn: psycopg.Connection, vec_str: str,
     *, limit: int = 50,
 ) -> list[dict]:
-    conn.execute(f"SET hnsw.ef_search = {int(HNSW_EF_SEARCH)}")
+    conn.execute(f"SET ivfflat.probes = {int(IVFFLAT_PROBES)}")
 
     where = ["cc.embedding IS NOT NULL"]
     params: list = [vec_str]
