@@ -53,7 +53,7 @@ CHUNK_SELECT = """
     cc.target_ids, cc.target_authority_ids,
     cc.chunk_text,
     d.root_norm, d.display_title, d.doc_type, d.decision_date,
-    d.total_citation_count,
+    cu.level AS court_level,
     cc.embedding <=> %s::vector AS distance
 """
 
@@ -72,6 +72,7 @@ def _knn(
         SELECT {CHUNK_SELECT}
         FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
+        LEFT JOIN court_units cu ON cu.id = d.court_unit_id
         WHERE {" AND ".join(where)}
         ORDER BY cc.embedding <=> %s::vector
         LIMIT %s
@@ -88,48 +89,48 @@ def _aggregate(
         c["sim"] = 1 - float(c["distance"])
         c["score"] = c["sim"]
 
-    by_decision: dict[int, list[dict]] = defaultdict(list)
+    # chunk-base：以 chunk_text 為單位分組（同文字必同分）
+    by_text: dict[str, list[dict]] = defaultdict(list)
     for c in knn_rows:
-        by_decision[c["decision_id"]].append(c)
+        text_hash = hashlib.md5(c["chunk_text"].encode("utf-8")).hexdigest()
+        by_text[text_hash].append(c)
 
     results = []
-    for decision_id, dec_chunks in by_decision.items():
-        best = max(dec_chunks, key=lambda x: x["score"])
+    for chunks in by_text.values():
+        # primary：審級最高（court_level 最小）→ decision_id 最小。None 審級排最後。
+        primary = min(chunks, key=lambda c: (
+            c["court_level"] if c["court_level"] is not None else 99, c["decision_id"]))
 
-        results.append({
-            "decision_id": decision_id,
-            "root_norm": best["root_norm"],
-            "display_title": best["display_title"],
-            "doc_type": best["doc_type"],
-            "decision_date": str(best["decision_date"]) if best.get("decision_date") else None,
-            "score": best["score"],
-            "sim": best["sim"],
-            "chunk_count": len(dec_chunks),
-            "best_chunk_text": best["chunk_text"],
-            "target_ids": sorted(set(best.get("target_ids") or [])),
-            "target_authority_ids": sorted(set(best.get("target_authority_ids") or [])),
-        })
-
-    # 跨 decision 相同 chunk_text 去重
-    deduped = []
-    by_hash: dict[str, dict] = {}
-    for r in results:
-        text_hash = hashlib.md5(r["best_chunk_text"].encode("utf-8")).hexdigest()
-        primary = by_hash.get(text_hash)
-        if primary is None:
-            r["other_sources"] = []
-            by_hash[text_hash] = r
-            deduped.append(r)
-        else:
-            primary["other_sources"].append({
-                "decision_id": r["decision_id"],
-                "root_norm": r["root_norm"],
-                "display_title": r["display_title"],
+        # other_sources：同文字的其他判決（依 decision_id 去重、排除 primary）
+        seen = {primary["decision_id"]}
+        other_sources = []
+        for c in chunks:
+            if c["decision_id"] in seen:
+                continue
+            seen.add(c["decision_id"])
+            other_sources.append({
+                "decision_id": c["decision_id"],
+                "root_norm": c["root_norm"],
+                "display_title": c["display_title"],
             })
 
-    # 去重後再排名、取 top
-    deduped.sort(key=lambda x: x["score"], reverse=True)
-    return deduped[:top]
+        results.append({
+            "decision_id": primary["decision_id"],
+            "root_norm": primary["root_norm"],
+            "display_title": primary["display_title"],
+            "doc_type": primary["doc_type"],
+            "decision_date": str(primary["decision_date"]) if primary.get("decision_date") else None,
+            "score": primary["score"],
+            "sim": primary["sim"],
+            "chunk_count": len(seen),  # 含 primary，共幾個判決有這段
+            "best_chunk_text": primary["chunk_text"],
+            "target_ids": sorted(set(primary.get("target_ids") or [])),
+            "target_authority_ids": sorted(set(primary.get("target_authority_ids") or [])),
+            "other_sources": other_sources,
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:top]
 
 
 # ── Main search ──────────────────────────────────────────────────────
