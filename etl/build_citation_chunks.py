@@ -274,28 +274,23 @@ def process_decision(conn, decision_id: int) -> int:
     # 合併重疊
     merged = merge_overlapping(items)
 
-    # 寫入 DB
+    # 寫入 DB：一個 merged chunk 一列，多 citation 的 target 聚合成陣列
     count = 0
     with conn.cursor() as cur:
         for chunk_idx, (cs, ce, chunk_cites) in enumerate(merged):
             chunk_text = text[cs:ce]
-            for c in chunk_cites:
-                cur.execute("""
-                    INSERT INTO chunks
-                        (decision_id, citation_id, target_id, target_authority_id,
-                         chunk_index, start_offset, end_offset, chunk_text, case_type)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (decision_id, citation_id) DO UPDATE SET
-                        target_id = EXCLUDED.target_id,
-                        target_authority_id = EXCLUDED.target_authority_id,
-                        chunk_index = EXCLUDED.chunk_index,
-                        start_offset = EXCLUDED.start_offset,
-                        end_offset = EXCLUDED.end_offset,
-                        chunk_text = EXCLUDED.chunk_text,
-                        case_type = EXCLUDED.case_type
-                """, (decision_id, c["id"], c["target_id"], c["target_authority_id"],
-                      chunk_idx, cs, ce, chunk_text, case_type))
-                count += 1
+            target_ids           = sorted({c["target_id"]           for c in chunk_cites if c["target_id"]})
+            target_authority_ids = sorted({c["target_authority_id"] for c in chunk_cites if c["target_authority_id"]})
+            cur.execute("""
+                INSERT INTO chunks
+                    (decision_id, chunk_index, start_offset, end_offset, chunk_text,
+                     case_type, target_ids, target_authority_ids)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (decision_id, chunk_index) WHERE chunk_type = 'citation_context'
+                DO NOTHING
+            """, (decision_id, chunk_idx, cs, ce, chunk_text, case_type,
+                  target_ids, target_authority_ids))
+            count += 1
 
     return count
 

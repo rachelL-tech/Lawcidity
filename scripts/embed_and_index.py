@@ -76,7 +76,7 @@ def fetch_unique_texts(conn, *, month=None, after_hash=None):
     sql = f"""
         SELECT
             MIN(cc.chunk_text)        AS chunk_text,
-            md5(MIN(cc.chunk_text))   AS text_hash
+            md5(cc.chunk_text)   AS text_hash
         FROM chunks cc
         {join_sql}
         {where_sql}
@@ -124,18 +124,44 @@ def load_voyage_client():
 
 def embed_batch(client, texts: list[str]) -> np.ndarray:
     result = client.embed(texts, model=VOYAGE_MODEL)
-    embeds = np.array(result.embeddings, dtype=np.float32)
-    # Voyage embeddings 依官方文件已是 unit-normalized，其實不需要額外 normalization
-    norms = np.linalg.norm(embeds, axis=1, keepdims=True)
-    norms[norms == 0] = 1
-    return embeds / norms
+    # 目前固定用 pgvector cosine distance，而 Voyage embeddings 也已是 unit-normalized，因此不需額外做 normalization。若未來要整批重跑 document embeddings，可考慮在 embed API 補上 input_type="document"。
+    return np.array(result.embeddings, dtype=np.float32)
 
 
 def vec_to_pg(vec: np.ndarray) -> str:
     """numpy vector → pgvector 文字格式 '[x1,x2,...]'"""
-    # 若未來重建資料庫，可考慮改用 pgvector 的 psycopg adapter（register_vector），
-    # 直接綁定向量參數（如 np.ndarray）寫入 PostgreSQL；Voyage embeddings 依官方文件已是 unit-normalized。
+    # 若未來重建資料庫，可考慮改用 pgvector 的 psycopg adapter（register_vector），直接綁定向量參數（如 np.ndarray）寫入 PostgreSQL
     return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
+
+
+def flush_batch(conn, client, buf: list[dict]) -> int:
+    if not buf:
+        return 0
+
+    texts = [r["chunk_text"] for r in buf]
+    vectors = embed_batch(client, texts)
+
+    params = [
+        (vec_to_pg(vec), row["chunk_text"])
+        for row, vec in zip(buf, vectors)
+    ]
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE IF NOT EXISTS _embed_batch "
+                        "(vec text, txt text) ON COMMIT DELETE ROWS")
+            cur.executemany("INSERT INTO _embed_batch VALUES (%s, %s)", params)
+            cur.execute("""
+                UPDATE chunks SET embedding = b.vec::vector
+                FROM _embed_batch b
+                WHERE chunks.chunk_text = b.txt AND chunks.embedding IS NULL
+            """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise RuntimeError(f"update failed — {e}") from e
+
+    save_checkpoint(buf[-1]["text_hash"])
+    return len(buf)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -183,48 +209,15 @@ def main():
     errors = 0
     embed_buf: list[dict] = []
 
-    def flush(buf: list[dict]):
-        nonlocal total_embedded, errors
-        if not buf:
-            return
-
-        texts = [r["chunk_text"] for r in buf]
-        try:
-            vectors = embed_batch(client, texts)
-        except Exception as e:
-            errors += len(buf)
-            print(f"  ERROR: embed failed — {e}", file=sys.stderr)
-            return
-
-        params = [
-            (vec_to_pg(vec), row["chunk_text"])
-            for row, vec in zip(buf, vectors)
-        ]
-        try:
-            with conn.cursor() as cur:
-                cur.execute("CREATE TEMP TABLE IF NOT EXISTS _embed_batch "
-                            "(vec text, txt text) ON COMMIT DELETE ROWS")
-                cur.executemany("INSERT INTO _embed_batch VALUES (%s, %s)", params)
-                cur.execute("""
-                    UPDATE chunks SET embedding = b.vec::vector
-                    FROM _embed_batch b
-                    WHERE chunks.chunk_text = b.txt AND chunks.embedding IS NULL
-                """)
-            conn.commit()
-            total_embedded += len(buf)
-        except Exception as e:
-            conn.rollback()
-            errors += len(buf)
-            print(f"  ERROR: update failed — {e}", file=sys.stderr)
-            return
-
-        save_checkpoint(buf[-1]["text_hash"])
-
     for row in cursor:
-        embed_buf.append(dict(row))
+        embed_buf.append(row)
 
         if len(embed_buf) >= EMBED_BATCH_SIZE:
-            flush(embed_buf)
+            try:
+                total_embedded += flush_batch(conn, client, embed_buf)
+            except Exception as e:
+                errors += len(embed_buf)
+                print(f"  ERROR: {e}", file=sys.stderr)
             embed_buf.clear()
 
             elapsed = time.time() - t0
@@ -234,7 +227,11 @@ def main():
             print(f"  embedded={total_embedded}/{total_pending} ({pct:.1f}%), "
                   f"errors={errors}, {rate:.1f} texts/s, ETA {eta:.0f}s")
 
-    flush(embed_buf)
+    try:
+        total_embedded += flush_batch(conn, client, embed_buf)
+    except Exception as e:
+        errors += len(embed_buf)
+        print(f"  ERROR: {e}", file=sys.stderr)
     embed_buf.clear()
 
     conn.close()
@@ -245,6 +242,7 @@ def main():
     if elapsed > 0:
         print(f"Time: {elapsed:.1f}s ({total_embedded/elapsed:.1f} texts/s)")
     if not errors:
+        # 把 checkpoint 清掉，讓下次重新從頭掃 pending rows
         clear_checkpoint()
         print("\n下一步：執行 HNSW index（見 sql/003_voyage_migration.sql）")
 
