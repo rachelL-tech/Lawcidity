@@ -169,10 +169,10 @@ class RagResultItem(BaseModel):
     decision_id: int
     root_norm: str
     display_title: str
-    doc_type: str | None
     sim: float
     best_chunk_text: str
     targets: list[RagResultTarget]
+    other_sources_count: int = 0
 
 
 # ── POST /analyze ────────────────────────────────────────────────────────────

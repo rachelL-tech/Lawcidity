@@ -69,23 +69,31 @@ def extract_issues_and_statutes(text: str) -> dict:
 # ── RAG 全文分析（Gemini 生成） ───────────────────────────────────────
 
 ANALYZE_PROMPT = """\
-你是台灣法律判決分析引擎。根據下方案例與判決資料，針對每個爭點輸出分析。
+你是台灣法律判決分析引擎。根據下方案例事實、確認的爭點、確認的法條與各爭點相關判決段落，針對每個爭點輸出分析。
 
 ## 輸出格式
 
 - 直接從第一個爭點開始，**禁止**輸出前言、結語、建議或任何非爭點分析的內容
-- 每個爭點以 `<h3>爭點 N：爭點標題</h3>` 開頭，N 從 1 起
+- 每個爭點以 `<h3>爭點 N：爭點標題</h3>` 開頭，N 從 1 起，標題照抄「確認的爭點」原文
 - 引用法條：`<statute law="民法" article="184">民法第184條</statute>`
-- `cite` 與 `statute` 的格式必須與範例完全一致（tag、attribute 名稱、順序、雙引號）
-- `cite` type 只允許 `source` 或 `target`
+- `cite` 與 `statute` 的 tag、attribute 名稱、順序、雙引號必須與範例完全一致
 
-## 引用判決的規則
+## 段落結構與引用規則
 
-每個段落有一行 `[source decision_id=...]` 與零到多行 `[target id=...]`，這些是**內部指令，禁止出現在輸出中**。
+下方「各爭點的判決段落」已按爭點分組，分析爭點 N 時主要依據它底下的段落。
 
-- 引用來源判決：`<cite type="source" id="DECISION_ID">案號</cite>`
-- 引用目標判決：`（參照<cite type="target" id="ID">案號</cite>）`
-- 範例：`<cite type="source" id="100">地院114年訴字第374號</cite>認為...（參照<cite type="target" id="200">最高法院88年台上字第5678號</cite>）`
+每個段落有：
+- 一行 `[source decision_id=X]`：這段論述「出自」的判決（召回的判決本身）→ 引用用 `<cite type="source" id="X">案號</cite>`
+- 零到多行 `[target id=Y]`：該判決「引用的上級權威」（最高法院判例／決議）→ 引用用 `（參照<cite type="target" id="Y">案號</cite>）`
+
+`[source ...]`、`[target ...]` 這類**方括號標記**只是內部指令、用來告訴你 id，**禁止出現在輸出**；輸出只能用 `<cite>`、`<statute>` 這類 tag。
+
+範例：`<cite type="source" id="100">地院114年訴字第374號</cite>認為...（參照<cite type="target" id="200">最高法院88年台上字第5678號</cite>）`
+
+## 誠實原則（法律工具底線）
+
+- 只能根據提供的段落分析，不得編造案號或引用段落以外的判決
+- 若某爭點只找到單一見解，據實呈現，不要捏造對立面
 
 ## 案例事實
 {query}
@@ -96,7 +104,7 @@ ANALYZE_PROMPT = """\
 ## 確認的法條
 {statutes}
 
-## 相關判決段落
+## 各爭點的判決段落
 {chunks}
 """
 
@@ -164,5 +172,4 @@ def generate_analysis(
             "max_output_tokens": 8192,
         },
     )
-    print("=== GEMINI RAW ===\n", response.text[:500])
     return response.text

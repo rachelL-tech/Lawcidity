@@ -161,13 +161,6 @@ export default function AiResultsPage() {
               </div>
             </div>
           )}
-
-          <button
-            onClick={() => navigate("/")}
-            className="w-full text-sm text-brand hover:underline pt-2"
-          >
-            重新搜尋
-          </button>
         </div>
       </aside>
 
@@ -204,17 +197,23 @@ export default function AiResultsPage() {
           </div>
         )}
 
-        {/* RAG 來源判決 */}
+        {/* 本次檢索到的判決：按爭點列召回的判決卡片 */}
         {!loading && !error && ragResults.length > 0 && (
           <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-6">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">參考來源</h2>
-            <div className="space-y-6">
+            <h2 className="text-lg font-bold text-brand mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 16v-4M12 8h.01"/>
+              </svg>
+              本次檢索到的判決
+            </h2>
+            <div className="space-y-8">
               {ragResults.map((issueResult) => (
                 <div key={issueResult.issue}>
-                  <h3 className="text-xs font-semibold text-brand-primary mb-2">
+                  <h3 className="text-base font-bold text-gray-900 mb-3 pb-2 border-b-2 border-brand-border">
                     {issueResult.issue}
                   </h3>
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {issueResult.chunks.map((r) => (
                       <RagSourceCard key={r.decision_id} item={r} />
                     ))}
@@ -420,7 +419,7 @@ function StatuteTag({ children }) {
   );
 }
 
-/* ── RAG 來源卡片 ── */
+/* ── 檢索判決卡片 ── */
 
 function RagSourceCard({ item }) {
   const [expanded, setExpanded] = useState(false);
@@ -444,6 +443,9 @@ function RagSourceCard({ item }) {
           </div>
           <div className="text-xs text-gray-400">
             相似度: {(item.sim * 100).toFixed(1)}%
+            {item.other_sources_count > 0 && (
+              <span className="ml-2">· {item.other_sources_count} 則判決亦有相同敘述</span>
+            )}
           </div>
         </div>
         <button
@@ -475,3 +477,4 @@ function RagSourceCard({ item }) {
     </div>
   );
 }
+

@@ -247,7 +247,6 @@ def analyze_generate(req: GenerateRequest):
                     decision_id=r["decision_id"],
                     root_norm=r["root_norm"],
                     display_title=r["display_title"],
-                    doc_type=r["doc_type"],
                     sim=r["sim"],
                     best_chunk_text=r["best_chunk_text"],
                     targets=[
@@ -259,6 +258,7 @@ def analyze_generate(req: GenerateRequest):
                         )
                         for t in r["targets"]
                     ],
+                    other_sources_count=len(r.get("other_sources", [])),
                 )
                 for r in chunks
             ],
