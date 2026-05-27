@@ -71,18 +71,20 @@ def extract_issues_and_statutes(text: str) -> dict:
 ANALYZE_PROMPT = """\
 你是台灣法律判決分析引擎。根據下方案例與判決資料，針對每個爭點輸出分析。
 
-## 輸出格式（嚴格遵守）
+## 輸出格式
 
-- 直接從第一個爭點開始，**禁止**輸出前言、案例概述、結語、建議、敬語或任何非爭點分析的內容
+- 直接從第一個爭點開始，**禁止**輸出前言、結語、建議或任何非爭點分析的內容
 - 每個爭點以 `<h3>爭點 N：爭點標題</h3>` 開頭，N 從 1 起
 - 引用法條：`<statute law="民法" article="184">民法第184條</statute>`
+- `cite` 與 `statute` 的格式必須與範例完全一致（tag、attribute 名稱、順序、雙引號）
+- `cite` type 只允許 `source` 或 `target`
 
 ## 引用判決的規則
 
-每個段落有 `[source: ...]`、`[targets: ...]` 等標記行，這些是**內部指令，絕對禁止出現在輸出中**。
+每個段落有一行 `[source decision_id=...]` 與零到多行 `[target id=...]`，這些是**內部指令，禁止出現在輸出中**。
 
-- 引用來源判決：`<cite type="source" id="DECISION_ID">案號</cite>`（DECISION_ID 取自 `[source: ...]` 行的 decision_id）
-- 若段落中提到 targets 列表內的判決，在 source 見解後括號標記：`（參照<cite type="target" id="ID">案號</cite>）`（ID 取自 `[targets: ...]` 內對應判決的 id）
+- 引用來源判決：`<cite type="source" id="DECISION_ID">案號</cite>`
+- 引用目標判決：`（參照<cite type="target" id="ID">案號</cite>）`
 - 範例：`<cite type="source" id="100">地院114年訴字第374號</cite>認為...（參照<cite type="target" id="200">最高法院88年台上字第5678號</cite>）`
 
 ## 案例事實
@@ -117,31 +119,31 @@ def generate_analysis(
     Returns:
         帶有 citation 標記的分析全文
     """
-    chunks_text = ""
-    for i, r in enumerate(rag_results, 1):
-        display_title = r.get("display_title", "")
-        root_norm = r.get("root_norm", "")
-        decision_id = r.get("decision_id", "")
-        best_chunk = r.get("best_chunk_text", "")
+    chunk_blocks: list[str] = []
+    for i, (issue, chunks) in enumerate(rag_results.items(), 1):
+        chunk_blocks.append(f"## 爭點 {i}：{issue}")
+        for j, r in enumerate(chunks, 1):
+            display_title = r.get("display_title", "")
+            root_norm = r.get("root_norm", "")
+            decision_id = r.get("decision_id", "")
+            best_chunk = r.get("best_chunk_text", "")
 
-        targets_lines = "\n".join(
-            f"  - {t.get('root_norm', '')} {t.get('display_title', '')}, id={t.get('id', '')}"
-            for t in r.get("targets", [])
-        )
-        targets_block = f"\n[targets:\n{targets_lines}\n]" if targets_lines else ""
-        header = (
-            f"[cite_type: source]\n"
-            f"[source: {root_norm} {display_title}, decision_id={decision_id}]"
-            f"{targets_block}"
-        )
+            source_line = f"[source decision_id={decision_id}] {root_norm} {display_title}"
+            target_lines = [
+                f"[target id={t.get('id', '')}] {t.get('root_norm', '')} {t.get('display_title', '')}"
+                for t in r.get("targets", [])
+            ]
 
-        chunks_text += f"""
-### 段落 {i}
-{header}
-內容：
-{best_chunk}
+            chunk_lines = [
+                f"### 段落 {j}",
+                source_line,
+                *target_lines,
+                "內容：",
+                best_chunk,
+            ]
+            chunk_blocks.append("\n".join(chunk_lines))
 
-"""
+    chunks_text = "\n\n".join(chunk_blocks)
 
     issues_text = "\n".join(f"- {issue}" for issue in issues) if issues else "（未指定）"
     statutes_text = "\n".join(
@@ -162,4 +164,5 @@ def generate_analysis(
             "max_output_tokens": 8192,
         },
     )
+    print("=== GEMINI RAW ===\n", response.text[:500])
     return response.text

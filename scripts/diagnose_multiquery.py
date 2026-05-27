@@ -29,7 +29,7 @@ load_dotenv()
 
 from app.db import get_conn
 from app.gemini_service import _get_client, extract_issues_and_statutes
-from app.rag_service import _knn, _vec_to_pg, embed_query
+from app.rag_service import IVFFLAT_PROBES, _vec_to_pg, embed_query
 
 REWRITE_PROMPT = """你是台灣法律檢索助手。把下面使用者的口語提問，改寫成「一句」精簡、正式的法律檢索 query，\
 涵蓋提問中的所有法律爭點。只輸出改寫後的句子，不要解釋、不要分項。
@@ -97,11 +97,28 @@ def cached_rewrite(query: str) -> str:
 
 # ── 召回 ─────────────────────────────────────────────────────────────
 
+DEBUG_CHUNK_SELECT = """
+    cc.decision_id, cc.chunk_index, cc.chunk_text,
+    cc.embedding <=> %s::vector AS distance
+"""
+
+
+def _debug_knn(conn, vec_str: str, *, limit: int) -> list[dict]:
+    conn.execute(f"SET ivfflat.probes = {int(IVFFLAT_PROBES)}")
+    return conn.execute(f"""
+        SELECT {DEBUG_CHUNK_SELECT}
+        FROM chunks cc
+        WHERE cc.embedding IS NOT NULL
+        ORDER BY cc.embedding <=> %s::vector
+        LIMIT %s
+    """, [vec_str, vec_str, limit]).fetchall()
+
+
 def _retrieve_ranked(conn, text: str, k: int) -> list[tuple[tuple[int, int], float, str]]:
     """召回並收斂到 (decision_id, chunk_index)，回傳依 sim 由高到低排序的 (key, sim, chunk_text)。"""
     vec_str = _vec_to_pg(cached_embed(text))
     best: dict[tuple[int, int], tuple[float, str]] = {}
-    for row in _knn(conn, vec_str, limit=k):
+    for row in _debug_knn(conn, vec_str, limit=k):
         key = (row["decision_id"], row["chunk_index"])
         sim = 1 - float(row["distance"])
         if key not in best or sim > best[key][0]:

@@ -14,7 +14,6 @@ from collections import defaultdict
 import numpy as np
 import psycopg
 
-DIMS = 1024
 VOYAGE_MODEL = "voyage-law-2"
 IVFFLAT_PROBES = 3  # lists=100 下 p=3 recall≈0.90（knee）；prod 1GB 延遲預算內
 
@@ -35,11 +34,11 @@ def _get_voyage_client():
     return _voyage_client
 
 
-def embed_query(text: str) -> np.ndarray:
+def embed_query(texts: list[str]) -> list[np.ndarray]:
     client = _get_voyage_client()
-    result = client.embed([text], model=VOYAGE_MODEL)
+    result = client.embed(texts, model=VOYAGE_MODEL)
     # 若未來要整批重跑 documents，可再和 document 端一起導入 input_type="query" / input_type="document"。
-    return np.array(result.embeddings[0], dtype=np.float32)
+    return [np.array(e, dtype=np.float32) for e in result.embeddings]
 
 
 def _vec_to_pg(vec: np.ndarray) -> str:
@@ -49,10 +48,10 @@ def _vec_to_pg(vec: np.ndarray) -> str:
 # ── Chunk 檢索 ────────────────────────────────────────────────────────
 
 CHUNK_SELECT = """
-    cc.id AS chunk_id, cc.decision_id, cc.chunk_index,
+    cc.id AS chunk_id, cc.decision_id,
     cc.target_ids, cc.target_authority_ids,
     cc.chunk_text,
-    d.root_norm, d.display_title, d.doc_type, d.decision_date,
+    d.root_norm, d.display_title, d.doc_type,
     cu.level AS court_level,
     cc.embedding <=> %s::vector AS distance
 """
@@ -64,30 +63,25 @@ def _knn(
 ) -> list[dict]:
     conn.execute(f"SET ivfflat.probes = {int(IVFFLAT_PROBES)}")
 
-    where = ["cc.embedding IS NOT NULL"]
-    params: list = [vec_str]
-    params.extend([vec_str, limit])
-
     return conn.execute(f"""
         SELECT {CHUNK_SELECT}
         FROM chunks cc
         JOIN decisions d ON d.id = cc.decision_id
         LEFT JOIN court_units cu ON cu.id = d.court_unit_id
-        WHERE {" AND ".join(where)}
+        WHERE cc.embedding IS NOT NULL
         ORDER BY cc.embedding <=> %s::vector
         LIMIT %s
-    """, params).fetchall()
+    """, (vec_str, vec_str, limit)).fetchall()
 
 
 # ── 聚合 ─────────────────────────────────────────────────────────────
 
 def _aggregate(
     knn_rows: list[dict],
-    *, top: int,
+    *, result_limit: int,
 ) -> list[dict]:
     for c in knn_rows:
         c["sim"] = 1 - float(c["distance"])
-        c["score"] = c["sim"]
 
     # chunk-base：以 chunk_text 為單位分組（同文字必同分）
     by_text: dict[str, list[dict]] = defaultdict(list)
@@ -119,42 +113,44 @@ def _aggregate(
             "root_norm": primary["root_norm"],
             "display_title": primary["display_title"],
             "doc_type": primary["doc_type"],
-            "decision_date": str(primary["decision_date"]) if primary.get("decision_date") else None,
-            "score": primary["score"],
             "sim": primary["sim"],
-            "chunk_count": len(seen),  # 含 primary，共幾個判決有這段
             "best_chunk_text": primary["chunk_text"],
             "target_ids": sorted(set(primary.get("target_ids") or [])),
             "target_authority_ids": sorted(set(primary.get("target_authority_ids") or [])),
             "other_sources": other_sources,
         })
 
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:top]
+    results.sort(key=lambda x: x["sim"], reverse=True)
+    return results[:result_limit]
 
 
 # ── Main search ──────────────────────────────────────────────────────
 
-def rag_search(
-    conn: psycopg.Connection,
-    query: str,
+def rag_search_fanout(
+    conn,
+    issues: list[str],
     *,
-    top: int = 20,
-) -> list[dict]:
-    vec = embed_query(query)
-    vec_str = _vec_to_pg(vec)
+    result_limit_per_issue: int,
+):
+    vec = embed_query(issues)
+    vec_str = [_vec_to_pg(v) for v in vec]
 
-    raw_rows = _knn(conn, vec_str, limit=top * 5)
+    results = {}
+    for i, value in enumerate(vec_str):
+        raw_chunks = _knn(conn, value, limit=result_limit_per_issue * 5)
 
-    # chunks 表已收斂成一列一段、target 以陣列欄位帶回，read-time 不再需要去重。
-    results = _aggregate([dict(r) for r in raw_rows], top=top)
+        results_per_issue = _aggregate(raw_chunks, result_limit=result_limit_per_issue)
 
-    # Enrich target display info (decisions + authorities)
-    all_decision_ids = set()
-    all_authority_ids = set()
-    for r in results:
-        all_decision_ids.update(r.get("target_ids", []))
-        all_authority_ids.update(r.get("target_authority_ids", []))
+        results[issues[i]] = results_per_issue
+
+    all_decision_ids: set[int] = set()
+    all_authority_ids: set[int] = set()
+    for items in results.values():
+        for item in items:
+            for target_id in (item.get("target_ids") or []):
+                all_decision_ids.add(target_id)
+            for authority_id in (item.get("target_authority_ids") or []):
+                all_authority_ids.add(authority_id)
 
     decision_info: dict[int, dict] = {}
     if all_decision_ids:
@@ -162,28 +158,23 @@ def rag_search(
             SELECT id, display_title, root_norm, total_citation_count
             FROM decisions WHERE id = ANY(%s)
         """, (list(all_decision_ids),)).fetchall()
-        decision_info = {r["id"]: dict(r) | {"target_type": "decision"} for r in rows}
+        decision_info = {r["id"]: r for r in rows}
 
     auth_info: dict[int, dict] = {}
     if all_authority_ids:
         rows = conn.execute("""
             SELECT id, display AS display_title, root_norm, total_citation_count
-            FROM authorities WHERE id = ANY(%s)
+        FROM authorities WHERE id = ANY(%s)
         """, (list(all_authority_ids),)).fetchall()
-        auth_info = {
-            r["id"]: {"id": r["id"], "display_title": r["display_title"],
-                      "root_norm": r["root_norm"],
-                      "total_citation_count": r["total_citation_count"],
-                      "target_type": "authority"}
-            for r in rows
-        }
+        auth_info = {r["id"]: r for r in rows}
 
-    for r in results:
-        targets = [
-            decision_info[tid] for tid in r.get("target_ids", []) if tid in decision_info
-        ] + [
-            auth_info[aid] for aid in r.get("target_authority_ids", []) if aid in auth_info
-        ]
-        r["targets"] = targets
+    for items in results.values():
+        for item in items:
+            targets = [
+                decision_info[tid] for tid in item.get("target_ids", []) if tid in decision_info
+            ] + [
+                auth_info[aid] for aid in item.get("target_authority_ids", []) if aid in auth_info
+            ]
+            item["targets"] = targets
 
     return results

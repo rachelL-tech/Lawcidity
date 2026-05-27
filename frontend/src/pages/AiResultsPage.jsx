@@ -65,7 +65,6 @@ export default function AiResultsPage() {
           query,
           issues,
           statutes,
-          top: 10,
         });
         if (cancelled) return;
         setRequestState({
@@ -208,12 +207,19 @@ export default function AiResultsPage() {
         {/* RAG 來源判決 */}
         {!loading && !error && ragResults.length > 0 && (
           <div className="bg-white rounded-2xl border border-brand-border shadow-sm p-6">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">
-              參考來源（{ragResults.length} 筆判決）
-            </h2>
-            <div className="space-y-3">
-              {ragResults.map((r) => (
-                <RagSourceCard key={r.decision_id} item={r} />
+            <h2 className="text-sm font-semibold text-gray-700 mb-4">參考來源</h2>
+            <div className="space-y-6">
+              {ragResults.map((issueResult) => (
+                <div key={issueResult.issue}>
+                  <h3 className="text-xs font-semibold text-brand-primary mb-2">
+                    {issueResult.issue}
+                  </h3>
+                  <div className="space-y-3">
+                    {issueResult.chunks.map((r) => (
+                      <RagSourceCard key={r.decision_id} item={r} />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -229,7 +235,7 @@ export default function AiResultsPage() {
  * 解析 Gemini 回傳的 HTML-like 標記，轉成 React 元素。
  *
  * 標記格式：
- *  <cite type="source|target|supreme" id="123">案號</cite>
+ *  <cite type="source|target" id="123">案號</cite>
  *  <statute law="民法" article="294">民法第294條</statute>
  */
 function AnalysisContent({ text }) {
@@ -238,15 +244,13 @@ function AnalysisContent({ text }) {
 }
 
 function parseAnalysis(text) {
-  // 統一處理 <h3>、<cite> 和 <statute> 標記
   const regex =
-    /<h3>(.*?)<\/h3>|<cite\s+type="(source|target|supreme)"\s+id="(\d+)">(.*?)<\/cite>|<statute\s+law="([^"]+)"\s+article="([^"]+)">(.*?)<\/statute>/g;
+    /<h3>(.*?)<\/h3>|<cite\s+type="(source|target)"\s+id="(\d+)">(.*?)<\/cite>|<statute\s+law="([^"]+)"\s+article="([^"]+)">(.*?)<\/statute>/g;
 
   const result = [];
   let lastIndex = 0;
 
   for (const match of text.matchAll(regex)) {
-    // 先把前面的純文字推入
     if (match.index > lastIndex) {
       result.push(
         ...renderPlainText(text.slice(lastIndex, match.index), lastIndex)
@@ -254,28 +258,21 @@ function parseAnalysis(text) {
     }
 
     if (match[1] !== undefined && match[2] === undefined) {
-      // <h3>
       result.push(
         <h3 key={`h3-${match.index}`} className="text-base font-semibold text-gray-900 mt-6 mb-2 pb-1 border-b border-brand-border">
           {match[1]}
         </h3>
       );
     } else if (match[2]) {
-      // <cite>
-      const type = match[2];
-      const id = match[3];
-      const label = match[4];
       result.push(
-        <CiteTag key={`cite-${match.index}`} type={type} id={id}>
-          {label}
+        <CiteTag key={`cite-${match.index}`} type={match[2]} id={match[3]}>
+          {match[4]}
         </CiteTag>
       );
     } else {
-      // <statute>
-      const label = match[7];
       result.push(
         <StatuteTag key={`stat-${match.index}`}>
-          {label}
+          {match[7]}
         </StatuteTag>
       );
     }
@@ -283,7 +280,6 @@ function parseAnalysis(text) {
     lastIndex = match.index + match[0].length;
   }
 
-  // 剩餘文字
   if (lastIndex < text.length) {
     result.push(...renderPlainText(text.slice(lastIndex), lastIndex));
   }
@@ -321,10 +317,9 @@ function renderPlainText(str, baseKey) {
 /* ── Citation Tag ── */
 
 function CiteTag({ type, id, children }) {
-  const isSupreme = type === "supreme";
   const isTarget = type === "target";
 
-  // source / supreme → 點擊跳轉 /decisions/{id}
+  // source → 點擊跳轉 /decisions/{id}
   // target → 點擊顯示 tooltip（被引用總次數等）
   if (isTarget) {
     return <TargetCiteTag id={id}>{children}</TargetCiteTag>;
@@ -333,11 +328,7 @@ function CiteTag({ type, id, children }) {
   return (
     <Link
       to={`/decisions/${id}`}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded text-sm border cursor-pointer transition-colors ${
-        isSupreme
-          ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-          : "bg-brand-light border-brand-border text-brand hover:bg-highlight"
-      }`}
+      className="inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded text-sm border cursor-pointer transition-colors bg-brand-light border-brand-border text-brand hover:bg-highlight"
     >
       <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

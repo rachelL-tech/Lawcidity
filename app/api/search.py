@@ -44,8 +44,9 @@ from app.api.schemas import (
     AnalyzeStatute,
     GenerateRequest,
     GenerateResponse,
+    IssueResult,
 )
-from app.rag_service import rag_search
+from app.rag_service import rag_search_fanout
 from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
 router = APIRouter()
@@ -220,15 +221,14 @@ def analyze_generate(req: GenerateRequest):
 
     with get_conn() as conn:
         try:
-            rag_results = rag_search(
+            rag_results = rag_search_fanout(
                 conn,
-                req.query,
-                top=req.top,
+                req.issues,
+                result_limit_per_issue=req.result_limit_per_issue,
             )
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
 
-    # 轉成 dict 給 Gemini
     try:
         analysis_text = generate_analysis(
             query=req.query,
@@ -240,28 +240,30 @@ def analyze_generate(req: GenerateRequest):
         raise HTTPException(status_code=502, detail=f"Gemini 生成失敗：{e}")
 
     items = [
-        RagResultItem(
-            decision_id=r["decision_id"],
-            root_norm=r["root_norm"],
-            display_title=r["display_title"],
-            doc_type=r["doc_type"],
-            decision_date=r["decision_date"],
-            score=r["score"],
-            sim=r["sim"],
-            chunk_count=r["chunk_count"],
-            best_chunk_text=r["best_chunk_text"],
-            targets=[
-                RagResultTarget(
-                    id=t["id"],
-                    display_title=t["display_title"],
-                    root_norm=t["root_norm"],
-                    total_citation_count=t["total_citation_count"],
-                    target_type=t.get("target_type", "decision"),
+        IssueResult(
+            issue=issue,
+            chunks=[
+                RagResultItem(
+                    decision_id=r["decision_id"],
+                    root_norm=r["root_norm"],
+                    display_title=r["display_title"],
+                    doc_type=r["doc_type"],
+                    sim=r["sim"],
+                    best_chunk_text=r["best_chunk_text"],
+                    targets=[
+                        RagResultTarget(
+                            id=t["id"],
+                            display_title=t["display_title"],
+                            root_norm=t["root_norm"],
+                            total_citation_count=t["total_citation_count"],
+                        )
+                        for t in r["targets"]
+                    ],
                 )
-                for t in r["targets"]
+                for r in chunks
             ],
         )
-        for r in rag_results
+        for issue, chunks in rag_results.items()
     ]
 
     return GenerateResponse(analysis=analysis_text, rag_results=items)

@@ -163,7 +163,6 @@ class RagResultTarget(BaseModel):
     display_title: str
     root_norm: str
     total_citation_count: int
-    target_type: str = "decision"   # "decision" | "authority"
 
 
 class RagResultItem(BaseModel):
@@ -171,10 +170,7 @@ class RagResultItem(BaseModel):
     root_norm: str
     display_title: str
     doc_type: str | None
-    decision_date: str | None
-    score: float
     sim: float
-    chunk_count: int
     best_chunk_text: str
     targets: list[RagResultTarget]
 
@@ -201,9 +197,14 @@ class GenerateRequest(BaseModel):
     query: str
     issues: list[str] = []
     statutes: list[AnalyzeStatute] = []
-    top: int = 10
+    result_limit_per_issue: int = 10
+
+
+class IssueResult(BaseModel):
+    issue: str
+    chunks: list[RagResultItem]
 
 
 class GenerateResponse(BaseModel):
     analysis: str
-    rag_results: list[RagResultItem]
+    rag_results: list[IssueResult]
