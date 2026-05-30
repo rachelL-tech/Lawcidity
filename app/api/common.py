@@ -30,6 +30,11 @@ def get_laws(q: str = ""):
 
 @router.get("/health")
 def health():
+    return {"status": "ok"}
+
+
+@router.get("/ready")
+def ready():
     db_ok = False
     os_ok = False
 

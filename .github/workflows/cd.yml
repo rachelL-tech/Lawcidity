@@ -18,4 +18,13 @@ jobs:
           script: |
             cd ~/lawcidity
             git pull
-            docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+            docker compose -f docker-compose.prod.yml --env-file .env build --progress=plain
+            docker compose -f docker-compose.prod.yml --env-file .env up -d nginx fastapi
+            for i in {1..10}; do
+              if curl -fsS http://localhost/api/ready; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "ERROR: /api/ready did not become healthy" >&2
+            exit 1
