@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
     environment:
       discovery.type: single-node
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD}
+      DISABLE_SECURITY_PLUGIN: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     ulimits:
       memlock:
@@ -41,12 +41,12 @@ services:
     volumes:
       - osdata:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sk https://localhost:9200 -u admin:${OPENSEARCH_PASSWORD} || exit 1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
 
 volumes:
   osdata:

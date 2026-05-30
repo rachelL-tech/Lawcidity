@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     environment:
       discovery.type: single-node
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_PASSWORD}"
+      DISABLE_SECURITY_PLUGIN: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     ulimits:
       memlock:
@@ -46,10 +46,7 @@ services:
     depends_on:
       - opensearch
     environment:
-      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
-      OPENSEARCH_USERNAME: "admin"
-      OPENSEARCH_PASSWORD: "${OPENSEARCH_PASSWORD}"
-      OPENSEARCH_SSL_VERIFICATIONMODE: "none"
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
     ports:
       - "5601:5601"
 

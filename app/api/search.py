@@ -60,6 +60,26 @@ class _NormalizedSearchInput:
     exclude_statute_filters: list[tuple[str, str | None, str | None]]
     case_types: list[str]
 
+
+def _error_detail(
+    stage: str,
+    message: str,
+    exc: Exception,
+    *,
+    category: str,
+    retryable: bool,
+    expected: bool = True,
+) -> dict[str, str | bool]:
+    return {
+        "expected": expected,
+        "category": category,
+        "stage": stage,
+        "message": message,
+        "error_type": type(exc).__name__,
+        "retryable": retryable,
+    }
+
+
 def _ensure_ordered_indexes(
     rows: list[dict],
     ordered_indexes: dict[str, list[int]],
@@ -137,16 +157,57 @@ def search(req: SearchRequest):
                 exclude_statute_filters=normalized.exclude_statute_filters,
             )
         except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_source_recall",
+                    "搜尋服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{e}")
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_source_recall",
+                    "搜尋服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
 
-        rows = fetch_target_rankings_by_relevance(
-            conn,
-            source_ids,
-            normalized.query_terms,
-            normalized.statute_filters,
-        )
+        try:
+            rows = fetch_target_rankings_by_relevance(
+                conn,
+                source_ids,
+                normalized.query_terms,
+                normalized.statute_filters,
+            )
+        except RuntimeError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_target_ranking",
+                    "搜尋結果排序服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_target_ranking",
+                    "搜尋結果排序服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
     ordered_indexes: dict[str, list[int]] = {}
     search_cache_key = create_search_cache(
         source_ids,
@@ -202,7 +263,16 @@ def analyze(req: AnalyzeRequest):
     try:
         result = extract_issues_and_statutes(req.text)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Gemini 分析失敗：{e}")
+        raise HTTPException(
+            status_code=502,
+            detail=_error_detail(
+                "gemini_analyze",
+                "AI 暫時無法完成分析，請稍後再試",
+                e,
+                category="external_service_error",
+                retryable=False,
+            ),
+        )
 
     return AnalyzeResponse(
         issues=result.get("issues", []),
@@ -227,7 +297,27 @@ def analyze_generate(req: GenerateRequest):
                 result_limit_per_issue=req.result_limit_per_issue,
             )
         except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "rag_retrieval",
+                    "語意檢索服務暫時無法連線，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=_error_detail(
+                    "rag_retrieval",
+                    "語意檢索暫時無法完成，請稍後再試",
+                    e,
+                    category="external_service_error",
+                    retryable=False,
+                ),
+            )
 
     try:
         analysis_text = generate_analysis(
@@ -237,7 +327,16 @@ def analyze_generate(req: GenerateRequest):
             rag_results=rag_results,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Gemini 生成失敗：{e}")
+        raise HTTPException(
+            status_code=502,
+            detail=_error_detail(
+                "gemini_generate",
+                "AI 暫時無法生成回覆，請稍後再試",
+                e,
+                category="external_service_error",
+                retryable=False,
+            ),
+        )
 
     items = [
         IssueResult(
@@ -291,9 +390,27 @@ def rerank(req: RerankRequest):
                 exclude_statute_filters=normalized.exclude_statute_filters,
             )
         except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_source_recall",
+                    "搜尋服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"搜尋服務失敗：{e}")
+            raise HTTPException(
+                status_code=503,
+                detail=_error_detail(
+                    "opensearch_source_recall",
+                    "搜尋服務暫時不可用，請稍後再試",
+                    e,
+                    category="service_unavailable",
+                    retryable=True,
+                ),
+            )
         cached_rankings = None
         search_cache_key = None
 
@@ -319,12 +436,35 @@ def rerank(req: RerankRequest):
 
     if cached_rankings is None:
         with get_conn() as conn:
-            rows = fetch_target_rankings_by_relevance(
-                conn,
-                source_ids,
-                normalized.query_terms,
-                normalized.statute_filters,
-            )
+            try:
+                rows = fetch_target_rankings_by_relevance(
+                    conn,
+                    source_ids,
+                    normalized.query_terms,
+                    normalized.statute_filters,
+                )
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=_error_detail(
+                        "opensearch_target_ranking",
+                        "搜尋結果排序服務暫時不可用，請稍後再試",
+                        e,
+                        category="service_unavailable",
+                        retryable=True,
+                    ),
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=_error_detail(
+                        "opensearch_target_ranking",
+                        "搜尋結果排序服務暫時不可用，請稍後再試",
+                        e,
+                        category="service_unavailable",
+                        retryable=True,
+                    ),
+                )
         ordered_indexes = {}
         if source_ids_from_cache:
             update_cached_rankings(req.search_cache_key, rows, ordered_indexes)

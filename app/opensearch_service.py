@@ -15,6 +15,8 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+_opensearch_client = None
+
 
 def _build_opensearch_statute_nested_query(
     law: str,
@@ -102,6 +104,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _get_opensearch_client():
+    global _opensearch_client
+    if _opensearch_client is not None:
+        return _opensearch_client
+
     try:
         from opensearchpy import OpenSearch
     except Exception as exc:
@@ -111,22 +117,16 @@ def _get_opensearch_client():
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 9200
-    use_ssl = parsed.scheme == "https"
-    verify_certs = _env_bool("OPENSEARCH_VERIFY_CERTS", False)
-
-    username = os.environ.get("OPENSEARCH_USERNAME", "").strip()
-    password = os.environ.get("OPENSEARCH_PASSWORD", "").strip()
-    auth = (username, password) if username else None
 
     kwargs: dict[str, Any] = {
         "hosts": [{"host": host, "port": port}],
-        "http_auth": auth,
-        "use_ssl": use_ssl,
-        "verify_certs": verify_certs,
+        "use_ssl": False,
+        "request_timeout": 20,
+        "max_retries": 2,
+        "retry_on_timeout": True,
     }
-    if use_ssl and not verify_certs:
-        kwargs["ssl_assert_hostname"] = False
-    return OpenSearch(**kwargs)
+    _opensearch_client = OpenSearch(**kwargs)
+    return _opensearch_client
 
 
 def search_source_ids_opensearch(

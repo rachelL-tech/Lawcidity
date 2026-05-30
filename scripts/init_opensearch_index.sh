@@ -3,51 +3,15 @@
 # 預設建立 decisions_v3，並使用 bigram（min_gram=max_gram=2）。
 set -euo pipefail
 
-OPENSEARCH_URL="${OPENSEARCH_URL:-https://localhost:9200}"
+OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
 OPENSEARCH_URL="${OPENSEARCH_URL%/}"
 OPENSEARCH_INDEX="${OPENSEARCH_INDEX:-decisions_v3}"
-OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-admin}"
-OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
-OPENSEARCH_VERIFY_CERTS="${OPENSEARCH_VERIFY_CERTS:-false}"
 
-OPENSEARCH_NGRAM_MIN_GRAM="${OPENSEARCH_NGRAM_MIN_GRAM:-2}"
-OPENSEARCH_NGRAM_MAX_GRAM="${OPENSEARCH_NGRAM_MAX_GRAM:-2}"
+OPENSEARCH_NGRAM_MIN_GRAM=2
+OPENSEARCH_NGRAM_MAX_GRAM=2
 
-if [[ -z "${OPENSEARCH_PASSWORD}" ]] && command -v docker >/dev/null 2>&1; then
-  OPENSEARCH_PASSWORD="$(
-    docker compose exec -T opensearch printenv OPENSEARCH_INITIAL_ADMIN_PASSWORD 2>/dev/null || true
-  )"
-fi
-
-if [[ -z "${OPENSEARCH_PASSWORD}" ]]; then
-  echo "ERROR: 請設定 OPENSEARCH_PASSWORD（或先啟動 opensearch 容器供自動讀取密碼）" >&2
-  exit 1
-fi
-
-if ! [[ "${OPENSEARCH_NGRAM_MIN_GRAM}" =~ ^[0-9]+$ && "${OPENSEARCH_NGRAM_MAX_GRAM}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須為正整數" >&2
-  exit 1
-fi
-
-if (( OPENSEARCH_NGRAM_MIN_GRAM < 1 || OPENSEARCH_NGRAM_MAX_GRAM < 1 )); then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM / MAX_GRAM 必須 >= 1" >&2
-  exit 1
-fi
-
-if (( OPENSEARCH_NGRAM_MIN_GRAM > OPENSEARCH_NGRAM_MAX_GRAM )); then
-  echo "ERROR: OPENSEARCH_NGRAM_MIN_GRAM 不可大於 OPENSEARCH_NGRAM_MAX_GRAM" >&2
-  exit 1
-fi
-
-CURL_EXTRA=()
-if [[ "${OPENSEARCH_VERIFY_CERTS}" != "true" ]]; then
-  CURL_EXTRA+=("-k")
-fi
-
-AUTH=(-u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}")
 HEAD_CODE="$(
-  curl "${CURL_EXTRA[@]}" -sS -o /dev/null -w "%{http_code}" "${AUTH[@]}" \
-    "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}"
+  curl -sS -o /dev/null -w "%{http_code}" "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}"
 )"
 
 if [[ "${HEAD_CODE}" == "200" ]]; then
@@ -108,7 +72,7 @@ INDEX_BODY="$(cat <<JSON
 JSON
 )"
 
-curl "${CURL_EXTRA[@]}" --fail-with-body -sS "${AUTH[@]}" -X PUT "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}" \
+curl --fail-with-body -sS -X PUT "${OPENSEARCH_URL}/${OPENSEARCH_INDEX}" \
   -H "Content-Type: application/json" \
   -d "${INDEX_BODY}"
 echo
