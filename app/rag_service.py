@@ -36,7 +36,10 @@ def _get_voyage_client():
 
 def embed_query(texts: list[str]) -> list[np.ndarray]:
     client = _get_voyage_client()
-    result = client.embed(texts, model=VOYAGE_MODEL)
+    try:
+        result = client.embed(texts, model=VOYAGE_MODEL)
+    except Exception as exc:
+        raise RuntimeError("Voyage embedding 呼叫失敗") from exc
     # 若未來要整批重跑 documents，可再和 document 端一起導入 input_type="query" / input_type="document"。
     return [np.array(e, dtype=np.float32) for e in result.embeddings]
 
@@ -61,17 +64,20 @@ def _knn(
     conn: psycopg.Connection, vec_str: str,
     *, limit: int = 50,
 ) -> list[dict]:
-    conn.execute(f"SET ivfflat.probes = {int(IVFFLAT_PROBES)}")
+    try:
+        conn.execute(f"SET ivfflat.probes = {int(IVFFLAT_PROBES)}")
 
-    return conn.execute(f"""
-        SELECT {CHUNK_SELECT}
-        FROM chunks cc
-        JOIN decisions d ON d.id = cc.decision_id
-        LEFT JOIN court_units cu ON cu.id = d.court_unit_id
-        WHERE cc.embedding IS NOT NULL
-        ORDER BY cc.embedding <=> %s::vector
-        LIMIT %s
-    """, (vec_str, vec_str, limit)).fetchall()
+        return conn.execute(f"""
+            SELECT {CHUNK_SELECT}
+            FROM chunks cc
+            JOIN decisions d ON d.id = cc.decision_id
+            LEFT JOIN court_units cu ON cu.id = d.court_unit_id
+            WHERE cc.embedding IS NOT NULL
+            ORDER BY cc.embedding <=> %s::vector
+            LIMIT %s
+        """, (vec_str, vec_str, limit)).fetchall()
+    except Exception as exc:
+        raise RuntimeError("pgvector KNN 查詢失敗") from exc
 
 
 # ── 聚合 ─────────────────────────────────────────────────────────────
@@ -153,20 +159,23 @@ def rag_search_fanout(
                 all_authority_ids.add(authority_id)
 
     decision_info: dict[int, dict] = {}
-    if all_decision_ids:
-        rows = conn.execute("""
-            SELECT id, display_title, root_norm, total_citation_count
-            FROM decisions WHERE id = ANY(%s)
-        """, (list(all_decision_ids),)).fetchall()
-        decision_info = {r["id"]: r for r in rows}
-
     auth_info: dict[int, dict] = {}
-    if all_authority_ids:
-        rows = conn.execute("""
-            SELECT id, display AS display_title, root_norm, total_citation_count
-        FROM authorities WHERE id = ANY(%s)
-        """, (list(all_authority_ids),)).fetchall()
-        auth_info = {r["id"]: r for r in rows}
+    try:
+        if all_decision_ids:
+            rows = conn.execute("""
+                SELECT id, display_title, root_norm, total_citation_count
+                FROM decisions WHERE id = ANY(%s)
+            """, (list(all_decision_ids),)).fetchall()
+            decision_info = {r["id"]: r for r in rows}
+
+        if all_authority_ids:
+            rows = conn.execute("""
+                SELECT id, display AS display_title, root_norm, total_citation_count
+            FROM authorities WHERE id = ANY(%s)
+            """, (list(all_authority_ids),)).fetchall()
+            auth_info = {r["id"]: r for r in rows}
+    except Exception as exc:
+        raise RuntimeError("RAG target metadata 查詢失敗") from exc
 
     for items in results.values():
         for item in items:

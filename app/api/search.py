@@ -63,19 +63,14 @@ class _NormalizedSearchInput:
 
 def _error_detail(
     stage: str,
-    message: str,
     exc: Exception,
     *,
-    category: str,
+    fallback_message: str,
     retryable: bool,
-    expected: bool = True,
 ) -> dict[str, str | bool]:
     return {
-        "expected": expected,
-        "category": category,
         "stage": stage,
-        "message": message,
-        "error_type": type(exc).__name__,
+        "message": str(exc) or fallback_message,
         "retryable": retryable,
     }
 
@@ -161,9 +156,8 @@ def search(req: SearchRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_source_recall",
-                    "搜尋服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -172,9 +166,8 @@ def search(req: SearchRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_source_recall",
-                    "搜尋服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -191,9 +184,8 @@ def search(req: SearchRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_target_ranking",
-                    "搜尋結果排序服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋結果排序服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -202,9 +194,8 @@ def search(req: SearchRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_target_ranking",
-                    "搜尋結果排序服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋結果排序服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -267,9 +258,8 @@ def analyze(req: AnalyzeRequest):
             status_code=502,
             detail=_error_detail(
                 "gemini_analyze",
-                "AI 暫時無法完成分析，請稍後再試",
                 e,
-                category="external_service_error",
+                fallback_message="AI 暫時無法完成分析，請稍後再試",
                 retryable=False,
             ),
         )
@@ -301,9 +291,8 @@ def analyze_generate(req: GenerateRequest):
                 status_code=503,
                 detail=_error_detail(
                     "rag_retrieval",
-                    "語意檢索服務暫時無法連線，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="語意檢索服務暫時無法連線，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -312,9 +301,8 @@ def analyze_generate(req: GenerateRequest):
                 status_code=502,
                 detail=_error_detail(
                     "rag_retrieval",
-                    "語意檢索暫時無法完成，請稍後再試",
                     e,
-                    category="external_service_error",
+                    fallback_message="語意檢索暫時無法完成，請稍後再試",
                     retryable=False,
                 ),
             )
@@ -331,9 +319,8 @@ def analyze_generate(req: GenerateRequest):
             status_code=502,
             detail=_error_detail(
                 "gemini_generate",
-                "AI 暫時無法生成回覆，請稍後再試",
                 e,
-                category="external_service_error",
+                fallback_message="AI 暫時無法生成回覆，請稍後再試",
                 retryable=False,
             ),
         )
@@ -394,9 +381,8 @@ def rerank(req: RerankRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_source_recall",
-                    "搜尋服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -405,9 +391,8 @@ def rerank(req: RerankRequest):
                 status_code=503,
                 detail=_error_detail(
                     "opensearch_source_recall",
-                    "搜尋服務暫時不可用，請稍後再試",
                     e,
-                    category="service_unavailable",
+                    fallback_message="搜尋服務暫時不可用，請稍後再試",
                     retryable=True,
                 ),
             )
@@ -448,9 +433,8 @@ def rerank(req: RerankRequest):
                     status_code=503,
                     detail=_error_detail(
                         "opensearch_target_ranking",
-                        "搜尋結果排序服務暫時不可用，請稍後再試",
                         e,
-                        category="service_unavailable",
+                        fallback_message="搜尋結果排序服務暫時不可用，請稍後再試",
                         retryable=True,
                     ),
                 )
@@ -459,9 +443,8 @@ def rerank(req: RerankRequest):
                     status_code=503,
                     detail=_error_detail(
                         "opensearch_target_ranking",
-                        "搜尋結果排序服務暫時不可用，請稍後再試",
                         e,
-                        category="service_unavailable",
+                        fallback_message="搜尋結果排序服務暫時不可用，請稍後再試",
                         retryable=True,
                     ),
                 )

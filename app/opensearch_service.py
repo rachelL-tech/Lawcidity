@@ -113,7 +113,7 @@ def _get_opensearch_client():
     except Exception as exc:
         raise RuntimeError("缺少 opensearch-py 套件") from exc
 
-    url = os.environ.get("OPENSEARCH_URL", "https://localhost:9200").strip()
+    url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").strip()
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 9200

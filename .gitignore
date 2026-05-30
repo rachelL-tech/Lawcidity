@@ -8,6 +8,7 @@ venv/
 .env
 
 # IDE
+.DS_Store
 .vscode/
 .idea/
 

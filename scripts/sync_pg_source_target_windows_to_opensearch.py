@@ -21,13 +21,6 @@ REQUEST_TIMEOUT = 120
 REFRESH_EACH_BATCH = False
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _parse_iso_date(raw: str | None, name: str) -> date | None:
     if raw is None:
         return None
@@ -43,29 +36,15 @@ def _build_opensearch_client():
     except Exception as exc:
         raise RuntimeError("缺少 opensearch-py 套件") from exc
 
-    url = os.environ.get("OPENSEARCH_URL", "https://localhost:9200").strip()
+    url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").strip()
     parsed = urlparse(url)
-    scheme = (parsed.scheme or "https").lower()
-    if scheme not in {"http", "https"}:
-        raise RuntimeError("OPENSEARCH_URL 只支援 http 或 https")
-
     host = parsed.hostname or "localhost"
     port = parsed.port or 9200
-    use_ssl = scheme == "https"
-    verify_certs = _env_bool("OPENSEARCH_VERIFY_CERTS", False)
-
-    username = os.environ.get("OPENSEARCH_USERNAME", "admin").strip()
-    password = os.environ.get("OPENSEARCH_PASSWORD", "").strip()
-    auth = (username, password) if username else None
 
     kwargs: dict[str, Any] = {
         "hosts": [{"host": host, "port": port}],
-        "http_auth": auth,
-        "use_ssl": use_ssl,
-        "verify_certs": verify_certs,
+        "use_ssl": False,
     }
-    if use_ssl and not verify_certs:
-        kwargs["ssl_assert_hostname"] = False
 
     return OpenSearch(**kwargs)
 
