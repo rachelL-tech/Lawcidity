@@ -6,6 +6,7 @@ Gemini 爭點/法條提取 + RAG 全文分析。
 
 import json
 import os
+import time
 
 from google import genai
 
@@ -20,6 +21,18 @@ def _get_client():
             raise RuntimeError("GEMINI_API_KEY 未設定")
         _client = genai.Client(api_key=api_key)
     return _client
+
+
+def _generate_content_with_retry(client, *, error_message: str, **kwargs):
+    for attempt in range(2):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as exc:
+            if attempt == 1:
+                raise RuntimeError(error_message) from exc
+            time.sleep(0.5)
+
+    raise RuntimeError(error_message)
 
 
 # ── 爭點 / 法條提取 ──────────────────────────────────────────────────
@@ -55,7 +68,9 @@ def extract_issues_and_statutes(text: str) -> dict:
         {"issues": [...], "statutes": [{"law": ..., "article": ...}, ...]}
     """
     client = _get_client()
-    response = client.models.generate_content(
+    response = _generate_content_with_retry(
+        client,
+        error_message="Gemini 分析 API 呼叫失敗",
         model="gemini-3.1-flash-lite",
         contents=EXTRACT_PROMPT.format(text=text),
         config={
@@ -63,7 +78,15 @@ def extract_issues_and_statutes(text: str) -> dict:
             "response_mime_type": "application/json",
         },
     )
-    return json.loads(response.text)
+
+    response_text = (response.text or "").strip()
+    if not response_text:
+        raise RuntimeError("Gemini 分析回應為空")
+
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Gemini 分析回應不是合法 JSON") from exc
 
 
 # ── RAG 全文分析（Gemini 生成） ───────────────────────────────────────
@@ -159,7 +182,9 @@ def generate_analysis(
     ) if statutes else "（未指定）"
 
     client = _get_client()
-    response = client.models.generate_content(
+    response = _generate_content_with_retry(
+        client,
+        error_message="Gemini 生成 API 呼叫失敗",
         model="gemini-3.1-flash-lite",
         contents=ANALYZE_PROMPT.format(
             query=query,
@@ -172,4 +197,9 @@ def generate_analysis(
             "max_output_tokens": 8192,
         },
     )
-    return response.text
+
+    response_text = (response.text or "").strip()
+    if not response_text:
+        raise RuntimeError("Gemini 生成回應為空")
+
+    return response_text
