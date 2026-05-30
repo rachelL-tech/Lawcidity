@@ -116,9 +116,8 @@ def fetch_matched_preview_rows(
     params = {
         "target_val": target_val,
         "preview_source_ids": [
-            int(source_id) for source_id in preview_source_ids[:CITATIONS_PREVIEW_LIMIT]
+            int(source_id) for source_id in preview_source_ids
         ],
-        "limit": CITATIONS_PREVIEW_LIMIT,
     }
     target_filter = f"{target_col} = %(target_val)s"
     keyword_score_sql = build_keyword_score_sql(query_terms, params)
@@ -168,7 +167,6 @@ def fetch_matched_preview_rows(
         GROUP BY picked.hit_score, c.id, c.source_id, src.display_title, src.unit_norm,
                  cu.level, src.doc_type, src.decision_date, c.snippet, c.raw_match
         ORDER BY picked.hit_score DESC, c.id ASC
-        LIMIT %(limit)s
     """
 
     with conn.cursor(row_factory=dict_row) as cur:

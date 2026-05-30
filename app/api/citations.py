@@ -11,7 +11,6 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.citation_preview import (
-    CITATIONS_PREVIEW_LIMIT,
     fetch_citation_counts,
     fetch_matched_preview_rows,
     fetch_more_preview_rows,
@@ -51,25 +50,18 @@ def _simplify_court(unit_norm: str) -> str:
     return unit_norm
 
 
-def _resolve_source_ids_for_citations(
-    query_terms: list[str],
-    statute_filters: list[tuple],
-    exclude_terms: list[str],
-    exclude_statute_filters: list[tuple],
-    case_types: list[str],
-    search_cache_key: str | None,
-) -> list[int]:
-    cached_source_ids = get_cached_source_ids(search_cache_key)
+def _resolve_source_ids_for_citations(parsed: ParsedCitationQuery) -> list[int]:
+    cached_source_ids = get_cached_source_ids(parsed.search_cache_key)
     if cached_source_ids:
         return cached_source_ids
 
     try:
         return search_source_ids_opensearch(
-            query_terms=query_terms,
-            case_types=case_types,
-            statute_filters=statute_filters,
-            exclude_terms=exclude_terms,
-            exclude_statute_filters=exclude_statute_filters,
+            query_terms=parsed.query_terms,
+            case_types=parsed.case_types,
+            statute_filters=parsed.statute_list,
+            exclude_terms=parsed.exclude_terms,
+            exclude_statute_filters=parsed.exclude_statute_list,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -111,23 +103,13 @@ def _parse_citation_query(params: CitationQueryParams) -> ParsedCitationQuery:
 
     preview_source_ids: list[int] | None = None
     if params.preview_source_ids:
-        preview_source_ids = []
-        seen: set[int] = set()
-        for part in params.preview_source_ids.split(","):
-            value = part.strip()
-            if not value:
-                continue
-            try:
-                source_id = int(value)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail="preview_source_ids 格式錯誤") from exc
-            if source_id in seen:
-                continue
-            seen.add(source_id)
-            preview_source_ids.append(source_id)
-            if len(preview_source_ids) >= CITATIONS_PREVIEW_LIMIT:
-                break
-        preview_source_ids = preview_source_ids or None
+        try:
+            preview_source_ids = [
+                int(part)
+                for part in params.preview_source_ids.split(",")
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="preview_source_ids 格式錯誤") from exc
 
     return ParsedCitationQuery(
         query_terms=query_terms,
@@ -172,60 +154,41 @@ def _build_citations_response(
 def _parse_loaded_source_ids(raw: str | None) -> list[int]:
     if not raw:
         return []
-    result: list[int] = []
-    seen: set[int] = set()
-    for part in raw.split(","):
-        value = part.strip()
-        if not value:
-            continue
-        try:
-            source_id = int(value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="loaded_source_ids 格式錯誤") from exc
-        if source_id in seen:
-            continue
-        seen.add(source_id)
-        result.append(source_id)
-    return result
+    try:
+        return [int(part) for part in raw.split(",")]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="loaded_source_ids 格式錯誤") from exc
 
 
 # ── Decision citations ────────────────────────────────────────────────
 
-@router.get("/decisions/{target_id}/citations", response_model=CitationsResponse)
-def get_decision_citations_matched(
-    target_id: int,
-    params: CitationQueryParams = Depends(),
-):
-    parsed = _parse_citation_query(params)
+def _fetch_citations_for_target(
+    target_col: str,
+    target_val: int,
+    parsed: ParsedCitationQuery,
+) -> CitationsResponse:
     if parsed.preview_source_ids is None:
         raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
     with get_conn() as conn:
-        resolved_source_ids = _resolve_source_ids_for_citations(
-            parsed.query_terms,
-            parsed.statute_list,
-            parsed.exclude_terms,
-            parsed.exclude_statute_list,
-            parsed.case_types,
-            parsed.search_cache_key,
-        )
+        resolved_source_ids = _resolve_source_ids_for_citations(parsed)
         matched_total, others_total = fetch_citation_counts(
             conn,
-            "c.target_canonical_id",
-            target_id,
+            target_col,
+            target_val,
             resolved_source_ids,
         )
         matched_rows = fetch_matched_preview_rows(
             conn,
-            "c.target_canonical_id",
-            target_id,
+            target_col,
+            target_val,
             parsed.query_terms,
             parsed.statute_list,
             parsed.preview_source_ids,
         )
         others_rows = fetch_other_preview_rows(
             conn,
-            "c.target_canonical_id",
-            target_id,
+            target_col,
+            target_val,
             resolved_source_ids,
         )
     return _build_citations_response(
@@ -235,6 +198,18 @@ def get_decision_citations_matched(
         others_rows=others_rows,
     )
 
+
+@router.get("/decisions/{target_id}/citations", response_model=CitationsResponse)
+def get_decision_citations_matched(
+    target_id: int,
+    params: CitationQueryParams = Depends(),
+):
+    return _fetch_citations_for_target(
+        target_col="c.target_canonical_id",
+        target_val=target_id,
+        parsed=_parse_citation_query(params),
+    )
+
 # ── Authority citations ───────────────────────────────────────────────
 
 @router.get("/authorities/{authority_id}/citations", response_model=CitationsResponse)
@@ -242,43 +217,10 @@ def get_authority_citations_matched(
     authority_id: int,
     params: CitationQueryParams = Depends(),
 ):
-    parsed = _parse_citation_query(params)
-    if parsed.preview_source_ids is None:
-        raise HTTPException(status_code=400, detail="preview_source_ids 缺失")
-    with get_conn() as conn:
-        resolved_source_ids = _resolve_source_ids_for_citations(
-            parsed.query_terms,
-            parsed.statute_list,
-            parsed.exclude_terms,
-            parsed.exclude_statute_list,
-            parsed.case_types,
-            parsed.search_cache_key,
-        )
-        matched_total, others_total = fetch_citation_counts(
-            conn,
-            "c.target_authority_id",
-            authority_id,
-            resolved_source_ids,
-        )
-        matched_rows = fetch_matched_preview_rows(
-            conn,
-            "c.target_authority_id",
-            authority_id,
-            parsed.query_terms,
-            parsed.statute_list,
-            parsed.preview_source_ids,
-        )
-        others_rows = fetch_other_preview_rows(
-            conn,
-            "c.target_authority_id",
-            authority_id,
-            resolved_source_ids,
-        )
-    return _build_citations_response(
-        matched_total=matched_total,
-        others_total=others_total,
-        matched_rows=matched_rows,
-        others_rows=others_rows,
+    return _fetch_citations_for_target(
+        target_col="c.target_authority_id",
+        target_val=authority_id,
+        parsed=_parse_citation_query(params),
     )
 
 
@@ -292,14 +234,7 @@ def _fetch_more_for_target(
     page_size: int,
 ) -> CitationsMoreResponse:
     with get_conn() as conn:
-        resolved_source_ids = _resolve_source_ids_for_citations(
-            parsed.query_terms,
-            parsed.statute_list,
-            parsed.exclude_terms,
-            parsed.exclude_statute_list,
-            parsed.case_types,
-            parsed.search_cache_key,
-        )
+        resolved_source_ids = _resolve_source_ids_for_citations(parsed)
         new_rows = fetch_more_preview_rows(
             conn,
             target_col,

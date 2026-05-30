@@ -96,13 +96,6 @@ def _build_source_target_relevance_bool_query(
     return bool_query
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"true"}
-
-
 def _get_opensearch_client():
     global _opensearch_client
     if _opensearch_client is not None:
@@ -269,22 +262,19 @@ def _aggregate_targets_at_msm(
                     {"preview_source_ids": []},
                 )
 
-                if len(row["preview_source_ids"]) < 5:
-                    source_buckets = (
-                        (bucket.get("preview_source_ids") or {}).get("buckets") or []
-                    )
-                    existing = set(row["preview_source_ids"])
-                    for source_bucket in source_buckets:
-                        try:
-                            sid = int(source_bucket.get("key"))
-                        except Exception:
-                            continue
-                        if sid in existing:
-                            continue
-                        row["preview_source_ids"].append(sid)
-                        existing.add(sid)
-                        if len(row["preview_source_ids"]) >= 5:
-                            break
+                source_buckets = (
+                    (bucket.get("preview_source_ids") or {}).get("buckets") or []
+                )
+                existing = set(row["preview_source_ids"])
+                for source_bucket in source_buckets:
+                    try:
+                        sid = int(source_bucket.get("key"))
+                    except Exception:
+                        continue
+                    if sid in existing:
+                        continue
+                    row["preview_source_ids"].append(sid)
+                    existing.add(sid)
 
             after_key = agg.get("after_key")
             # 沒有 after_key 時，代表這個 source_id_chunk 的 target buckets 都取完了，跳出 while，換下一個 source chunk
@@ -322,15 +312,9 @@ def search_target_rankings_step_down(
         )
         for target_uid, stats in level.items():
             if target_uid in pool:
-                existing = pool[target_uid]["preview_source_ids"]
-                if len(existing) < 5:
-                    seen = set(existing)
-                    for sid in stats["preview_source_ids"]:
-                        if sid not in seen:
-                            existing.append(sid)
-                            seen.add(sid)
-                        if len(existing) >= 5:
-                            break
+                pool[target_uid]["preview_source_ids"].extend(
+                    stats["preview_source_ids"]
+                )
                 continue
             pool[target_uid] = {
                 **stats,
@@ -339,4 +323,20 @@ def search_target_rankings_step_down(
         if len(pool) >= threshold:
             break
 
-    return [{"target_uid": tu, **row} for tu, row in pool.items()]
+    results: list[dict[str, Any]] = []
+    for target_uid, row in pool.items():
+        preview_source_ids: list[int] = []
+        seen: set[int] = set()
+        for source_id in row["preview_source_ids"]:
+            if source_id in seen:
+                continue
+            preview_source_ids.append(source_id)
+            seen.add(source_id)
+            if len(preview_source_ids) >= 5:
+                break
+        results.append({
+            "target_uid": target_uid,
+            **row,
+            "preview_source_ids": preview_source_ids,
+        })
+    return results
