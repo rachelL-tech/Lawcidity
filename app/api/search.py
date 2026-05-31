@@ -473,7 +473,8 @@ def rerank(req: RerankRequest):
     )
     total = len(filtered_indexes)
     start = (req.page - 1) * req.page_size
-    page_rankings = [rows[idx] for idx in filtered_indexes[start:start + req.page_size]]
+    page_indexes = filtered_indexes[start:start + req.page_size]
+    page_rankings = [rows[idx] for idx in page_indexes]
 
     results = [
         SearchResultItem(

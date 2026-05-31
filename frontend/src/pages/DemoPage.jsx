@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import ModeToggle from "../components/ModeToggle";
 import SearchForm from "../components/SearchForm";
 import AiSearchForm from "../components/AiSearchForm";
-import { searchRequestToParams } from "../lib/url";
+import { DEFAULT_SEARCH_REQ, searchRequestToParams } from "../lib/url";
 
 function useTypingEffect(text, speed = 90) {
   const [charIndex, setCharIndex] = useState(0);
@@ -26,19 +26,8 @@ function useTypingEffect(text, speed = 90) {
   return { displayed: text.substring(0, charIndex), done, cursorVisible };
 }
 
-const EMPTY_REQ = {
-  keywords: [],
-  statutes: [],
-  exclude_keywords: [],
-  exclude_statutes: [],
-  case_types: [],
-  sort: "relevance",
-  page: 1,
-  page_size: 20,
-};
-
 const DEFAULT_KEYWORD_REQ = {
-  ...EMPTY_REQ,
+  ...DEFAULT_SEARCH_REQ,
   keywords: ["殺人", "無罪"],
   statutes: [{ law: "刑事訴訟法", article: "161", sub_ref: null }],
   case_types: ["刑事"],

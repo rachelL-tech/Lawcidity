@@ -281,7 +281,7 @@ def fetch_more_preview_rows(
             ORDER BY source_id, (keyword_score + statute_score) DESC, id ASC
         ),
         top_n AS (
-            SELECT citation_id
+            SELECT citation_id, hit_score, source_id
             FROM picked
             ORDER BY hit_score DESC, source_id ASC
             LIMIT %(limit)s
@@ -309,8 +309,9 @@ def fetch_more_preview_rows(
         LEFT JOIN court_units cu ON cu.id = src.court_unit_id
         LEFT JOIN citation_snippet_statutes css ON css.citation_id = c.id
         GROUP BY c.id, c.source_id, src.display_title, src.unit_norm,
-                 cu.level, src.doc_type, src.decision_date, c.snippet, c.raw_match
-        ORDER BY c.id ASC
+                 cu.level, src.doc_type, src.decision_date, c.snippet, c.raw_match,
+                 top_n.hit_score, top_n.source_id
+        ORDER BY top_n.hit_score DESC, top_n.source_id ASC
     """
 
     with conn.cursor(row_factory=dict_row) as cur:

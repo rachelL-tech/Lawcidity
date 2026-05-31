@@ -202,7 +202,8 @@ def _aggregate_targets_at_msm(
     statute_filters: list[tuple[str, str | None, str | None]],
     minimum_should_match: int | None,
 ) -> dict[str, dict[str, Any]]:
-    """在某個 msm 下，所有 source chunks、所有 composite pages 合併後的 target 統計，回傳 {target_uid: {preview_source_ids}}。"""
+    """在「同一個 msm」下：跑完所有 source_id chunks，每個 chunk 跑完所有 composite pages
+    ，把同一 target_uid 的 preview_source_ids 合併，回傳這個 msm level 的 target 統計，回傳 {target_uid: {preview_source_ids}}。"""
     client = _get_opensearch_client()
 
     index_name = "source_target_windows_v2"
@@ -267,6 +268,8 @@ def _aggregate_targets_at_msm(
                 )
                 existing = set(row["preview_source_ids"])
                 for source_bucket in source_buckets:
+                    if len(row["preview_source_ids"]) >= 5:
+                        break
                     try:
                         sid = int(source_bucket.get("key"))
                     except Exception:
@@ -275,6 +278,8 @@ def _aggregate_targets_at_msm(
                         continue
                     row["preview_source_ids"].append(sid)
                     existing.add(sid)
+                    if len(row["preview_source_ids"]) >= 5:
+                        break
 
             after_key = agg.get("after_key")
             # 沒有 after_key 時，代表這個 source_id_chunk 的 target buckets 都取完了，跳出 while，換下一個 source chunk
@@ -312,9 +317,13 @@ def search_target_rankings_step_down(
         )
         for target_uid, stats in level.items():
             if target_uid in pool:
-                pool[target_uid]["preview_source_ids"].extend(
-                    stats["preview_source_ids"]
-                )
+                preview_source_ids = pool[target_uid]["preview_source_ids"]
+                for source_id in stats["preview_source_ids"]:
+                    if source_id in preview_source_ids:
+                        continue
+                    preview_source_ids.append(source_id)
+                    if len(preview_source_ids) >= 5:
+                        break
                 continue
             pool[target_uid] = {
                 **stats,
@@ -325,18 +334,8 @@ def search_target_rankings_step_down(
 
     results: list[dict[str, Any]] = []
     for target_uid, row in pool.items():
-        preview_source_ids: list[int] = []
-        seen: set[int] = set()
-        for source_id in row["preview_source_ids"]:
-            if source_id in seen:
-                continue
-            preview_source_ids.append(source_id)
-            seen.add(source_id)
-            if len(preview_source_ids) >= 5:
-                break
         results.append({
             "target_uid": target_uid,
             **row,
-            "preview_source_ids": preview_source_ids,
         })
     return results

@@ -2,6 +2,19 @@
 // 1. searchRequestToParams(req)：讓搜尋狀態能放在 URL 上，重新整理、分享連結、上一頁/下一頁時都能還原同一組搜尋條件
 // 2. paramsToSearchRequest(params)：讓 search(searchReq) 直接吃標準化物件，不用每頁重複 parse query
 
+export const DEFAULT_SEARCH_REQ = {
+  keywords: [],
+  statutes: [],
+  exclude_keywords: [],
+  exclude_statutes: [],
+  case_types: [],
+  doc_types: [],
+  court_levels: [],
+  sort: "relevance",
+  page: 1,
+  page_size: 20,
+};
+
 // 把法條陣列壓成字串
 function encodeStatutes(statutes) {
   return statutes
@@ -21,6 +34,7 @@ function decodeStatutes(raw) {
 // 從 URL 讀 query params，還原成 API 要的 request 物件
 export function paramsToSearchRequest(params) {
   return {
+    ...DEFAULT_SEARCH_REQ,
     keywords: params.get("kw")?.split(",").filter(Boolean) || [],
     statutes: decodeStatutes(params.get("st") || ""),
     exclude_keywords: params.get("xkw")?.split(",").filter(Boolean) || [],
@@ -28,9 +42,8 @@ export function paramsToSearchRequest(params) {
     case_types: params.get("ct")?.split(",").filter(Boolean) || [],
     doc_types: params.get("dt")?.split(",").filter(Boolean) || [],
     court_levels: params.get("cl")?.split(",").filter(Boolean).map(Number) || [],
-    sort: params.get("sort") || "relevance",
-    page: Number(params.get("page")) || 1,
-    page_size: 20,
+    sort: params.get("sort") || DEFAULT_SEARCH_REQ.sort,
+    page: Number(params.get("page")) || DEFAULT_SEARCH_REQ.page,
   };
 }
 
@@ -48,8 +61,8 @@ export function searchRequestToParams(req) {
   if (req.exclude_keywords.length) p.set("xkw", req.exclude_keywords.join(","));
   if (req.exclude_statutes.length) p.set("xst", encodeStatutes(req.exclude_statutes));
   if (req.case_types.length) p.set("ct", req.case_types.join(","));
-  if (req.doc_types?.length) p.set("dt", req.doc_types.join(","));
-  if (req.court_levels?.length) p.set("cl", req.court_levels.join(","));
+  if (req.doc_types.length) p.set("dt", req.doc_types.join(","));
+  if (req.court_levels.length) p.set("cl", req.court_levels.join(","));
   if (req.sort !== "relevance") p.set("sort", req.sort);
   if (req.page > 1) p.set("page", String(req.page));
   return p.toString();

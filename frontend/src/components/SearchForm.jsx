@@ -10,7 +10,7 @@ const CASE_TYPES = ["民事", "刑事", "行政"];
 //   onSearch(req): 提交搜尋時呼叫，傳入完整 SearchRequest 物件
 export default function SearchForm({ initialReq, onSearch }) {
   const [kwInput, setKwInput] = useState("");
-  const [keywords, setKeywords] = useState(initialReq.keywords || []);
+  const [keywords, setKeywords] = useState(initialReq.keywords);
   // macOS IME：compositionend 在 keydown 之前觸發，isComposing 已是 false，
   // 所以用 ref 記住「剛剛才結束組字」，在 setTimeout(0) 後清掉
   const kwComposingRef = useRef(false);
@@ -23,7 +23,7 @@ export default function SearchForm({ initialReq, onSearch }) {
   );
 
   const [xkwInput, setXkwInput] = useState("");
-  const [excludeKeywords, setExcludeKeywords] = useState(initialReq.exclude_keywords || []);
+  const [excludeKeywords, setExcludeKeywords] = useState(initialReq.exclude_keywords);
   const xkwComposingRef = useRef(false);
 
   const [excludeStatutes, setExcludeStatutes] = useState(
@@ -32,7 +32,7 @@ export default function SearchForm({ initialReq, onSearch }) {
       : []
   );
 
-  const [caseTypes, setCaseTypes] = useState(initialReq.case_types || []);
+  const [caseTypes, setCaseTypes] = useState(initialReq.case_types);
 
   // 新增一個空白法條輸入列
   function addStatute(setter) {
@@ -65,16 +65,13 @@ export default function SearchForm({ initialReq, onSearch }) {
     // 關鍵字和法條都是空的，不送出
     if (keywords.length === 0 && validStatutes.length === 0) return;
     onSearch({
+      ...initialReq,
       keywords,
       statutes: validStatutes,
       exclude_keywords: excludeKeywords,
       exclude_statutes: validExcludeStatutes,
       case_types: caseTypes,
-      doc_types: initialReq.doc_types || [],
-      court_levels: initialReq.court_levels || [],
-      sort: initialReq.sort,
       page: 1,
-      page_size: 20,
     });
   }
 
