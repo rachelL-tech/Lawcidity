@@ -1,7 +1,10 @@
+import hashlib
+import json
 import statistics
-from collections import deque, defaultdict
-from dataclasses import dataclass, field
+from collections import defaultdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 @dataclass
 class EmbedSpan:
@@ -9,7 +12,7 @@ class EmbedSpan:
     voyage_latency: float # ms
 
 @dataclass
-class KnnSpan:
+class AnnSpan:
     issue: str
     top_sim: float
     median_sim: float
@@ -33,36 +36,44 @@ class AggregationSpan:
 # したがって分離して記録。
 @dataclass
 class RetrievalTrace:
-    id: int
+    id: str
     raw_query: str
     created_at: str = ""
     gemini_latency: float | None = None # ms
     embed: EmbedSpan | None = None
-    knn: list[KnnSpan] = field(default_factory=list)
+    ann: list[AnnSpan] = field(default_factory=list)
     aggregation: list[AggregationSpan] = field(default_factory=list)
 
-query_id = 0
-_traces = deque(maxlen=100)
+# trace を jsonl に追記して永続化する（in-memory と違い reload / 再起動で消えない）。
+_TRACES_PATH = Path(__file__).resolve().parents[1] / "traces.jsonl"
+
 
 def new_trace(raw_query):
-    global query_id
-    query_id += 1
-    trace = RetrievalTrace(
-        id=query_id,
-        raw_query=raw_query,
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-    _traces.append(trace)
-    return trace
-    
-def get_recent(n):
-    return list(_traces)[-n:]
+    # id は created_at の hash：reload でカウンタがリセットされても衝突しない。
+    created_at = datetime.now(timezone.utc).isoformat()
+    trace_id = hashlib.md5(created_at.encode("utf-8")).hexdigest()[:8]
+    return RetrievalTrace(id=trace_id, raw_query=raw_query, created_at=created_at)
 
-def build_knn_span(issue, rows) -> KnnSpan:
+
+def persist_trace(trace: "RetrievalTrace") -> None:
+    """完成した trace を 1 行の JSON として jsonl に追記する。"""
+    with _TRACES_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(asdict(trace), ensure_ascii=False) + "\n")
+
+
+def get_recent(n):
+    """jsonl の末尾 n 件を dict のリストで返す。"""
+    if not _TRACES_PATH.exists():
+        return []
+    with _TRACES_PATH.open(encoding="utf-8") as f:
+        lines = f.readlines()
+    return [json.loads(line) for line in lines[-n:]]
+
+def build_ann_span(issue, rows) -> AnnSpan:
     sims = sorted(1 - float(r["distance"]) for r in rows)
     if not sims:
-        return KnnSpan(issue=issue, top_sim=0.0, median_sim=0.0, min_sim=0.0)
-    return KnnSpan(
+        return AnnSpan(issue=issue, top_sim=0.0, median_sim=0.0, min_sim=0.0)
+    return AnnSpan(
         issue=issue,
         top_sim=round(sims[-1], 4),
         median_sim=round(statistics.median(sims), 4),
@@ -85,6 +96,8 @@ def build_aggregation_span(issue, hits) -> AggregationSpan:
             "display": members[0]["display"],
             "chunk_count": len(members),
             "total_citation_count": members[0]["total_citation_count"],
+            # 該 target 被召回的每段 chunk_text（先放全文，驗證「同 target 文字是否相似」的假說）
+            "chunk_texts": [m["chunk_text"] for m in members],
         })
 
     targets.sort(key=lambda t: t["chunk_count"], reverse=True)

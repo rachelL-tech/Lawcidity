@@ -86,3 +86,8 @@ export function analyze(text) {
 export function analyzeGenerate(req) {
   return post("/analyze/generate", req);
 }
+
+// GET /api/debug/traces — 最近 n 筆 retrieval trace（observability，dev 用）
+export function fetchTraces(n = 20) {
+  return get(`/debug/traces?n=${n}`);
+}

@@ -48,7 +48,7 @@ from app.api.schemas import (
     IssueResult,
 )
 from app.rag_service import rag_search_fanout
-from app.retrieval_trace import new_trace
+from app.retrieval_trace import new_trace, persist_trace
 from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
 router = APIRouter(tags=["search"])
@@ -331,6 +331,8 @@ def analyze_generate(req: GenerateRequest):
                 retryable=False,
             ),
         )
+    finally:
+        persist_trace(trace)
 
     items = [
         IssueResult(
@@ -341,7 +343,7 @@ def analyze_generate(req: GenerateRequest):
                     root_norm=r["root_norm"],
                     display_title=r["display_title"],
                     sim=r["sim"],
-                    best_chunk_text=r["best_chunk_text"],
+                    chunk_text=r["chunk_text"],
                     targets=[
                         RagResultTarget(
                             id=t["id"],

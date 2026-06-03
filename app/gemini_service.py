@@ -159,7 +159,7 @@ def generate_analysis(
             display_title = r.get("display_title", "")
             root_norm = r.get("root_norm", "")
             decision_id = r.get("decision_id", "")
-            best_chunk = r.get("best_chunk_text", "")
+            best_chunk = r.get("chunk_text", "")
 
             source_line = f"[source decision_id={decision_id}] {root_norm} {display_title}"
             target_lines = [

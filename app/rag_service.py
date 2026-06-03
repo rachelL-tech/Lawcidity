@@ -3,7 +3,7 @@ RAG 語意搜尋 + decision 聚合。
 
 流程：
 1. Raw factual query → Voyage API embed
-2. IVFFlat ANN knn → top 50 chunks（純語意召回）
+2. IVFFlat ANN → top 50 chunks（純語意召回）
 3. chunk 計分（sim = 1 - cosine distance）→ 聚合到 decision → top N
 """
 
@@ -19,7 +19,7 @@ from app.retrieval_trace import (
     EmbedSpan,
     RetrievalTrace,
     build_aggregation_span,
-    build_knn_span,
+    build_ann_span,
 )
 
 VOYAGE_MODEL = "voyage-law-2"
@@ -68,7 +68,7 @@ CHUNK_SELECT = """
 """
 
 
-def _knn(
+def _ann(
     conn: psycopg.Connection, vec_str: str,
     *, limit: int = 50,
 ) -> list[dict]:
@@ -85,21 +85,21 @@ def _knn(
             LIMIT %s
         """, (vec_str, vec_str, limit)).fetchall()
     except Exception as exc:
-        raise RuntimeError("pgvector KNN 查詢失敗") from exc
+        raise RuntimeError("pgvector ANN 查詢失敗") from exc
 
 
 # ── 聚合 ─────────────────────────────────────────────────────────────
 
 def _aggregate(
-    knn_rows: list[dict],
+    ann_rows: list[dict],
     *, result_limit: int,
 ) -> list[dict]:
-    for c in knn_rows:
+    for c in ann_rows:
         c["sim"] = 1 - float(c["distance"])
 
     # chunk-base：以 chunk_text 為單位分組（同文字必同分）
     by_text: dict[str, list[dict]] = defaultdict(list)
-    for c in knn_rows:
+    for c in ann_rows:
         text_hash = hashlib.md5(c["chunk_text"].encode("utf-8")).hexdigest()
         by_text[text_hash].append(c)
 
@@ -128,7 +128,7 @@ def _aggregate(
             "display_title": primary["display_title"],
             "doc_type": primary["doc_type"],
             "sim": primary["sim"],
-            "best_chunk_text": primary["chunk_text"],
+            "chunk_text": primary["chunk_text"],
             "target_ids": sorted(set(primary.get("target_ids") or [])),
             "target_authority_ids": sorted(set(primary.get("target_authority_ids") or [])),
             "other_sources": other_sources,
@@ -157,8 +157,8 @@ def rag_search_fanout(
 
     results = {}
     for i, value in enumerate(vec_str):
-        raw_chunks = _knn(conn, value, limit=result_limit_per_issue * 5)
-        trace.knn.append(build_knn_span(issues[i], raw_chunks))
+        raw_chunks = _ann(conn, value, limit=result_limit_per_issue * 5)
+        trace.ann.append(build_ann_span(issues[i], raw_chunks))
 
         results_per_issue = _aggregate(raw_chunks, result_limit=result_limit_per_issue)
 
@@ -202,14 +202,16 @@ def rag_search_fanout(
                     item_targets.append(info)
                     hits.append({"type": "decision", "id": tid,
                                 "display": info["display_title"],
-                                "total_citation_count": info["total_citation_count"]})
+                                "total_citation_count": info["total_citation_count"],
+                                "chunk_text": item["chunk_text"]})
             for aid in item["target_authority_ids"]:
                 info = auth_info.get(aid)
                 if info:
                     item_targets.append(info)
                     hits.append({"type": "authority", "id": aid,
                                 "display": info["display_title"],
-                                "total_citation_count": info["total_citation_count"]})
+                                "total_citation_count": info["total_citation_count"],
+                                "chunk_text": item["chunk_text"]})
             item["targets"] = item_targets
         trace.aggregation.append(build_aggregation_span(issue, hits))
 

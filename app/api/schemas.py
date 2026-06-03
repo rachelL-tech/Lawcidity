@@ -170,7 +170,7 @@ class RagResultItem(BaseModel):
     root_norm: str
     display_title: str
     sim: float
-    best_chunk_text: str
+    chunk_text: str
     targets: list[RagResultTarget]
     other_sources_count: int = 0
 

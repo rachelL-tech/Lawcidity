@@ -164,16 +164,14 @@ export default function AiResultsPage() {
 
           {/* 觀測：retrieval trace */}
           <div className="pt-3 border-t border-brand-border">
-            <a
-              href="/api/debug/traces/ui"
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              to="/traces"
               className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-brand transition-colors"
             >
               <span>🔍</span>
               <span>檢視 retrieval trace</span>
-              <span aria-hidden="true">↗</span>
-            </a>
+              <span aria-hidden="true">→</span>
+            </Link>
           </div>
         </div>
       </aside>
@@ -472,7 +470,7 @@ function RagSourceCard({ item }) {
       {expanded && (
         <div className="mt-2 pt-2 border-t border-gray-100">
           <p className="text-xs text-gray-600 leading-6 whitespace-pre-wrap line-clamp-10">
-            {item.best_chunk_text}
+            {item.chunk_text}
           </p>
           {item.targets?.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
