@@ -254,7 +254,7 @@ def _aggregate_targets_at_msm(
 
             for bucket in buckets:
                 target_uid = (bucket.get("key") or {}).get("target_uid")
-                if not isinstance(target_uid, str) or not target_uid:
+                if not target_uid:
                     continue
 
                 # 如果 key(target_uid) 已經存在，就拿原本的 value；如果 key 不存在，就先建立一個預設 value，再回傳它
@@ -278,8 +278,6 @@ def _aggregate_targets_at_msm(
                         continue
                     row["preview_source_ids"].append(sid)
                     existing.add(sid)
-                    if len(row["preview_source_ids"]) >= 5:
-                        break
 
             after_key = agg.get("after_key")
             # 沒有 after_key 時，代表這個 source_id_chunk 的 target buckets 都取完了，跳出 while，換下一個 source chunk

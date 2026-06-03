@@ -17,7 +17,6 @@ import argparse
 import os
 import statistics
 import sys
-from collections import defaultdict
 from typing import Any
 
 from dotenv import load_dotenv
