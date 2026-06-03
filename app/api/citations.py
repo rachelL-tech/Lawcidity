@@ -34,7 +34,7 @@ from app.api.schemas import (
     CitationSource,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["citations"])
 
 
 def _simplify_court(unit_norm: str) -> str:

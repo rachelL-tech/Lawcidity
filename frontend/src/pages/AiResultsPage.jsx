@@ -161,6 +161,20 @@ export default function AiResultsPage() {
               </div>
             </div>
           )}
+
+          {/* 觀測：retrieval trace */}
+          <div className="pt-3 border-t border-brand-border">
+            <a
+              href="/api/debug/traces/ui"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-brand transition-colors"
+            >
+              <span>🔍</span>
+              <span>檢視 retrieval trace</span>
+              <span aria-hidden="true">↗</span>
+            </a>
+          </div>
         </div>
       </aside>
 

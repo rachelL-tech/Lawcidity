@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.db import get_conn
 
-router = APIRouter()
+router = APIRouter(tags=["common"])
 
 
 @router.get("/health")

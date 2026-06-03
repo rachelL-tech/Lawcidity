@@ -4,7 +4,7 @@ from psycopg.rows import dict_row
 from app.api.schemas import DecisionDetail, DecisionStatute
 from app.db import get_conn
 
-router = APIRouter()
+router = APIRouter(tags=["decisions"])
 
 
 def _fmt_case_ref(jyear, jcase_norm, jno):

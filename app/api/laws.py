@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from etl.law_names import LAW_ALIASES, LAW_NAMES
 
-router = APIRouter()
+router = APIRouter(tags=["laws"])
 
 # 建一份「簡稱 → 全名」查找表，autocomplete 時簡稱也能命中
 _ALIAS_TO_CANONICAL = {alias: full for alias, full in LAW_ALIASES.items()}

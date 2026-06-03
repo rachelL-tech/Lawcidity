@@ -9,10 +9,18 @@ RAG 語意搜尋 + decision 聚合。
 
 import hashlib
 import os
+import time
 from collections import defaultdict
 
 import numpy as np
 import psycopg
+
+from app.retrieval_trace import (
+    EmbedSpan,
+    RetrievalTrace,
+    build_aggregation_span,
+    build_knn_span,
+)
 
 VOYAGE_MODEL = "voyage-law-2"
 IVFFLAT_PROBES = 3  # lists=100 下 p=3 recall≈0.90（knee）；prod 1GB 延遲預算內
@@ -135,15 +143,22 @@ def _aggregate(
 def rag_search_fanout(
     conn,
     issues: list[str],
+    trace: RetrievalTrace,
     *,
     result_limit_per_issue: int,
 ):
+    t0 = time.perf_counter()
     vec = embed_query(issues)
+    t1 = time.perf_counter()
+    voyage_ms = round((t1 - t0) * 1000, 1)
+    trace.embed = EmbedSpan(selected_issues=issues, voyage_latency=voyage_ms)
+
     vec_str = [_vec_to_pg(v) for v in vec]
 
     results = {}
     for i, value in enumerate(vec_str):
         raw_chunks = _knn(conn, value, limit=result_limit_per_issue * 5)
+        trace.knn.append(build_knn_span(issues[i], raw_chunks))
 
         results_per_issue = _aggregate(raw_chunks, result_limit=result_limit_per_issue)
 
@@ -177,13 +192,25 @@ def rag_search_fanout(
     except Exception as exc:
         raise RuntimeError("RAG target metadata 查詢失敗") from exc
 
-    for items in results.values():
+    for issue, items in results.items():
+        hits = []
         for item in items:
-            targets = [
-                decision_info[tid] for tid in item.get("target_ids", []) if tid in decision_info
-            ] + [
-                auth_info[aid] for aid in item.get("target_authority_ids", []) if aid in auth_info
-            ]
-            item["targets"] = targets
+            item_targets = []
+            for tid in item["target_ids"]:
+                info = decision_info.get(tid)
+                if info:
+                    item_targets.append(info)
+                    hits.append({"type": "decision", "id": tid,
+                                "display": info["display_title"],
+                                "total_citation_count": info["total_citation_count"]})
+            for aid in item["target_authority_ids"]:
+                info = auth_info.get(aid)
+                if info:
+                    item_targets.append(info)
+                    hits.append({"type": "authority", "id": aid,
+                                "display": info["display_title"],
+                                "total_citation_count": info["total_citation_count"]})
+            item["targets"] = item_targets
+        trace.aggregation.append(build_aggregation_span(issue, hits))
 
     return results

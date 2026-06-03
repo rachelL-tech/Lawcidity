@@ -11,6 +11,7 @@
 
 不包含 citation 明細，前端展開 target 時另打 citations.py 的 endpoint。
 """
+import time
 from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException
@@ -47,9 +48,10 @@ from app.api.schemas import (
     IssueResult,
 )
 from app.rag_service import rag_search_fanout
+from app.retrieval_trace import new_trace
 from app.gemini_service import extract_issues_and_statutes, generate_analysis
 
-router = APIRouter()
+router = APIRouter(tags=["search"])
 
 
 @dataclass
@@ -279,11 +281,14 @@ def analyze_generate(req: GenerateRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不可為空")
 
+    trace = new_trace(req.query)
+
     with get_conn() as conn:
         try:
             rag_results = rag_search_fanout(
                 conn,
                 req.issues,
+                trace,
                 result_limit_per_issue=req.result_limit_per_issue,
             )
         except RuntimeError as e:
@@ -308,12 +313,14 @@ def analyze_generate(req: GenerateRequest):
             )
 
     try:
+        t0 = time.perf_counter()
         analysis_text = generate_analysis(
             query=req.query,
             issues=req.issues,
             statutes=[{"law": s.law, "article": s.article} for s in req.statutes],
             rag_results=rag_results,
         )
+        trace.gemini_latency = round((time.perf_counter() - t0) * 1000, 1)
     except Exception as e:
         raise HTTPException(
             status_code=502,
