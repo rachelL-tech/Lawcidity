@@ -21,6 +21,11 @@ function fmtMs(v) {
   return v == null ? "—" : `${v} ms`;
 }
 
+// created_at 是 UTC，顯示時轉成台灣時間
+function fmtTime(iso) {
+  return new Date(iso).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+}
+
 function sumChunks(targets) {
   return targets.reduce((acc, t) => acc + t.chunk_count, 0);
 }
@@ -132,7 +137,7 @@ function TraceCard({ trace }) {
       <div className={`${C.head} px-3.5 py-2.5 flex flex-wrap gap-3.5 items-baseline`}>
         <span className={`${C.qid} font-bold`}>#{trace.id}</span>
         <span className="font-bold">{trace.raw_query}</span>
-        <Pill>{trace.created_at}</Pill>
+        <Pill>{fmtTime(trace.created_at)}</Pill>
         <Pill>gemini {fmtMs(trace.gemini_latency)}</Pill>
       </div>
       <div className="px-3.5 pb-3.5 pt-1.5">

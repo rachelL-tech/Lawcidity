@@ -283,85 +283,87 @@ def analyze_generate(req: GenerateRequest):
 
     trace = new_trace(req.query)
 
-    with get_conn() as conn:
+    # 外層 try/finally：embed/ann 階段就掛掉也要記下這筆 trace（觀測失敗案例）
+    try:
+        with get_conn() as conn:
+            try:
+                rag_results = rag_search_fanout(
+                    conn,
+                    req.issues,
+                    trace,
+                    result_limit_per_issue=req.result_limit_per_issue,
+                )
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=_error_detail(
+                        "rag_retrieval",
+                        e,
+                        fallback_message="語意檢索服務暫時無法連線，請稍後再試",
+                        retryable=True,
+                    ),
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail=_error_detail(
+                        "rag_retrieval",
+                        e,
+                        fallback_message="語意檢索暫時無法完成，請稍後再試",
+                        retryable=False,
+                    ),
+                )
+
         try:
-            rag_results = rag_search_fanout(
-                conn,
-                req.issues,
-                trace,
-                result_limit_per_issue=req.result_limit_per_issue,
+            t0 = time.perf_counter()
+            analysis_text = generate_analysis(
+                query=req.query,
+                issues=req.issues,
+                statutes=[{"law": s.law, "article": s.article} for s in req.statutes],
+                rag_results=rag_results,
             )
-        except RuntimeError as e:
-            raise HTTPException(
-                status_code=503,
-                detail=_error_detail(
-                    "rag_retrieval",
-                    e,
-                    fallback_message="語意檢索服務暫時無法連線，請稍後再試",
-                    retryable=True,
-                ),
-            )
+            trace.gemini_latency = round((time.perf_counter() - t0) * 1000, 1)
         except Exception as e:
             raise HTTPException(
                 status_code=502,
                 detail=_error_detail(
-                    "rag_retrieval",
+                    "gemini_generate",
                     e,
-                    fallback_message="語意檢索暫時無法完成，請稍後再試",
+                    fallback_message="AI 暫時無法生成回覆，請稍後再試",
                     retryable=False,
                 ),
             )
 
-    try:
-        t0 = time.perf_counter()
-        analysis_text = generate_analysis(
-            query=req.query,
-            issues=req.issues,
-            statutes=[{"law": s.law, "article": s.article} for s in req.statutes],
-            rag_results=rag_results,
-        )
-        trace.gemini_latency = round((time.perf_counter() - t0) * 1000, 1)
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=_error_detail(
-                "gemini_generate",
-                e,
-                fallback_message="AI 暫時無法生成回覆，請稍後再試",
-                retryable=False,
-            ),
-        )
+        items = [
+            IssueResult(
+                issue=issue,
+                chunks=[
+                    RagResultItem(
+                        decision_id=r["decision_id"],
+                        root_norm=r["root_norm"],
+                        display_title=r["display_title"],
+                        sim=r["sim"],
+                        chunk_text=r["chunk_text"],
+                        targets=[
+                            RagResultTarget(
+                                id=t["id"],
+                                display_title=t["display_title"],
+                                root_norm=t["root_norm"],
+                                total_citation_count=t["total_citation_count"],
+                            )
+                            for t in r["targets"]
+                        ],
+                        other_sources_count=len(r.get("other_sources", [])),
+                    )
+                    for r in chunks
+                ],
+            )
+            for issue, chunks in rag_results.items()
+        ]
+
+        return GenerateResponse(analysis=analysis_text, rag_results=items)
     finally:
         persist_trace(trace)
-
-    items = [
-        IssueResult(
-            issue=issue,
-            chunks=[
-                RagResultItem(
-                    decision_id=r["decision_id"],
-                    root_norm=r["root_norm"],
-                    display_title=r["display_title"],
-                    sim=r["sim"],
-                    chunk_text=r["chunk_text"],
-                    targets=[
-                        RagResultTarget(
-                            id=t["id"],
-                            display_title=t["display_title"],
-                            root_norm=t["root_norm"],
-                            total_citation_count=t["total_citation_count"],
-                        )
-                        for t in r["targets"]
-                    ],
-                    other_sources_count=len(r.get("other_sources", [])),
-                )
-                for r in chunks
-            ],
-        )
-        for issue, chunks in rag_results.items()
-    ]
-
-    return GenerateResponse(analysis=analysis_text, rag_results=items)
 
 
 @router.post("/search/rerank", response_model=SearchResponse)
