@@ -4,7 +4,8 @@
 
   (1) batch size 固定 64
   (2) text dedup：相同 chunk_text 只 embed 一次，UPDATE 套用所有相同 row
-      - 以 md5(chunk_text) 為 dedup key 與 checkpoint key
+      - 以 md5(chunk_text) 為 dedup key
+  (3) 續跑：靠 embedding IS NULL 判斷未完成的列，重跑自動補；失敗列留 NULL 待下次
 
 注意：DB schema 須為 vector(1024)，執行前請先跑 sql/003_voyage_migration.sql。
 
@@ -14,7 +15,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -29,8 +29,12 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 DIMS = 1024
 VOYAGE_MODEL = "voyage-law-2"
-EMBED_BATCH_SIZE = 64
-CHECKPOINT_FILE = Path("scripts/embed_and_index_checkpoint.json")
+EMBED_BATCH_SIZE = 64  # 目前以「固定筆數」切批
+# TODO(未來優化): 改成用「token 數累積」切批。
+#   現況用固定 64 筆，最壞情況 64×2000 字可能逼近 voyage-law-2 單次請求的
+#   總 token 上限(約 120K)，那一批會被 API 拒絕。
+#   之後可用 voyageai 的 count_tokens 邊累加，到 token 預算上限或 64 筆
+#   (先到者)才送出 —— 更穩、又能把每批塞滿以減少 API 往返。
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────
@@ -43,11 +47,11 @@ def get_db_conn():
     return psycopg.connect(db_url, row_factory=dict_row)
 
 
-def fetch_unique_texts(conn, *, month=None, after_hash=None):
+def fetch_unique_texts(conn, *, month=None):
     """
     以 md5(chunk_text) 去重：相同文字只回傳一次。
-    after_hash = md5 hex string — checkpoint 續跑用。
     month = 'YYYY-MM' — 只處理該月份判決的 chunks。
+    未完成的列由 embedding IS NULL 判斷，因此重跑會自動補上失敗/未做的列。
     """
     where = ["cc.embedding IS NULL"]
     params: dict = {}
@@ -67,10 +71,6 @@ def fetch_unique_texts(conn, *, month=None, after_hash=None):
         params["date_from"] = date_from
         params["date_to"] = date_to
 
-    if after_hash:
-        where.append("md5(cc.chunk_text) > %(after_hash)s")
-        params["after_hash"] = after_hash
-
     where_sql = "WHERE " + " AND ".join(where)
 
     sql = f"""
@@ -84,25 +84,6 @@ def fetch_unique_texts(conn, *, month=None, after_hash=None):
         ORDER BY text_hash
     """
     return conn.execute(sql, params)
-
-
-# ── Checkpoint ─────────────────────────────────────────────────────────────
-
-def load_checkpoint() -> str | None:
-    if CHECKPOINT_FILE.exists():
-        data = json.loads(CHECKPOINT_FILE.read_text())
-        return data.get("text_hash")
-    return None
-
-
-def save_checkpoint(text_hash: str):
-    CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CHECKPOINT_FILE.write_text(json.dumps({"text_hash": text_hash}))
-
-
-def clear_checkpoint():
-    if CHECKPOINT_FILE.exists():
-        CHECKPOINT_FILE.unlink()
 
 
 # ── Embedding ──────────────────────────────────────────────────────────────
@@ -123,7 +104,12 @@ def load_voyage_client():
 
 
 def embed_batch(client, texts: list[str]) -> np.ndarray:
-    result = client.embed(texts, model=VOYAGE_MODEL)
+    # truncation=True 寫死（不靠 SDK 預設值，讓行為明確）。
+    # 風險：單筆超過模型 context 上限（voyage-law-2 約 16K tokens）時，voyage server
+    #      會自動「截斷後再 embed」——不報錯，但被切掉的尾段不會進向量，屬於
+    #      「默默的資料損失」。目前 chunk 上限 2000 字遠小於 16K，正常不會觸發；
+    #      未來若放大 chunk 或換模型，需重新評估此風險。
+    result = client.embed(texts, model=VOYAGE_MODEL, truncation=True)
     # 目前固定用 pgvector cosine distance，而 Voyage embeddings 也已是 unit-normalized，因此不需額外做 normalization。若未來要整批重跑 document embeddings，可考慮在 embed API 補上 input_type="document"。
     return np.array(result.embeddings, dtype=np.float32)
 
@@ -160,7 +146,6 @@ def flush_batch(conn, client, buf: list[dict]) -> int:
         conn.rollback()
         raise RuntimeError(f"update failed — {e}") from e
 
-    save_checkpoint(buf[-1]["text_hash"])
     return len(buf)
 
 
@@ -175,10 +160,6 @@ def main():
     args = parser.parse_args()
 
     conn = get_db_conn()
-
-    after_hash = load_checkpoint()
-    if after_hash:
-        print(f"Resuming from checkpoint: text_hash > {after_hash[:8]}...")
 
     count_join = ""
     count_where = "WHERE cc.embedding IS NULL"
@@ -200,9 +181,7 @@ def main():
 
     client = load_voyage_client()
 
-    cursor = fetch_unique_texts(
-        conn, month=args.month, after_hash=after_hash
-    )
+    cursor = fetch_unique_texts(conn, month=args.month)
 
     t0 = time.time()
     total_embedded = 0
@@ -241,10 +220,14 @@ def main():
     print(f"Unique texts embedded: {total_embedded}, Errors: {errors}")
     if elapsed > 0:
         print(f"Time: {elapsed:.1f}s ({total_embedded/elapsed:.1f} texts/s)")
-    if not errors:
-        # 把 checkpoint 清掉，讓下次重新從頭掃 pending rows
-        clear_checkpoint()
-        print("\n下一步：執行 HNSW index（見 sql/003_voyage_migration.sql）")
+    if errors:
+        # 失敗的列 embedding 仍為 NULL，下次重跑會靠 embedding IS NULL 自動重撈。
+        # 注意：相同批次很可能再次失敗，需從根本調小 batch 或加入拆批重試。
+        print(f"\n⚠️ {errors} 筆未完成（embedding 仍為 NULL），下次重跑會自動重試。",
+              file=sys.stderr)
+        sys.exit(1)
+
+    print("\n下一步：執行 HNSW index（見 sql/003_voyage_migration.sql）")
 
 
 if __name__ == "__main__":
