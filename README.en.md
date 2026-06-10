@@ -454,8 +454,8 @@ Users begin by describing their legal problem in natural language. Gemini first 
 - **Query understanding**  
   The user's input is structured into explicit legal issues and statute conditions, which then serve as structured input for downstream analysis.
 
-- **R — Retrieval**  
-  The user's query is converted into an embedding, the most semantically similar citation-anchored chunks are retrieved from pgvector, and the results are aggregated at the decision level.
+- **R — Retrieval (per-issue fan-out)**  
+  Each confirmed issue is converted into its own embedding; the most semantically similar citation-anchored chunks are retrieved from pgvector per issue, then aggregated and returned grouped by issue.
 
 - **A — Augmentation**  
   The retrieved chunks, source decision metadata, and related target references are packaged into the prompt as context for downstream analysis.
@@ -463,11 +463,14 @@ Users begin by describing their legal problem in natural language. Gemini first 
 - **G — Generation**  
   Gemini generates issue-by-issue analysis grounded in the court decisions returned by retrieval.
 
-### Retrieval
-- Convert the query into an embedding through the Voyage API (`voyage-law-2`)
-- Run approximate search through PostgreSQL / pgvector with an IVFFlat index
-- Return the top 50 most similar chunks by cosine similarity
-- Aggregate the results at the decision level, using the highest-scoring chunk to represent the decision's score
+### Retrieval (per-issue fan-out)
+
+Each confirmed issue is sent through retrieval on its own, rather than compressing the whole input into a single vector, so that generation can ground each issue in its own decisions.
+
+- Embed each issue separately through the Voyage API (`voyage-law-2`)
+- Run approximate search per issue through PostgreSQL / pgvector with an IVFFlat index, ranking recalled chunks by semantic similarity
+- The same citation passage is often reused verbatim across decisions, so identical content is kept once, with the highest-court decision as its representative
+- Take the top few per issue and return the results grouped by issue
 
 ### Chunk Design
 
@@ -521,9 +524,22 @@ Although its `Recall@5` is slightly lower than some other models, it creates a c
 
 ---
 
+### 4. Observability: Retrieval trace
+
+RAG spans three external or heavy stages — embedding, vector recall, and Gemini generation — and when any of them slows down or recall degrades, it should not come down to guesswork. So every RAG request records one trace, persisted and browsable from a dedicated frontend page.
+
+Each trace captures three stages:
+- **embedding**: the selected issues and the embedding latency
+- **vector recall**: the per-issue similarity distribution (top / median / min), used to judge whether recall quality is healthy
+- **aggregation**: the per-issue distribution of prior decisions and how concentrated it is, used to see whether retrieval really converges on a few prior decisions
+
+The trace is recorded even if the embedding or recall stage fails, so failure cases stay easy to diagnose afterward.
+
+---
+
 ## Development Journey
 
-This project was built over seven weeks of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
+This project was built across eight phases of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
 
 | Phase | Time | Main work |
 |---|---|---|
@@ -534,6 +550,7 @@ This project was built over seven weeks of iterative development, starting from 
 | **5. Semantic search and RAG** | Mar 22-27 | Ran multiple rounds of embedding evaluation, designed citation-anchored chunks, and integrated pgvector retrieval with Gemini-based analysis |
 | **6. Optimization and deployment** | Mar 26-30 | Completed chunk deduplication, production HTTPS deployment, and baseline performance tuning |
 | **7. Search and retrieval optimization** | Apr 7-19 | Built `source_target_windows_v2`, introduced step-down MSM recall, and reduced post-search interaction latency through caching |
+| **8. RAG hardening and observability** | May 14-Jun 6 | Collapsed the chunk structure and switched RAG to per-issue fan-out retrieval, tuned the vector recall parameters, and added the retrieval-trace observability layer, retries and a readiness check for external calls, and GitHub Actions CI/CD |
 
 ---
 
@@ -541,5 +558,4 @@ This project was built over seven weeks of iterative development, starting from 
 
 - Redesign chunk boundaries with LLM-assisted segmentation, so chunks can be separated more cleanly by context: factual narratives, party arguments, and the court's own legal reasoning
 - Test whether rewriting user queries into terminology used in legal practice can improve retrieval recall and relevance
-- Add timeout and retry controls around LLM calls to improve the stability of the overall retrieval pipeline
-- Strengthen logging and tracing so bottlenecks or failure points at each stage of the RAG pipeline are easier to identify
+- Extend the retrieval trace from a local file into a queryable observability backend, and link the issue-extraction and analysis-generation requests so the full user flow becomes visible

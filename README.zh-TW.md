@@ -452,8 +452,8 @@ Target ranking 主要依據兩個訊號：
   - **Query understanding**
     先將使用者輸入整理成較明確的法律爭點與法條條件，作為後續生成分析的結構化輸入。
 
-  - **R — Retrieval**
-    將使用者 query 轉成 embedding，從 pgvector 召回語意最相近的 citation-anchored chunks，並彙總到判決層級。
+  - **R — Retrieval（逐爭點 fan-out）**
+    對確認後的每個爭點各自轉成 embedding，逐爭點從 pgvector 召回語意最相近的 citation-anchored chunks，再聚合後依爭點分組回傳。
 
   - **A — Augmentation**
     將召回的 chunks、source 判決資訊與相關 target references 一起組裝進 prompt，作為後續生成分析的上下文。
@@ -461,11 +461,14 @@ Target ranking 主要依據兩個訊號：
   - **G — Generation**
     Gemini 根據檢索結果生成爭點分析，並附上對應的真實判決依據。
 
-### 檢索
-- 先透過 Voyage API（`voyage-law-2`）將 query 轉成 embedding
-- 再使用 PostgreSQL / pgvector 的 IVFFlat index 做近似搜尋
-- 召回依餘弦相似度排序、回傳最相似的前 50 個 chunks
-- 最後再彙總到判決層級，以最高分 chunk 代表該判決的分數
+### 檢索（逐爭點 fan-out）
+
+使用者確認的每個爭點各自送進檢索，而不是把整段輸入壓成單一向量，這樣生成階段才能逐爭點對應到各自的判決依據。
+
+- 用 Voyage API（`voyage-law-2`）把每個爭點各自轉成 embedding
+- 對每個爭點，用 PostgreSQL / pgvector 的 IVFFlat index 做近似搜尋，依語意相似度排序召回 chunks
+- 同一段引用片段常被不同判決逐字沿用，因此相同內容只保留一筆，並挑審級最高的判決作為代表
+- 每個爭點各取前幾筆，最後依爭點分組回傳
 
 ### Chunk 設計
 
@@ -519,9 +522,22 @@ Target ranking 主要依據兩個訊號：
 
 ---
 
+### 4. 觀測性：Retrieval trace
+
+RAG 牽涉 embedding、向量召回、Gemini 生成三個外部或重運算階段，任何一段變慢、召回變差都不該只能用猜的。因此每個 RAG 請求都會記下一條 trace，永續保存並可在前端專頁瀏覽。
+
+每條 trace 涵蓋三個階段：
+- **embedding**：選定的爭點與 embedding 延遲
+- **向量召回**：逐爭點的相似度分佈（最高 / 中位 / 最低），用來看召回品質是否健康
+- **聚合**：逐爭點召回後的前案分佈與集中度，用來看是否真的收斂到少數前案
+
+即使在 embedding 或召回階段就失敗，trace 仍會留下記錄，方便回頭診斷失敗案例。
+
+---
+
 ## 開發歷程
 
-七週迭代開發，從司法院原始 JSON 資料出發，逐步做成可實際使用的搜尋產品。
+歷經八個階段的迭代開發，從司法院原始 JSON 資料出發，逐步做成可實際使用的搜尋產品。
 
 | 階段 | 時間 | 主要工作 |
 |---|---|---|
@@ -532,6 +548,7 @@ Target ranking 主要依據兩個訊號：
 | **5. 語意搜尋與 RAG** | 3月22–27日 | 進行多輪 embedding 評估，設計以 citation 為錨點的 chunks，並整合 pgvector 語意檢索與 Gemini AI 分析 |
 | **6. 優化與部署** | 3月26–30日 | 完成 chunk 去重、正式環境 HTTPS 部署與基礎效能調整 |
 | **7. 搜尋與檢索優化** | 4月7–19日 | 建立 `source_target_windows_v2` 索引，導入逐步下調的 MSM 梯度召回，並透過快取降低後續查詢延遲 |
+| **8. RAG 強化與觀測性** | 5月14日–6月6日 | 收斂 chunk 結構並改為逐爭點 fan-out 檢索，調校向量召回參數，並補上 retrieval trace 觀測層、對外呼叫的重試與就緒檢查，以及 GitHub Actions CI/CD |
 
 ---
 
@@ -539,5 +556,4 @@ Target ranking 主要依據兩個訊號：
 
 - 重新設計 chunk 邊界，評估 LLM 輔助切割，並依事實敘述、當事人主張與法院法律見解等脈絡，更明確地切分 chunks
 - 驗證將使用者 query 改寫成法律實務中使用的用語後，是否能提升檢索召回率與結果相關性
-- 為 LLM 呼叫補上 timeout 與 retry 控制，提升整體檢索 pipeline 的穩定性
-- 強化 logging 與 tracing，讓 RAG 各階段的瓶頸或失敗點更容易被追蹤與診斷
+- 把 retrieval trace 從本地檔案升級為可查詢的觀測後端，並串接「爭點抽取」與「分析生成」兩段請求，呈現完整使用者流程
