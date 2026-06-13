@@ -68,6 +68,7 @@ EXTRACT_PROMPT = """\
 """
 
 
+@observe(as_type="generation")
 def extract_issues_and_statutes(text: str) -> dict:
     """
     呼叫 Gemini 提取爭點和法條。

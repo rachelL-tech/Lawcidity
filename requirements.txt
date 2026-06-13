@@ -8,3 +8,4 @@ numpy
 voyageai
 google-genai
 pytest>=9.0.0
+langfuse==4.7.1
