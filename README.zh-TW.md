@@ -535,6 +535,18 @@ RAG 牽涉 embedding、向量召回、Gemini 生成三個外部或重運算階�
 
 ---
 
+### 5. 可靠性：對外呼叫的 timeout 與 retry
+
+RAG 一條請求同步依賴資料庫、Voyage、Gemini 三個對外呼叫；任一個卡住都不該佔住 worker、拖垮整個服務。因此三者都設了 timeout 與 retry——timeout 是 retry 的前提：呼叫若卡住不回應，沒有 timeout 就永遠等不到下一次重試。
+
+| 對外呼叫 | timeout | retry |
+|---|---|---|
+| 資料庫連線 | 5s | 3 次 |
+| Gemini | 60s | SDK 原生退避（只對逾時／429／5xx） |
+| Voyage embedding | 15s | SDK 原生退避（只對逾時／429／5xx） |
+
+---
+
 ## 開發歷程
 
 歷經八個階段的迭代開發，從司法院原始 JSON 資料出發，逐步做成可實際使用的搜尋產品。

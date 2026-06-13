@@ -6,9 +6,10 @@ Gemini 爭點/法條提取 + RAG 全文分析。
 
 import json
 import os
-import time
 
 from google import genai
+from google.genai import types
+from langfuse import observe
 
 _client = None
 
@@ -19,20 +20,25 @@ def _get_client():
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY 未設定")
-        _client = genai.Client(api_key=api_key)
+        # timeout：每次 HTTP 呼叫 60s 上限，卡住的呼叫不會無限佔住 worker。
+        # retry_options：SDK 原生退避重試，只對 408/429/5xx 等可重試狀態碼生效。
+        _client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=60_000,  # ms
+                retry_options=types.HttpRetryOptions(attempts=3),
+            ),
+        )
     return _client
 
 
-def _generate_content_with_retry(client, *, error_message: str, **kwargs):
-    for attempt in range(2):
-        try:
-            return client.models.generate_content(**kwargs)
-        except Exception as exc:
-            if attempt == 1:
-                raise RuntimeError(error_message) from exc
-            time.sleep(0.5)
-
-    raise RuntimeError(error_message)
+def _generate_content(client, *, error_message: str, **kwargs):
+    # retry 與 timeout 由 SDK 的 http_options 處理（見 _get_client）；
+    # 這層只把 SDK 例外轉成帶友善訊息的 RuntimeError，讓上層 API 統一處理。
+    try:
+        return client.models.generate_content(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(error_message) from exc
 
 
 # ── 爭點 / 法條提取 ──────────────────────────────────────────────────
@@ -70,7 +76,7 @@ def extract_issues_and_statutes(text: str) -> dict:
         {"issues": [...], "statutes": [{"law": ..., "article": ...}, ...]}
     """
     client = _get_client()
-    response = _generate_content_with_retry(
+    response = _generate_content(
         client,
         error_message="Gemini 分析 API 呼叫失敗",
         model="gemini-3.1-flash-lite",
@@ -134,6 +140,7 @@ ANALYZE_PROMPT = """\
 """
 
 
+@observe(as_type="generation")
 def generate_analysis(
     query: str,
     issues: list[str],
@@ -184,7 +191,7 @@ def generate_analysis(
     ) if statutes else "（未指定）"
 
     client = _get_client()
-    response = _generate_content_with_retry(
+    response = _generate_content(
         client,
         error_message="Gemini 生成 API 呼叫失敗",
         model="gemini-3.1-flash-lite",

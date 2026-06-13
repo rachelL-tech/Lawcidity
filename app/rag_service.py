@@ -38,7 +38,8 @@ def _get_voyage_client():
         api_key = os.environ.get("VOYAGE_API_KEY")
         if not api_key:
             raise RuntimeError("VOYAGE_API_KEY 未設定")
-        _voyage_client = voyageai.Client(api_key=api_key)
+        # max_retries：Voyage SDK 內建指數退避重試；timeout：單次呼叫 15s 上限。
+        _voyage_client = voyageai.Client(api_key=api_key, max_retries=2, timeout=15.0)
     return _voyage_client
 
 

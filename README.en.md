@@ -537,6 +537,18 @@ The trace is recorded even if the embedding or recall stage fails, so failure ca
 
 ---
 
+### 5. Reliability: timeouts and retries on external calls
+
+A single RAG request synchronously depends on three external calls — the database, Voyage, and Gemini — and none of them should be able to hang, hold a worker, and drag the whole service down. So all three have a timeout and a retry. The timeout is the precondition for the retry: if a call hangs without responding, then without a timeout you never reach the next retry.
+
+| External call | timeout | retry |
+|---|---|---|
+| Database connection | 5s | 3 attempts |
+| Gemini | 60s | SDK-native backoff (timeouts / 429 / 5xx only) |
+| Voyage embedding | 15s | SDK-native backoff (timeouts / 429 / 5xx only) |
+
+---
+
 ## Development Journey
 
 This project was built across eight phases of iterative development, starting from raw Judicial Yuan JSON and gradually turning it into a usable search product.
