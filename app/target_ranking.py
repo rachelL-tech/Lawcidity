@@ -12,7 +12,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from app.opensearch_service import search_target_rankings_step_down
+from app.search_backend import search_target_rankings_step_down
 
 
 SOURCE_TARGET_STEP_DOWN_THRESHOLD = 200

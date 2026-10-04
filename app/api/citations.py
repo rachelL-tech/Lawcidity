@@ -23,9 +23,7 @@ from app.query_normalization import (
     parse_case_types,
 )
 from app.search_cache import get_cached_source_ids
-from app.opensearch_service import (
-    search_source_ids_opensearch,
-)
+from app.search_backend import search_source_ids
 from app.api.schemas import (
     CitationQueryParams,
     CitationsMoreResponse,
@@ -56,7 +54,7 @@ def _resolve_source_ids_for_citations(parsed: ParsedCitationQuery) -> list[int]:
         return cached_source_ids
 
     try:
-        return search_source_ids_opensearch(
+        return search_source_ids(
             query_terms=parsed.query_terms,
             case_types=parsed.case_types,
             statute_filters=parsed.statute_list,

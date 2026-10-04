@@ -1,6 +1,8 @@
 name: deploy
 
-on: [push]
+# Manual only: the EC2 target is decommissioned (Vercel deploys on push).
+# Switch back to `on: [push]` when redeploying to AWS.
+on: workflow_dispatch
 
 jobs:
   test:

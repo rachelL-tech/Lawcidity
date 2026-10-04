@@ -11,10 +11,12 @@
 
 不包含 citation 明細，前端展開 target 時另打 citations.py 的 endpoint。
 """
+import hashlib
+import os
 import time
 from dataclasses import dataclass
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from app.db import get_conn
 from app.search_cache import (
     create_search_cache,
@@ -28,9 +30,7 @@ from app.query_normalization import (
     dedupe_statute_filters,
     parse_case_types,
 )
-from app.opensearch_service import (
-    search_source_ids_opensearch,
-)
+from app.search_backend import search_source_ids
 from app.api.schemas import (
     SearchRequest,
     SearchResponse,
@@ -75,6 +75,72 @@ def _error_detail(
         "message": str(exc) or fallback_message,
         "retryable": retryable,
     }
+
+
+_usage_table_ready = False
+
+
+def _daily_limit(name: str) -> int | None:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else None
+
+
+def _enforce_daily_limit(request: Request) -> None:
+    """
+    AI endpoint 的每日次數上限（呼叫 Gemini / Voyage 會計費）。
+    RATE_LIMIT_PER_IP_DAILY / RATE_LIMIT_GLOBAL_DAILY 都沒設定時不啟用。
+    計數存在 PostgreSQL，serverless 多實例下也一致；IP 只存 hash。
+    """
+    global _usage_table_ready
+    per_ip_limit = _daily_limit("RATE_LIMIT_PER_IP_DAILY")
+    global_limit = _daily_limit("RATE_LIMIT_GLOBAL_DAILY")
+    if per_ip_limit is None and global_limit is None:
+        return
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded_for.split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    client_key = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()[:16]
+
+    try:
+        with get_conn() as conn:
+            if not _usage_table_ready:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS api_usage (
+                        usage_date    DATE    NOT NULL,
+                        client_key    TEXT    NOT NULL,
+                        request_count INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (usage_date, client_key)
+                    )
+                """)
+                _usage_table_ready = True
+            ip_count = conn.execute("""
+                INSERT INTO api_usage (usage_date, client_key, request_count)
+                VALUES (CURRENT_DATE, %s, 1)
+                ON CONFLICT (usage_date, client_key)
+                DO UPDATE SET request_count = api_usage.request_count + 1
+                RETURNING request_count
+            """, (client_key,)).fetchone()["request_count"]
+            global_count = conn.execute("""
+                SELECT COALESCE(SUM(request_count), 0) AS total
+                FROM api_usage WHERE usage_date = CURRENT_DATE
+            """).fetchone()["total"]
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=_error_detail(
+                "rate_limit",
+                e,
+                fallback_message="服務暫時無法使用，請稍後再試",
+                retryable=True,
+            ),
+        )
+
+    if (per_ip_limit is not None and ip_count > per_ip_limit) or (
+        global_limit is not None and global_count > global_limit
+    ):
+        raise HTTPException(status_code=429, detail="今日 AI 搜尋次數已達上限，請明天再試")
 
 
 def _ensure_ordered_indexes(
@@ -146,7 +212,7 @@ def search(req: SearchRequest):
 
     with get_conn() as conn:
         try:
-            source_ids = search_source_ids_opensearch(
+            source_ids = search_source_ids(
                 query_terms=normalized.query_terms,
                 case_types=normalized.case_types,
                 statute_filters=normalized.statute_filters,
@@ -249,10 +315,11 @@ def search(req: SearchRequest):
     )
 
 @router.post("/analyze", response_model=AnalyzeResponse)
-def analyze(req: AnalyzeRequest):
+def analyze(req: AnalyzeRequest, request: Request):
     """Gemini 爭點 / 法條提取。"""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text 不可為空")
+    _enforce_daily_limit(request)
     try:
         result = extract_issues_and_statutes(req.text)
     except Exception as e:
@@ -276,10 +343,11 @@ def analyze(req: AnalyzeRequest):
 
 
 @router.post("/analyze/generate", response_model=GenerateResponse)
-def analyze_generate(req: GenerateRequest):
+def analyze_generate(req: GenerateRequest, request: Request):
     """RAG 搜尋 + Gemini 全文分析。"""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不可為空")
+    _enforce_daily_limit(request)
 
     trace = new_trace(req.query)
 
@@ -380,7 +448,7 @@ def rerank(req: RerankRequest):
 
     if source_ids is None:
         try:
-            source_ids = search_source_ids_opensearch(
+            source_ids = search_source_ids(
                 query_terms=normalized.query_terms,
                 case_types=normalized.case_types,
                 statute_filters=normalized.statute_filters,

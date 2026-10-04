@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.db import get_conn
+from app.search_backend import get_search_backend
 
 router = APIRouter(tags=["common"])
 
@@ -22,12 +23,19 @@ def ready():
     except Exception:
         pass
 
-    try:
-        from app.opensearch_service import _get_opensearch_client
-        client = _get_opensearch_client()
-        info = client.info()
-        os_ok = bool(info)
-    except Exception:
-        pass
+    search_backend = get_search_backend()
+    if search_backend == "opensearch":
+        try:
+            from app.opensearch_service import _get_opensearch_client
+            client = _get_opensearch_client()
+            info = client.info()
+            os_ok = bool(info)
+        except Exception:
+            pass
 
-    return {"status": "ok", "db": db_ok, "opensearch": os_ok}
+    return {
+        "status": "ok",
+        "db": db_ok,
+        "opensearch": os_ok,
+        "search_backend": search_backend,
+    }

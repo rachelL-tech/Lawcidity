@@ -15,6 +15,8 @@ From keyword search to semantic understanding, Lawcidity helps users quickly fin
 
 **Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
+> The live demo runs on a citation subset of about 18K decisions (homicide & self-defense, DUI, traffic-accident negligence, defamation, wrongful termination, divorce & custody), with search served by PostgreSQL. Citation counts shown in the UI are still computed over the full 1.33M-decision corpus; the architecture and performance numbers below describe the full system (OpenSearch + AWS).
+
 **Try these searches**
 - **Keyword search**: keywords `殺人` (`homicide`), `無罪` (`not guilty`) + statute `刑法` (`Criminal Code`), `271`
 - **RAG search**: `如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？` ("If I was riding a scooter, the other party staged an accident, and I had no dashcam, how can I argue that I was not at fault?")
@@ -535,6 +537,8 @@ Each trace captures three stages:
 
 The trace is recorded even if the embedding or recall stage fails, so failure cases stay easy to diagnose afterward.
 
+In addition, the Gemini calls are recorded to a purpose-built LLM observability platform (Langfuse) to inspect token cost, latency, and prompt/response. The self-built trace covers the domain-specific view (recall similarity distribution, prior-decision concentration), while Langfuse covers the generic LLM-side metrics — a clear division of labor.
+
 ---
 
 ### 5. Reliability: timeouts and retries on external calls
@@ -571,3 +575,4 @@ This project was built across eight phases of iterative development, starting fr
 - Redesign chunk boundaries with LLM-assisted segmentation, so chunks can be separated more cleanly by context: factual narratives, party arguments, and the court's own legal reasoning
 - Test whether rewriting user queries into terminology used in legal practice can improve retrieval recall and relevance
 - Extend the retrieval trace from a local file into a queryable observability backend, and link the issue-extraction and analysis-generation requests so the full user flow becomes visible
+- Convert the Gemini analysis to structured JSON output (keeping `summary` as natural text so the LLM can write fluently, while `source_decision_ids` becomes a typed field for the cited IDs), then use the retrieved chunks' decision IDs as ground truth to verify every cited ID actually exists, filtering or flagging fabricated case numbers so hallucinated references do not leak into the legal output

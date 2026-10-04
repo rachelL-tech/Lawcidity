@@ -15,6 +15,8 @@
 
 **Demo:** [lawcidity.rachel-create.com](https://lawcidity.rachel-create.com/)
 
+> 線上 Demo 以約 1.8 萬筆判決的引用子集運行（殺人與正當防衛、酒駕、車禍過失、誹謗、資遣解僱、離婚與親權），搜尋由 PostgreSQL 執行。畫面上的被引用次數仍是完整 133 萬筆資料庫的統計；下方的架構與效能數字描述的是完整系統（OpenSearch + AWS）。
+
 **可以先試試這組搜尋**
 - **關鍵字搜尋**：關鍵字「殺人」「無罪」＋ 法條「刑法」「271」
 - **RAG搜尋**：「如果我騎機車，對方碰瓷，但我沒有行車記錄器，該怎麼主張自己無過失？」
@@ -533,6 +535,8 @@ RAG 牽涉 embedding、向量召回、Gemini 生成三個外部或重運算階�
 
 即使在 embedding 或召回階段就失敗，trace 仍會留下記錄，方便回頭診斷失敗案例。
 
+此外，Gemini 呼叫也接上 LLM 專用的觀測平台（Langfuse），用來看 token 成本、延遲與 prompt/回應。自建 trace 負責領域專屬視角（召回相似度分佈、前案集中度），Langfuse 負責 LLM 側的通用指標，兩者分工。
+
 ---
 
 ### 5. 可靠性：對外呼叫的 timeout 與 retry
@@ -569,3 +573,4 @@ RAG 一條請求同步依賴資料庫、Voyage、Gemini 三個對外呼叫；任
 - 重新設計 chunk 邊界，評估 LLM 輔助切割，並依事實敘述、當事人主張與法院法律見解等脈絡，更明確地切分 chunks
 - 驗證將使用者 query 改寫成法律實務中使用的用語後，是否能提升檢索召回率與結果相關性
 - 把 retrieval trace 從本地檔案升級為可查詢的觀測後端，並串接「爭點抽取」與「分析生成」兩段請求，呈現完整使用者流程
+- 把 Gemini 分析改為 JSON 結構化輸出（`summary` 維持文本以利 LLM 自然生成，`source_decision_ids` 抽成結構欄位帶 id 列表），並以召回 chunks 的 decision_id 作為 ground truth 驗證所有引用 id 是否真實存在，過濾或標記 LLM 編造的案號，防止幻覺案號流入法律分析

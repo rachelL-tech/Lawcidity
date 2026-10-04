@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
@@ -45,7 +46,13 @@ class RetrievalTrace:
     aggregation: list[AggregationSpan] = field(default_factory=list)
 
 # trace を jsonl に追記して永続化する（in-memory と違い reload / 再起動で消えない）。
-_TRACES_PATH = Path(__file__).resolve().parents[1] / "traces.jsonl"
+_DEFAULT_TRACES_PATH = Path(__file__).resolve().parents[1] / "traces.jsonl"
+
+
+def _traces_path() -> Path:
+    # TRACES_PATH：書き込み先を変更する（例：read-only FS の serverless では /tmp/traces.jsonl）。
+    override = os.environ.get("TRACES_PATH", "").strip()
+    return Path(override) if override else _DEFAULT_TRACES_PATH
 
 
 def new_trace(raw_query):
@@ -57,15 +64,16 @@ def new_trace(raw_query):
 
 def persist_trace(trace: "RetrievalTrace") -> None:
     """完成した trace を 1 行の JSON として jsonl に追記する。"""
-    with _TRACES_PATH.open("a", encoding="utf-8") as f:
+    with _traces_path().open("a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(trace), ensure_ascii=False) + "\n")
 
 
 def get_recent(n):
     """jsonl の末尾 n 件を dict のリストで返す。"""
-    if not _TRACES_PATH.exists():
+    path = _traces_path()
+    if not path.exists():
         return []
-    with _TRACES_PATH.open(encoding="utf-8") as f:
+    with path.open(encoding="utf-8") as f:
         lines = f.readlines()
     return [json.loads(line) for line in lines[-n:]]
 
