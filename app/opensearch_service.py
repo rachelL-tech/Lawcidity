@@ -12,10 +12,12 @@ OpenSearch 查詢策略：
 """
 
 import os
+import threading
 from typing import Any
 from urllib.parse import urlparse
 
 _opensearch_client = None
+_opensearch_client_lock = threading.Lock()
 
 
 def _build_opensearch_statute_nested_query(
@@ -101,24 +103,28 @@ def _get_opensearch_client():
     if _opensearch_client is not None:
         return _opensearch_client
 
-    try:
-        from opensearchpy import OpenSearch
-    except Exception as exc:
-        raise RuntimeError("缺少 opensearch-py 套件") from exc
+    with _opensearch_client_lock:
+        if _opensearch_client is not None:
+            return _opensearch_client
 
-    url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").strip()
-    parsed = urlparse(url)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 9200
+        try:
+            from opensearchpy import OpenSearch
+        except Exception as exc:
+            raise RuntimeError("缺少 opensearch-py 套件") from exc
 
-    kwargs: dict[str, Any] = {
-        "hosts": [{"host": host, "port": port}],
-        "use_ssl": False,
-        "request_timeout": 20,
-        "max_retries": 2,
-        "retry_on_timeout": True,
-    }
-    _opensearch_client = OpenSearch(**kwargs)
+        url = os.environ.get("OPENSEARCH_URL", "http://localhost:9200").strip()
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 9200
+
+        kwargs: dict[str, Any] = {
+            "hosts": [{"host": host, "port": port}],
+            "use_ssl": False,
+            "request_timeout": 20,
+            "max_retries": 2,
+            "retry_on_timeout": True,
+        }
+        _opensearch_client = OpenSearch(**kwargs)
     return _opensearch_client
 
 

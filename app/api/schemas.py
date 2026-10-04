@@ -16,11 +16,11 @@ class StatuteFilter(BaseModel):
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    keywords: list[str] = []
-    statutes: list[StatuteFilter] = []
-    exclude_keywords: list[str] = []
-    exclude_statutes: list[StatuteFilter] = []
-    case_types: list[str] = []
+    keywords: list[str] = Field(default_factory=list)
+    statutes: list[StatuteFilter] = Field(default_factory=list)
+    exclude_keywords: list[str] = Field(default_factory=list)
+    exclude_statutes: list[StatuteFilter] = Field(default_factory=list)
+    case_types: list[str] = Field(default_factory=list)
     sort: Literal["relevance"] = "relevance"
     page: int = 1
     page_size: int = 20
@@ -43,7 +43,7 @@ class SearchResultItem(BaseModel):
     case_ref: str
     doc_type: str | None
     total_citation_count: int # 不受搜尋條件限制，歷史上引用此 target 的 distinct source 數
-    preview_source_ids: list[int] = []
+    preview_source_ids: list[int] = Field(default_factory=list)
 
 
 class SearchContext(BaseModel):
@@ -66,13 +66,13 @@ class RerankRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     search_cache_key: str | None = None
-    keywords: list[str] = []
-    statutes: list[StatuteFilter] = []
-    exclude_keywords: list[str] = []
-    exclude_statutes: list[StatuteFilter] = []
-    case_types: list[str] = []
-    doc_types: list[str] = []
-    court_levels: list[int] = []
+    keywords: list[str] = Field(default_factory=list)
+    statutes: list[StatuteFilter] = Field(default_factory=list)
+    exclude_keywords: list[str] = Field(default_factory=list)
+    exclude_statutes: list[StatuteFilter] = Field(default_factory=list)
+    case_types: list[str] = Field(default_factory=list)
+    doc_types: list[str] = Field(default_factory=list)
+    court_levels: list[int] = Field(default_factory=list)
     sort: Literal["relevance", "total_citation_count"] = "relevance"
     page: int = 1
     page_size: int = 20
@@ -195,8 +195,8 @@ class AnalyzeResponse(BaseModel):
 
 class GenerateRequest(BaseModel):
     query: str
-    issues: list[str] = []
-    statutes: list[AnalyzeStatute] = []
+    issues: list[str] = Field(default_factory=list)
+    statutes: list[AnalyzeStatute] = Field(default_factory=list)
     result_limit_per_issue: int = 10
 
 

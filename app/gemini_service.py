@@ -6,17 +6,24 @@ Gemini 爭點/法條提取 + RAG 全文分析。
 
 import json
 import os
+import threading
 
 from google import genai
 from google.genai import types
 from langfuse import observe
 
 _client = None
+_client_lock = threading.Lock()
 
 
 def _get_client():
     global _client
-    if _client is None:
+    if _client is not None:
+        return _client
+
+    with _client_lock:
+        if _client is not None:
+            return _client
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY 未設定")

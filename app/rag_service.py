@@ -9,6 +9,7 @@ RAG 語意搜尋 + decision 聚合。
 
 import hashlib
 import os
+import threading
 import time
 from collections import defaultdict
 
@@ -26,11 +27,17 @@ VOYAGE_MODEL = "voyage-law-2"
 IVFFLAT_PROBES = 3  # lists=100 下 p=3 recall≈0.90（knee）；prod 1GB 延遲預算內
 
 _voyage_client = None
+_voyage_client_lock = threading.Lock()
 
 
 def _get_voyage_client():
     global _voyage_client
-    if _voyage_client is None:
+    if _voyage_client is not None:
+        return _voyage_client
+
+    with _voyage_client_lock:
+        if _voyage_client is not None:
+            return _voyage_client
         try:
             import voyageai
         except ImportError:
