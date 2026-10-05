@@ -7,8 +7,9 @@ import { analyze } from "../lib/api";
  *
  * Props:
  *   onSubmit({ query, issues, statutes, case_type }) — 確認後觸發
+ *   examples — 範例案情 [{ label, text, translation }]，點了只填入輸入框，不會自動送出
  */
-export default function AiSearchForm({ onSubmit, defaultText = "" }) {
+export default function AiSearchForm({ onSubmit, defaultText = "", examples = [] }) {
   const [text, setText] = useState(defaultText);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -18,6 +19,16 @@ export default function AiSearchForm({ onSubmit, defaultText = "" }) {
   // 勾選狀態
   const [selectedIssues, setSelectedIssues] = useState([]);
   const [selectedStatutes, setSelectedStatutes] = useState([]);
+
+  // 目前輸入框內容剛好等於某個範例時，標示該範例並顯示英文翻譯
+  const activeExample = examples.find((example) => example.text === text);
+
+  function fillExample(example) {
+    setText(example.text);
+    // 換了案情，上一題的分析結果不再適用
+    setAnalysisResult(null);
+    setError(null);
+  }
 
   async function handleAnalyze() {
     if (!text.trim()) return;
@@ -66,11 +77,41 @@ export default function AiSearchForm({ onSubmit, defaultText = "" }) {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="e.g. 如果我騎車，對方碰瓷，但沒有行車記錄器，該怎麼主張無過失？&#10;Describe the facts of your case in Chinese for best results."
+          placeholder="Describe the facts of your case in Chinese for best results."
           rows={5}
           className="w-full border border-brand-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand resize-y"
         />
       </div>
+
+      {/* 範例案情 */}
+      {examples.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-text-secondary mb-2">
+            Try an example <span className="font-normal">· click to fill in the case, then press Analyze</span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {examples.map((example) => (
+              <button
+                key={example.label}
+                type="button"
+                onClick={() => fillExample(example)}
+                className={`px-3 py-1.5 rounded-full text-sm border text-brand transition-colors ${
+                  activeExample === example
+                    ? "border-brand bg-brand-light"
+                    : "border-brand-border bg-white hover:bg-brand-light"
+                }`}
+              >
+                {example.label}
+              </button>
+            ))}
+          </div>
+          {activeExample && (
+            <p className="text-xs text-text-secondary mt-2 italic">
+              “{activeExample.translation}”
+            </p>
+          )}
+        </div>
+      )}
 
       {/* AI 分析按鈕 */}
       <button

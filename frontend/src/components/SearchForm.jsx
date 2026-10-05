@@ -8,7 +8,8 @@ const CASE_TYPES = ["民事", "刑事", "行政"];
 // Props:
 //   initialReq: SearchRequest 初始值（來自 URL params）
 //   onSearch(req): 提交搜尋時呼叫，傳入完整 SearchRequest 物件
-export default function SearchForm({ initialReq, onSearch }) {
+//   examples: 範例搜尋 [{ label, zh, keywords, statutes }]，點了直接送出（只有首頁會傳）
+export default function SearchForm({ initialReq, onSearch, examples = [] }) {
   const [kwInput, setKwInput] = useState("");
   const [keywords, setKeywords] = useState(initialReq.keywords);
   // macOS IME：compositionend 在 keydown 之前觸發，isComposing 已是 false，
@@ -71,6 +72,19 @@ export default function SearchForm({ initialReq, onSearch }) {
       exclude_keywords: excludeKeywords,
       exclude_statutes: validExcludeStatutes,
       case_types: caseTypes,
+      page: 1,
+    });
+  }
+
+  // 點範例：不經過表單 state，直接用範例條件送出
+  function runExample(example) {
+    onSearch({
+      ...initialReq,
+      keywords: example.keywords,
+      statutes: example.statutes,
+      exclude_keywords: [],
+      exclude_statutes: [],
+      case_types: [],
       page: 1,
     });
   }
@@ -224,6 +238,27 @@ export default function SearchForm({ initialReq, onSearch }) {
       >
         搜尋 Search
       </button>
+
+      {/* 範例搜尋 */}
+      {examples.length > 0 && (
+        <div className="pt-4 border-t border-brand-border/60">
+          <p className="text-xs font-medium text-text-secondary mb-2">
+            Try an example <span className="font-normal">· click to run the search</span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {examples.map((example) => (
+              <button
+                key={example.label}
+                type="button"
+                onClick={() => runExample(example)}
+                className="px-3 py-1.5 rounded-full text-sm border border-brand-border bg-white text-brand hover:bg-brand-light transition-colors"
+              >
+                {example.label} <span className="text-text-secondary">{example.zh}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </form>
   );
 }
