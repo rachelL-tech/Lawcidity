@@ -8,7 +8,7 @@ const CASE_TYPES = ["民事", "刑事", "行政"];
 // Props:
 //   initialReq: SearchRequest 初始值（來自 URL params）
 //   onSearch(req): 提交搜尋時呼叫，傳入完整 SearchRequest 物件
-//   examples: 範例搜尋 [{ label, zh, keywords, statutes }]，點了直接送出（只有首頁會傳）
+//   examples: 範例搜尋 [{ label, zh, keywords, statutes }]，點了只填入表單，由使用者自己按搜尋（只有首頁會傳）
 export default function SearchForm({ initialReq, onSearch, examples = [] }) {
   const [kwInput, setKwInput] = useState("");
   const [keywords, setKeywords] = useState(initialReq.keywords);
@@ -34,6 +34,9 @@ export default function SearchForm({ initialReq, onSearch, examples = [] }) {
   );
 
   const [caseTypes, setCaseTypes] = useState(initialReq.case_types);
+
+  // LawCombobox 內部自己記著法律名稱輸入框的文字；填入範例時換 key 讓它重新掛載，才會顯示新的值
+  const [statuteRowsVersion, setStatuteRowsVersion] = useState(0);
 
   // 新增一個空白法條輸入列
   function addStatute(setter) {
@@ -76,17 +79,17 @@ export default function SearchForm({ initialReq, onSearch, examples = [] }) {
     });
   }
 
-  // 點範例：不經過表單 state，直接用範例條件送出
-  function runExample(example) {
-    onSearch({
-      ...initialReq,
-      keywords: example.keywords,
-      statutes: example.statutes,
-      exclude_keywords: [],
-      exclude_statutes: [],
-      case_types: [],
-      page: 1,
-    });
+  // 點範例：把範例條件填進表單（其他欄位清空），不送出
+  function fillExample(example) {
+    setKwInput("");
+    setKeywords(example.keywords);
+    // 範例的法條都在白名單內，直接視為已確認
+    setStatutes(example.statutes.map((s) => ({ ...s, confirmed: true })));
+    setXkwInput("");
+    setExcludeKeywords([]);
+    setExcludeStatutes([]);
+    setCaseTypes([]);
+    setStatuteRowsVersion((v) => v + 1);
   }
 
   return (
@@ -134,7 +137,7 @@ export default function SearchForm({ initialReq, onSearch, examples = [] }) {
         <div className="space-y-2">
           {statutes.map((s, i) => (
             <LawCombobox
-              key={i}
+              key={`${statuteRowsVersion}-${i}`}
               value={s}
               onChange={(val) => updateStatute(setStatutes, i, val)}
               onRemove={() => removeStatute(setStatutes, i)}
@@ -194,7 +197,7 @@ export default function SearchForm({ initialReq, onSearch, examples = [] }) {
         <div className="space-y-2">
           {excludeStatutes.map((s, i) => (
             <LawCombobox
-              key={i}
+              key={`${statuteRowsVersion}-${i}`}
               value={s}
               onChange={(val) => updateStatute(setExcludeStatutes, i, val)}
               onRemove={() => removeStatute(setExcludeStatutes, i)}
@@ -243,14 +246,14 @@ export default function SearchForm({ initialReq, onSearch, examples = [] }) {
       {examples.length > 0 && (
         <div className="pt-4 border-t border-brand-border/60">
           <p className="text-xs font-medium text-text-secondary mb-2">
-            Try an example <span className="font-normal">· click to run the search</span>
+            Try an example <span className="font-normal">· click to fill in, then press Search</span>
           </p>
           <div className="flex flex-wrap gap-2">
             {examples.map((example) => (
               <button
                 key={example.label}
                 type="button"
-                onClick={() => runExample(example)}
+                onClick={() => fillExample(example)}
                 className="px-3 py-1.5 rounded-full text-sm border border-brand-border bg-white text-brand hover:bg-brand-light transition-colors"
               >
                 {example.label} <span className="text-text-secondary">{example.zh}</span>

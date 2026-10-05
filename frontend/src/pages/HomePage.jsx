@@ -150,7 +150,7 @@ export default function PortfolioHomePage() {
         <div className="flex flex-wrap justify-center gap-x-8 gap-y-3 py-5 border-y border-divider">
           <TrustBadge icon="&sect;" text="Taiwan-qualified lawyer" />
           <TrustBadge icon="&#9783;" text="Public court decisions, 2025-01 to 2026-01" />
-          <TrustBadge icon="&#9638;" text="1.33M processed decisions; 242,022 searchable citation-linked decisions" />
+          <TrustBadge icon="&#9638;" text="1.33M decisions processed; this demo searches a 17,920-decision subset across 6 topics" />
         </div>
       </Section>
 

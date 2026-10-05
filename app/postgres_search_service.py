@@ -51,22 +51,25 @@ def search_source_ids_postgres(
     exclude_statute_filters: list[tuple[str, str | None, str | None]],
 ) -> list[int]:
     params: dict[str, Any] = {}
-    where_parts: list[str] = [
+    # 便宜的條件（走索引）：先用它們把候選 source 縮小
+    candidate_parts: list[str] = [
         "d.clean_text IS NOT NULL",
         "EXISTS (SELECT 1 FROM citations c WHERE c.source_id = d.id)",
     ]
+    # 昂貴的條件：每筆都要解壓全文比對，只對候選做
+    text_parts: list[str] = []
 
     for idx, term in enumerate(query_terms):
         key = f"kw_{idx}"
-        where_parts.append(f"d.clean_text LIKE %({key})s")
+        text_parts.append(f"clean_text LIKE %({key})s")
         params[key] = f"%{term}%"
 
     if case_types:
-        where_parts.append("d.case_type = ANY(%(case_types)s)")
+        candidate_parts.append("d.case_type = ANY(%(case_types)s)")
         params["case_types"] = case_types
 
     for idx, statute in enumerate(statute_filters):
-        where_parts.append(
+        candidate_parts.append(
             _build_statute_exists_sql(
                 idx, statute, params,
                 table="decision_reason_statutes",
@@ -77,11 +80,11 @@ def search_source_ids_postgres(
 
     for idx, term in enumerate(exclude_terms):
         key = f"excl_kw_{idx}"
-        where_parts.append(f"d.clean_text NOT LIKE %({key})s")
+        text_parts.append(f"clean_text NOT LIKE %({key})s")
         params[key] = f"%{term}%"
 
     for idx, statute in enumerate(exclude_statute_filters):
-        where_parts.append(
+        candidate_parts.append(
             "NOT " + _build_statute_exists_sql(
                 idx, statute, params,
                 table="decision_reason_statutes",
@@ -90,11 +93,18 @@ def search_source_ids_postgres(
             )
         )
 
+    # MATERIALIZED 強制先算出候選再比對全文；否則 planner 會先對所有判決掃全文，
+    # 最後才套法條條件（實測慢數倍）。CTE 裡的 clean_text 只是 TOAST 指標，不會先解壓。
     sql = f"""
-        SELECT d.id
-        FROM decisions d
-        WHERE {" AND ".join(where_parts)}
-        ORDER BY d.id
+        WITH candidates AS MATERIALIZED (
+            SELECT d.id, d.clean_text
+            FROM decisions d
+            WHERE {" AND ".join(candidate_parts)}
+        )
+        SELECT id
+        FROM candidates
+        {"WHERE " + " AND ".join(text_parts) if text_parts else ""}
+        ORDER BY id
     """
     try:
         with get_conn() as conn:
