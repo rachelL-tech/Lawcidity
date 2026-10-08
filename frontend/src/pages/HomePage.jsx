@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { warmup } from "../lib/api";
 
 function Section({ children, className = "", delay = 0 }) {
   return (
@@ -88,6 +89,11 @@ function DemoCarousel({ steps, accent }) {
 }
 
 export default function PortfolioHomePage() {
+  // 訪客還在看首頁時就先暖機，等他進 demo 搜尋時後端與資料庫已經醒了
+  useEffect(() => {
+    warmup();
+  }, []);
+
   const keywordSteps = [
     {
       desc: 'Enter keywords like "車禍" or "行車紀錄器". You can also optionally add a statute using autocomplete (e.g. "刑法" + "284") or filter by case type (e.g. "刑事").',

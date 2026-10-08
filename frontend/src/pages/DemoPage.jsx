@@ -4,6 +4,7 @@ import ModeToggle from "../components/ModeToggle";
 import SearchForm from "../components/SearchForm";
 import AiSearchForm from "../components/AiSearchForm";
 import { DEFAULT_SEARCH_REQ, searchRequestToParams } from "../lib/url";
+import { warmup } from "../lib/api";
 
 function useTypingEffect(text, speed = 90) {
   const [charIndex, setCharIndex] = useState(0);
@@ -75,6 +76,11 @@ export default function DemoPage() {
   const text = "What type of cases are you looking for?";
   const subtitle = "Search popular Taiwanese court holdings";
   const { displayed, done, cursorVisible } = useTypingEffect(text, 50);
+
+  // 直接開 /demo 的訪客也先暖機
+  useEffect(() => {
+    warmup();
+  }, []);
 
   function handleSearch(req) {
     const qs = searchRequestToParams(req);

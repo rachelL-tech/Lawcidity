@@ -91,3 +91,8 @@ export function analyzeGenerate(req) {
 export function fetchTraces(n = 20) {
   return get(`/debug/traces?n=${n}`);
 }
+
+// GET /api/warmup — 頁面載入時在背景叫醒後端與資料庫；不等結果，失敗也不影響使用
+export function warmup() {
+  fetch(`${BASE}/warmup`).catch(() => {});
+}
