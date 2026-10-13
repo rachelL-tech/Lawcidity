@@ -29,12 +29,12 @@ function useTypingEffect(text, speed = 90) {
 
 // 首頁的範例搜尋：線上資料是六個主題的引用子集，用範例引導訪客搜得到結果的條件
 const KEYWORD_EXAMPLES = [
-  { label: "Murder", zh: "殺人", keywords: ["殺人", "無罪"], statutes: [{ law: "刑法", article: "271", sub_ref: null }] },
+  { label: "Wrongful termination", zh: "資遣", keywords: ["資遣", "不能勝任"], statutes: [{ law: "勞動基準法", article: "11", sub_ref: null }] },
   { label: "Self-defense", zh: "正當防衛", keywords: ["正當防衛"], statutes: [{ law: "刑法", article: "23", sub_ref: null }] },
   { label: "DUI", zh: "酒駕", keywords: ["酒駕", "吐氣酒精濃度"], statutes: [{ law: "刑法", article: "185之3", sub_ref: null }] },
   { label: "Car accident", zh: "車禍", keywords: ["車禍", "與有過失"], statutes: [{ law: "民法", article: "217", sub_ref: null }] },
   { label: "Defamation", zh: "誹謗", keywords: ["誹謗", "言論自由"], statutes: [{ law: "刑法", article: "310", sub_ref: null }] },
-  { label: "Wrongful termination", zh: "資遣", keywords: ["資遣", "不能勝任"], statutes: [{ law: "勞動基準法", article: "11", sub_ref: null }] },
+  { label: "Murder", zh: "殺人", keywords: ["殺人", "無罪"], statutes: [{ law: "刑法", article: "271", sub_ref: null }] },
 ];
 
 const AI_EXAMPLES = [
