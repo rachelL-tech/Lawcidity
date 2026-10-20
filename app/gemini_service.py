@@ -9,8 +9,11 @@ import os
 import threading
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from langfuse import observe
+
+# 暫時性錯誤：模型忙碌（503）或超過配額／頻率限制（429）
+_BUSY_STATUS_CODES = {429, 503}
 
 _client = None
 _client_lock = threading.Lock()
@@ -44,6 +47,10 @@ def _generate_content(client, *, error_message: str, **kwargs):
     # 這層只把 SDK 例外轉成帶友善訊息的 RuntimeError，讓上層 API 統一處理。
     try:
         return client.models.generate_content(**kwargs)
+    except errors.APIError as exc:
+        if exc.code in _BUSY_STATUS_CODES:
+            raise RuntimeError("AI 服務目前忙碌中，請稍後再試") from exc
+        raise RuntimeError(error_message) from exc
     except Exception as exc:
         raise RuntimeError(error_message) from exc
 
