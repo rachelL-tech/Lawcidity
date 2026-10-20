@@ -77,6 +77,7 @@ export default function AiSearchForm({ onSubmit, defaultText = "", examples = []
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
+          maxLength={3000}
           placeholder="Describe the facts of your case in Chinese for best results."
           rows={5}
           className="w-full border border-brand-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand resize-y"

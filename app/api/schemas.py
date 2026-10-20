@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing import Literal
+from typing import Annotated, Literal
 
 
 # ── Shared ────────────────────────────────────────────────────────────────────
@@ -182,8 +182,15 @@ class AnalyzeStatute(BaseModel):
     article: str
 
 
+# 請求大小上限：擋掉繞過前端直接灌大量文字的請求，避免單次呼叫 Gemini / Voyage 燒掉大量 token
+MAX_CASE_TEXT_CHARS = 3000
+MAX_ISSUES = 10
+MAX_ISSUE_CHARS = 200
+MAX_STATUTES = 20
+
+
 class AnalyzeRequest(BaseModel):
-    text: str
+    text: str = Field(max_length=MAX_CASE_TEXT_CHARS)
 
 
 class AnalyzeResponse(BaseModel):
@@ -194,10 +201,12 @@ class AnalyzeResponse(BaseModel):
 # ── POST /analyze/generate ───────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
-    query: str
-    issues: list[str] = Field(default_factory=list)
-    statutes: list[AnalyzeStatute] = Field(default_factory=list)
-    result_limit_per_issue: int = 10
+    query: str = Field(max_length=MAX_CASE_TEXT_CHARS)
+    issues: list[Annotated[str, Field(max_length=MAX_ISSUE_CHARS)]] = Field(
+        default_factory=list, max_length=MAX_ISSUES
+    )
+    statutes: list[AnalyzeStatute] = Field(default_factory=list, max_length=MAX_STATUTES)
+    result_limit_per_issue: int = Field(default=10, ge=1, le=20)
 
 
 class IssueResult(BaseModel):
