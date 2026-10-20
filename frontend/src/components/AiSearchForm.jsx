@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { analyze } from "../lib/api";
 
+// 與後端 app/api/schemas.py 的 MAX_CASE_TEXT_CHARS 一致
+const MAX_CASE_TEXT_CHARS = 3000;
+// 超過這個字數，計數改成警示色
+const CHAR_WARNING_THRESHOLD = 2700;
+
 /**
  * AI 長文模式搜尋表單。
  * 使用者輸入案情 → 點「AI 分析」→ Gemini 提取爭點/法條 → 顯示勾選 → 送出搜尋。
@@ -77,11 +82,18 @@ export default function AiSearchForm({ onSubmit, defaultText = "", examples = []
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          maxLength={3000}
+          maxLength={MAX_CASE_TEXT_CHARS}
           placeholder="Describe the facts of your case in Chinese for best results."
           rows={5}
           className="w-full border border-brand-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand resize-y"
         />
+        <p
+          className={`text-xs text-right ${
+            text.length > CHAR_WARNING_THRESHOLD ? "text-red-500" : "text-text-secondary"
+          }`}
+        >
+          {text.length} / {MAX_CASE_TEXT_CHARS}
+        </p>
       </div>
 
       {/* 範例案情 */}
